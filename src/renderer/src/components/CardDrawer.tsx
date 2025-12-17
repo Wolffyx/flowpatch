@@ -1,14 +1,16 @@
-import { X, ExternalLink, Play, RefreshCw, Clock, AlertCircle, CheckCircle2 } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { X, ExternalLink, Play, RefreshCw, Clock, AlertCircle, CheckCircle2, GitBranch, FolderOpen, Trash2 } from 'lucide-react'
 import { Button } from './ui/button'
 import { Badge } from './ui/badge'
 import { ScrollArea } from './ui/scroll-area'
 import { cn } from '../lib/utils'
 import { formatRelativeTime, parseLabels, parseAssignees } from '../lib/utils'
-import { KANBAN_COLUMNS, type Card, type Event, type CardStatus } from '../../../shared/types'
+import { KANBAN_COLUMNS, type Card, type Event, type CardStatus, type Worktree } from '../../../shared/types'
 
 interface CardDrawerProps {
   card: Card | null
   events: Event[]
+  projectId: string | null
   onClose: () => void
   onMoveCard: (cardId: string, status: CardStatus) => void
   onRunWorker: (cardId: string) => void
@@ -17,10 +19,70 @@ interface CardDrawerProps {
 export function CardDrawer({
   card,
   events,
+  projectId,
   onClose,
   onMoveCard,
   onRunWorker
 }: CardDrawerProps): React.JSX.Element | null {
+  const [worktree, setWorktree] = useState<Worktree | null>(null)
+  const [worktreeLoading, setWorktreeLoading] = useState(false)
+
+  // Load worktree info for this card
+  useEffect(() => {
+    if (!card || !projectId) {
+      setWorktree(null)
+      return
+    }
+
+    const loadWorktree = async (): Promise<void> => {
+      try {
+        const worktrees = await window.electron.ipcRenderer.invoke('listWorktrees', projectId) as Worktree[]
+        const cardWorktree = worktrees.find(
+          (wt) => wt.card_id === card.id && wt.status !== 'cleaned'
+        )
+        setWorktree(cardWorktree ?? null)
+      } catch {
+        setWorktree(null)
+      }
+    }
+
+    loadWorktree()
+  }, [card?.id, projectId])
+
+  const handleOpenWorktreeFolder = async (): Promise<void> => {
+    if (!worktree) return
+    await window.electron.ipcRenderer.invoke('openWorktreeFolder', worktree.worktree_path)
+  }
+
+  const handleRemoveWorktree = async (): Promise<void> => {
+    if (!worktree) return
+    setWorktreeLoading(true)
+    try {
+      await window.electron.ipcRenderer.invoke('removeWorktree', worktree.id)
+      setWorktree(null)
+    } finally {
+      setWorktreeLoading(false)
+    }
+  }
+
+  const handleRecreateWorktree = async (): Promise<void> => {
+    if (!worktree) return
+    setWorktreeLoading(true)
+    try {
+      await window.electron.ipcRenderer.invoke('recreateWorktree', worktree.id)
+      // Reload worktree info
+      if (projectId) {
+        const worktrees = await window.electron.ipcRenderer.invoke('listWorktrees', projectId) as Worktree[]
+        const cardWorktree = worktrees.find(
+          (wt) => wt.card_id === card?.id && wt.status !== 'cleaned'
+        )
+        setWorktree(cardWorktree ?? null)
+      }
+    } finally {
+      setWorktreeLoading(false)
+    }
+  }
+
   if (!card) return null
 
   const labels = parseLabels(card.labels_json)
@@ -164,6 +226,68 @@ export function CardDrawer({
                 <Play className="h-4 w-4 mr-2" />
                 Run Worker Now
               </Button>
+            </div>
+          )}
+
+          {/* Worktree info */}
+          {worktree && (
+            <div>
+              <h4 className="text-sm font-medium mb-2">Worktree</h4>
+              <div className="space-y-2 rounded-md bg-secondary p-3">
+                <div className="flex items-center gap-2">
+                  <GitBranch className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm font-mono truncate">{worktree.branch_name}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge
+                    variant={
+                      worktree.status === 'error'
+                        ? 'destructive'
+                        : worktree.status === 'running'
+                          ? 'default'
+                          : worktree.status === 'cleanup_pending'
+                            ? 'secondary'
+                            : 'outline'
+                    }
+                  >
+                    {worktree.status}
+                  </Badge>
+                </div>
+                {worktree.last_error && (
+                  <p className="text-xs text-destructive">{worktree.last_error}</p>
+                )}
+                <div className="flex flex-wrap gap-2 mt-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleOpenWorktreeFolder}
+                    disabled={worktreeLoading || worktree.status === 'cleaned'}
+                  >
+                    <FolderOpen className="h-3 w-3 mr-1" />
+                    Open Folder
+                  </Button>
+                  {worktree.status === 'error' && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleRecreateWorktree}
+                      disabled={worktreeLoading}
+                    >
+                      <RefreshCw className="h-3 w-3 mr-1" />
+                      Recreate
+                    </Button>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleRemoveWorktree}
+                    disabled={worktreeLoading || worktree.status === 'running'}
+                  >
+                    <Trash2 className="h-3 w-3 mr-1" />
+                    Remove
+                  </Button>
+                </div>
+              </div>
             </div>
           )}
 

@@ -6,7 +6,9 @@ import type {
   Job,
   CardStatus,
   RemoteInfo,
-  AppState
+  AppState,
+  PolicyConfig,
+  WorkerLogMessage
 } from '../../../shared/types'
 
 export interface ProjectData {
@@ -22,6 +24,7 @@ export interface AppStore {
   selectedCardId: string | null
   isLoading: boolean
   error: string | null
+  workerLogsByJobId: Record<string, string[]>
 
   // Remote selection dialog state
   pendingRemoteSelection: {
@@ -45,8 +48,11 @@ export interface AppStore {
   }) => Promise<void>
   syncProject: () => Promise<void>
   toggleWorker: (enabled: boolean) => Promise<void>
+  setWorkerToolPreference: (toolPreference: 'auto' | 'claude' | 'codex') => Promise<void>
+  setWorkerRollbackOnCancel: (rollbackOnCancel: boolean) => Promise<void>
   runWorker: (cardId?: string) => Promise<void>
   deleteProject: (id: string) => Promise<void>
+  clearWorkerLogs: (jobId: string) => void
 
   // Getters
   getSelectedProject: () => ProjectData | null
@@ -59,6 +65,7 @@ export function useAppStore(): AppStore {
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [workerLogsByJobId, setWorkerLogsByJobId] = useState<Record<string, string[]>>({})
   const [pendingRemoteSelection, setPendingRemoteSelection] = useState<{
     project: Project
     remotes: RemoteInfo[]
@@ -230,6 +237,72 @@ export function useAppStore(): AppStore {
     [selectedProjectId, loadState]
   )
 
+  const setWorkerToolPreference = useCallback(
+    async (toolPreference: 'auto' | 'claude' | 'codex') => {
+      if (!selectedProjectId) return
+      try {
+        const currentProject = projects.find((p) => p.project.id === selectedProjectId)?.project
+        let policy: PolicyConfig | null = null
+        if (currentProject?.policy_json) {
+          try {
+            policy = JSON.parse(currentProject.policy_json) as PolicyConfig
+          } catch {
+            policy = null
+          }
+        }
+
+        const existingPreference = policy?.worker?.toolPreference ?? 'auto'
+        if (existingPreference === toolPreference) return
+
+        const result = await window.electron.ipcRenderer.invoke('setWorkerToolPreference', {
+          projectId: selectedProjectId,
+          toolPreference
+        })
+        if (result?.error) {
+          setError(result.error)
+          return
+        }
+        await loadState()
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to update worker settings')
+      }
+    },
+    [selectedProjectId, projects, loadState]
+  )
+
+  const setWorkerRollbackOnCancel = useCallback(
+    async (rollbackOnCancel: boolean) => {
+      if (!selectedProjectId) return
+      try {
+        const currentProject = projects.find((p) => p.project.id === selectedProjectId)?.project
+        let policy: PolicyConfig | null = null
+        if (currentProject?.policy_json) {
+          try {
+            policy = JSON.parse(currentProject.policy_json) as PolicyConfig
+          } catch {
+            policy = null
+          }
+        }
+
+        const existingValue = policy?.worker?.rollbackOnCancel ?? false
+        if (existingValue === rollbackOnCancel) return
+
+        const result = await window.electron.ipcRenderer.invoke('setWorkerRollbackOnCancel', {
+          projectId: selectedProjectId,
+          rollbackOnCancel
+        })
+        if (result?.error) {
+          setError(result.error)
+          return
+        }
+        await loadState()
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to update worker settings')
+      }
+    },
+    [selectedProjectId, projects, loadState]
+  )
+
   const runWorker = useCallback(
     async (cardId?: string) => {
       if (!selectedProjectId) return
@@ -273,15 +346,35 @@ export function useAppStore(): AppStore {
     return project.cards.find((c) => c.id === selectedCardId) || null
   }, [projects, selectedProjectId, selectedCardId])
 
+  const clearWorkerLogs = useCallback((jobId: string) => {
+    setWorkerLogsByJobId((prev) => {
+      if (!(jobId in prev)) return prev
+      const next = { ...prev }
+      delete next[jobId]
+      return next
+    })
+  }, [])
+
   // Listen for updates from main process
   useEffect(() => {
     const handleStateUpdate = (): void => {
       loadState()
     }
 
+    const handleWorkerLog = (_event: unknown, payload: WorkerLogMessage): void => {
+      if (!payload?.jobId || !payload?.line) return
+      setWorkerLogsByJobId((prev) => {
+        const existing = prev[payload.jobId] ?? []
+        const nextLines = [...existing, payload.line].slice(-1000)
+        return { ...prev, [payload.jobId]: nextLines }
+      })
+    }
+
     window.electron.ipcRenderer.on('stateUpdated', handleStateUpdate)
+    window.electron.ipcRenderer.on('workerLog', handleWorkerLog)
     return () => {
       window.electron.ipcRenderer.removeAllListeners('stateUpdated')
+      window.electron.ipcRenderer.removeAllListeners('workerLog')
     }
   }, [loadState])
 
@@ -296,6 +389,7 @@ export function useAppStore(): AppStore {
     selectedCardId,
     isLoading,
     error,
+    workerLogsByJobId,
     pendingRemoteSelection,
     loadState,
     selectProject,
@@ -308,8 +402,11 @@ export function useAppStore(): AppStore {
     createCard,
     syncProject,
     toggleWorker,
+    setWorkerToolPreference,
+    setWorkerRollbackOnCancel,
     runWorker,
     deleteProject,
+    clearWorkerLogs,
     getSelectedProject,
     getSelectedCard
   }

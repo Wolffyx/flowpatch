@@ -583,25 +583,117 @@ export class GithubAdapter {
 
   async updateLabels(issueNumber: number, labelsToAdd: string[], labelsToRemove: string[]): Promise<boolean> {
     try {
+      // Fetch existing labels from the repository to match against
+      const repoLabels = await this.fetchRepoLabels()
+      logAction('updateLabels: fetched repo labels', { repoLabels, labelsToAdd, labelsToRemove })
+
       for (const label of labelsToAdd) {
-        await execFileAsync(
-          'gh',
-          ['issue', 'edit', String(issueNumber), '--repo', `${this.owner}/${this.repo}`, '--add-label', label],
-          { cwd: this.repoPath }
-        )
+        // Find matching label in repo (handles case, spaces, dashes, prefixes)
+        const matchedLabel = this.findMatchingLabel(label, repoLabels)
+        logAction('updateLabels: matching result', { original: label, matched: matchedLabel })
+        if (matchedLabel) {
+          await execFileAsync(
+            'gh',
+            ['issue', 'edit', String(issueNumber), '--repo', `${this.owner}/${this.repo}`, '--add-label', matchedLabel],
+            { cwd: this.repoPath }
+          )
+        } else {
+          logAction('updateLabels: No matching label found, skipping', { label, repoLabels })
+        }
       }
       for (const label of labelsToRemove) {
-        await execFileAsync(
-          'gh',
-          ['issue', 'edit', String(issueNumber), '--repo', `${this.owner}/${this.repo}`, '--remove-label', label],
-          { cwd: this.repoPath }
-        )
+        // Find matching label in repo
+        const matchedLabel = this.findMatchingLabel(label, repoLabels)
+        if (matchedLabel) {
+          try {
+            await execFileAsync(
+              'gh',
+              ['issue', 'edit', String(issueNumber), '--repo', `${this.owner}/${this.repo}`, '--remove-label', matchedLabel],
+              { cwd: this.repoPath }
+            )
+          } catch {
+            // Ignore errors when removing labels (label might not be on issue)
+          }
+        }
       }
       return true
     } catch (error) {
       console.error('Failed to update labels:', error)
       return false
     }
+  }
+
+  /**
+   * Fetch all labels from the GitHub repository.
+   */
+  private async fetchRepoLabels(): Promise<string[]> {
+    try {
+      const { stdout } = await execFileAsync(
+        'gh',
+        ['label', 'list', '--repo', `${this.owner}/${this.repo}`, '--json', 'name'],
+        { cwd: this.repoPath }
+      )
+      const labels = JSON.parse(stdout) as { name: string }[]
+      return labels.map((l) => l.name)
+    } catch (error) {
+      logAction('fetchRepoLabels: Failed to fetch labels', { error: String(error) })
+      return []
+    }
+  }
+
+  /**
+   * Find a matching label in the repository's label list.
+   * Handles variations like:
+   * - "status::in-progress" vs "In progress" vs "in-progress"
+   * - Case differences
+   * - With or without "status::" prefix
+   */
+  private findMatchingLabel(targetLabel: string, repoLabels: string[]): string | null {
+    // Normalize function: lowercase, remove dashes/spaces/colons, collapse to single form
+    const normalize = (s: string): string => {
+      return s
+        .toLowerCase()
+        .replace(/[-_\s]+/g, '') // Remove dashes, underscores, spaces
+        .replace(/:/g, '') // Remove colons too for matching
+    }
+
+    const normalizedTarget = normalize(targetLabel)
+
+    // First try exact match
+    const exactMatch = repoLabels.find((l) => l === targetLabel)
+    if (exactMatch) return exactMatch
+
+    // Then try normalized match (full label)
+    const normalizedMatch = repoLabels.find((l) => normalize(l) === normalizedTarget)
+    if (normalizedMatch) return normalizedMatch
+
+    // Try matching just the status part after "::" against all labels
+    // This handles "status::in-progress" matching "In progress" or "in-progress"
+    if (targetLabel.includes('::')) {
+      const statusPart = targetLabel.split('::')[1]
+      const normalizedStatus = normalize(statusPart)
+
+      // First check labels that also have "::" prefix
+      const prefixedMatch = repoLabels.find((l) => {
+        if (l.includes('::')) {
+          const labelStatus = l.split('::')[1]
+          return normalize(labelStatus) === normalizedStatus
+        }
+        return false
+      })
+      if (prefixedMatch) return prefixedMatch
+
+      // Then check labels WITHOUT "::" prefix (e.g., "In progress" matches "status::in-progress")
+      const unprefixedMatch = repoLabels.find((l) => {
+        if (!l.includes('::')) {
+          return normalize(l) === normalizedStatus
+        }
+        return false
+      })
+      if (unprefixedMatch) return unprefixedMatch
+    }
+
+    return null
   }
 
   /**
@@ -944,15 +1036,18 @@ export class GithubAdapter {
           '--head',
           branch,
           '--base',
-          baseBranch,
-          '--json',
-          'number,url'
+          baseBranch
         ],
         { cwd: this.repoPath }
       )
 
-      const result = JSON.parse(stdout)
-      return { number: result.number, url: result.url }
+      // gh pr create outputs the PR URL on success
+      // e.g., "https://github.com/owner/repo/pull/123"
+      const url = stdout.trim()
+      const prNumberMatch = url.match(/\/pull\/(\d+)/)
+      const prNumber = prNumberMatch ? parseInt(prNumberMatch[1], 10) : 0
+
+      return { number: prNumber, url }
     } catch (error) {
       console.error('Failed to create PR:', error)
       return null

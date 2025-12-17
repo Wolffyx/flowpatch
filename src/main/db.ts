@@ -8,13 +8,15 @@ import type {
   CardLink,
   Event,
   Job,
+  Worktree,
   CardStatus,
   JobState,
   JobType,
-  EventType
+  EventType,
+  WorktreeStatus
 } from '../shared/types'
 
-export type { Project, Card, CardLink, Event, Job, CardStatus }
+export type { Project, Card, CardLink, Event, Job, Worktree, CardStatus, WorktreeStatus }
 
 let db: Database.Database | null = null
 
@@ -160,6 +162,33 @@ export function initDb(): Database.Database {
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
       UNIQUE(project_id, provider, cursor_type)
     );
+  `)
+
+  // Worktrees table (for tracking git worktree lifecycle)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS worktrees (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      card_id TEXT NOT NULL,
+      job_id TEXT,
+      worktree_path TEXT NOT NULL,
+      branch_name TEXT NOT NULL,
+      base_ref TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'creating',
+      last_error TEXT,
+      locked_by TEXT,
+      lock_expires_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+      FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE CASCADE,
+      FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_worktrees_project ON worktrees(project_id);
+    CREATE INDEX IF NOT EXISTS idx_worktrees_card ON worktrees(card_id);
+    CREATE INDEX IF NOT EXISTS idx_worktrees_status ON worktrees(status);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_worktrees_path ON worktrees(worktree_path);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_worktrees_branch ON worktrees(project_id, branch_name);
   `)
 
   return db
@@ -564,6 +593,20 @@ export function updateJobState(
   return getJob(jobId)
 }
 
+export function updateJobResult(jobId: string, result?: unknown): Job | null {
+  const d = getDb()
+  const now = new Date().toISOString()
+  d.prepare(
+    `
+    UPDATE jobs SET
+      result_json = ?,
+      updated_at = ?
+    WHERE id = ?
+  `
+  ).run(result ? JSON.stringify(result) : null, now, jobId)
+  return getJob(jobId)
+}
+
 export function acquireJobLease(jobId: string, leaseSeconds = 300): boolean {
   const d = getDb()
   const now = new Date()
@@ -620,6 +663,97 @@ export function getRunningJobs(projectId: string): Job[] {
     .all(projectId, 'running') as Job[]
 }
 
+export function getNextReadyCard(projectId: string, retryCooldownMinutes = 30): Card | null {
+  const d = getDb()
+  const cooldownTime = new Date(Date.now() - retryCooldownMinutes * 60 * 1000).toISOString()
+
+  // Find the oldest Ready card that:
+  // 1. Has status = 'ready'
+  // 2. Is not a local-only card (has remote)
+  // 3. Has no active (queued/running) worker_run job
+  // 4. Has no recently failed worker_run job (within cooldown period)
+  const stmt = d.prepare(`
+    SELECT c.* FROM cards c
+    WHERE c.project_id = ?
+      AND c.status = 'ready'
+      AND c.provider != 'local'
+      AND c.remote_repo_key IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM jobs j
+        WHERE j.card_id = c.id
+          AND j.type = 'worker_run'
+          AND j.state IN ('queued', 'running')
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM jobs j
+        WHERE j.card_id = c.id
+          AND j.type = 'worker_run'
+          AND j.state = 'failed'
+          AND j.updated_at > ?
+      )
+    ORDER BY c.updated_local_at ASC
+    LIMIT 1
+  `)
+
+  return (stmt.get(projectId, cooldownTime) as Card) ?? null
+}
+
+export function hasActiveWorkerJob(projectId: string): boolean {
+  const d = getDb()
+  const stmt = d.prepare(`
+    SELECT 1 FROM jobs
+    WHERE project_id = ?
+      AND type = 'worker_run'
+      AND state IN ('queued', 'running')
+    LIMIT 1
+  `)
+  return stmt.get(projectId) !== undefined
+}
+
+export function getActiveWorkerJob(projectId: string): Job | null {
+  const d = getDb()
+  const stmt = d.prepare(`
+    SELECT * FROM jobs
+    WHERE project_id = ?
+      AND type = 'worker_run'
+      AND state IN ('queued', 'running')
+    ORDER BY created_at DESC
+    LIMIT 1
+  `)
+  return (stmt.get(projectId) as Job) ?? null
+}
+
+export function getActiveWorkerJobForCard(cardId: string): Job | null {
+  const d = getDb()
+  const stmt = d.prepare(`
+    SELECT * FROM jobs
+    WHERE card_id = ?
+      AND type = 'worker_run'
+      AND state IN ('queued', 'running')
+    ORDER BY created_at DESC
+    LIMIT 1
+  `)
+  return (stmt.get(cardId) as Job) ?? null
+}
+
+export function cancelJob(jobId: string, error?: string): boolean {
+  const d = getDb()
+  const now = new Date().toISOString()
+  const res = d
+    .prepare(
+      `
+      UPDATE jobs SET
+        state = 'canceled',
+        lease_until = NULL,
+        last_error = ?,
+        updated_at = ?
+      WHERE id = ? AND state IN ('queued', 'running')
+    `
+    )
+    .run(error ?? 'Canceled', now, jobId)
+  return res.changes > 0
+}
+
 // ==================== Sync State ====================
 
 export function getSyncCursor(
@@ -654,6 +788,195 @@ export function setSyncCursor(
       updated_at = excluded.updated_at
   `
   ).run(id, projectId, provider, cursorType, value, now)
+}
+
+// ==================== Worktrees ====================
+
+export interface WorktreeCreate {
+  projectId: string
+  cardId: string
+  jobId?: string
+  worktreePath: string
+  branchName: string
+  baseRef: string
+  status?: WorktreeStatus
+  lockedBy?: string
+  lockExpiresAt?: string
+}
+
+export function listWorktrees(projectId: string): Worktree[] {
+  const d = getDb()
+  const stmt = d.prepare('SELECT * FROM worktrees WHERE project_id = ? ORDER BY created_at DESC')
+  return stmt.all(projectId) as Worktree[]
+}
+
+export function listWorktreesByStatus(projectId: string, status: WorktreeStatus): Worktree[] {
+  const d = getDb()
+  const stmt = d.prepare(
+    'SELECT * FROM worktrees WHERE project_id = ? AND status = ? ORDER BY created_at DESC'
+  )
+  return stmt.all(projectId, status) as Worktree[]
+}
+
+export function getWorktree(id: string): Worktree | null {
+  const d = getDb()
+  const stmt = d.prepare('SELECT * FROM worktrees WHERE id = ?')
+  return (stmt.get(id) as Worktree) ?? null
+}
+
+export function getWorktreeByPath(worktreePath: string): Worktree | null {
+  const d = getDb()
+  const stmt = d.prepare('SELECT * FROM worktrees WHERE worktree_path = ?')
+  return (stmt.get(worktreePath) as Worktree) ?? null
+}
+
+export function getWorktreeByBranch(projectId: string, branchName: string): Worktree | null {
+  const d = getDb()
+  const stmt = d.prepare('SELECT * FROM worktrees WHERE project_id = ? AND branch_name = ?')
+  return (stmt.get(projectId, branchName) as Worktree) ?? null
+}
+
+export function getWorktreeByCard(cardId: string): Worktree | null {
+  const d = getDb()
+  const stmt = d.prepare(
+    "SELECT * FROM worktrees WHERE card_id = ? AND status NOT IN ('cleaned', 'error') ORDER BY created_at DESC LIMIT 1"
+  )
+  return (stmt.get(cardId) as Worktree) ?? null
+}
+
+export function getWorktreeByJob(jobId: string): Worktree | null {
+  const d = getDb()
+  const stmt = d.prepare('SELECT * FROM worktrees WHERE job_id = ?')
+  return (stmt.get(jobId) as Worktree) ?? null
+}
+
+export function createWorktree(data: WorktreeCreate): Worktree {
+  const d = getDb()
+  const id = cryptoRandomId()
+  const now = new Date().toISOString()
+
+  d.prepare(
+    `
+    INSERT INTO worktrees (
+      id, project_id, card_id, job_id, worktree_path, branch_name, base_ref,
+      status, locked_by, lock_expires_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `
+  ).run(
+    id,
+    data.projectId,
+    data.cardId,
+    data.jobId ?? null,
+    data.worktreePath,
+    data.branchName,
+    data.baseRef,
+    data.status ?? 'creating',
+    data.lockedBy ?? null,
+    data.lockExpiresAt ?? null,
+    now,
+    now
+  )
+
+  return d.prepare('SELECT * FROM worktrees WHERE id = ?').get(id) as Worktree
+}
+
+export function updateWorktreeStatus(
+  id: string,
+  status: WorktreeStatus,
+  error?: string
+): Worktree | null {
+  const d = getDb()
+  const now = new Date().toISOString()
+  d.prepare('UPDATE worktrees SET status = ?, last_error = ?, updated_at = ? WHERE id = ?').run(
+    status,
+    error ?? null,
+    now,
+    id
+  )
+  return getWorktree(id)
+}
+
+export function updateWorktreeJob(id: string, jobId: string | null): Worktree | null {
+  const d = getDb()
+  const now = new Date().toISOString()
+  d.prepare('UPDATE worktrees SET job_id = ?, updated_at = ? WHERE id = ?').run(jobId, now, id)
+  return getWorktree(id)
+}
+
+export function deleteWorktree(id: string): boolean {
+  const d = getDb()
+  const result = d.prepare('DELETE FROM worktrees WHERE id = ?').run(id)
+  return result.changes > 0
+}
+
+export function acquireWorktreeLock(
+  id: string,
+  lockedBy: string,
+  ttlMinutes: number = 10
+): boolean {
+  const d = getDb()
+  const now = new Date()
+  const lockExpiresAt = new Date(now.getTime() + ttlMinutes * 60 * 1000).toISOString()
+
+  // Only acquire if not locked or lock is expired
+  const result = d
+    .prepare(
+      `
+    UPDATE worktrees SET
+      locked_by = ?,
+      lock_expires_at = ?,
+      updated_at = ?
+    WHERE id = ? AND (locked_by IS NULL OR lock_expires_at < ?)
+  `
+    )
+    .run(lockedBy, lockExpiresAt, now.toISOString(), id, now.toISOString())
+
+  return result.changes > 0
+}
+
+export function renewWorktreeLock(
+  id: string,
+  lockedBy: string,
+  ttlMinutes: number = 10
+): boolean {
+  const d = getDb()
+  const now = new Date()
+  const lockExpiresAt = new Date(now.getTime() + ttlMinutes * 60 * 1000).toISOString()
+
+  const result = d
+    .prepare(
+      'UPDATE worktrees SET lock_expires_at = ?, updated_at = ? WHERE id = ? AND locked_by = ?'
+    )
+    .run(lockExpiresAt, now.toISOString(), id, lockedBy)
+
+  return result.changes > 0
+}
+
+export function releaseWorktreeLock(id: string): void {
+  const d = getDb()
+  const now = new Date().toISOString()
+  d.prepare(
+    'UPDATE worktrees SET locked_by = NULL, lock_expires_at = NULL, updated_at = ? WHERE id = ?'
+  ).run(now, id)
+}
+
+export function getExpiredWorktreeLocks(): Worktree[] {
+  const d = getDb()
+  const now = new Date().toISOString()
+  const stmt = d.prepare(
+    'SELECT * FROM worktrees WHERE locked_by IS NOT NULL AND lock_expires_at < ?'
+  )
+  return stmt.all(now) as Worktree[]
+}
+
+export function countActiveWorktrees(projectId: string): number {
+  const d = getDb()
+  const result = d
+    .prepare(
+      "SELECT COUNT(*) as count FROM worktrees WHERE project_id = ? AND status IN ('creating', 'ready', 'running')"
+    )
+    .get(projectId) as { count: number }
+  return result.count
 }
 
 // ==================== Utilities ====================

@@ -11,21 +11,38 @@ import {
   updateCardStatus,
   deleteProject as dbDeleteProject,
   updateProjectWorkerEnabled,
+  updateProjectPolicyJson,
   listEvents,
   listJobs,
   createEvent,
   createJob,
   getProject,
+  getCard,
+  getActiveWorkerJobForCard,
+  cancelJob,
   updateJobState,
-  upsertCard
+  upsertCard,
+  listWorktrees,
+  getWorktree,
+  updateWorktreeStatus
 } from './db'
 import { SyncEngine, runSync } from './sync/engine'
 import { GithubAdapter } from './adapters/github'
+import { runWorker as executeWorkerPipeline } from './worker/pipeline'
+import {
+  startWorkerLoop,
+  stopWorkerLoop,
+  startEnabledWorkerLoops,
+  stopAllWorkerLoops
+} from './worker/loop'
 import { execFile } from 'child_process'
 import { existsSync, readFileSync } from 'fs'
 import YAML from 'yaml'
-import type { RemoteInfo, PolicyConfig } from '@shared/types'
+import { DEFAULT_POLICY, type RemoteInfo, type PolicyConfig } from '@shared/types'
 import { logAction } from '@shared/utils'
+import { GitWorktreeManager } from './services/git-worktree-manager'
+import { WorktreeReconciler, reconcileAllProjects } from './services/worktree-reconciler'
+import { startCleanupScheduler, stopCleanupScheduler } from './services/worktree-cleanup-scheduler'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -288,13 +305,28 @@ app.whenReady().then(() => {
         status: 'draft' | 'ready' | 'in_progress' | 'in_review' | 'testing' | 'done'
       }
     ) => {
+      const before = getCard(payload.cardId)
       const card = updateCardStatus(payload.cardId, payload.status)
       if (card) {
         logAction('moveCard', payload)
         createEvent(card.project_id, 'status_changed', card.id, {
-          from: card.status,
+          from: before?.status,
           to: payload.status
         })
+
+        // If the user moves a card out of Ready/In Progress, cancel any active worker job for it.
+        if (payload.status === 'draft' || payload.status === 'in_review' || payload.status === 'testing' || payload.status === 'done') {
+          const activeJob = getActiveWorkerJobForCard(payload.cardId)
+          if (activeJob) {
+            cancelJob(activeJob.id, `Canceled: moved to ${payload.status}`)
+            createEvent(card.project_id, 'worker_run', card.id, {
+              jobId: activeJob.id,
+              action: 'canceled',
+              reason: `moved_to_${payload.status}`
+            })
+          }
+        }
+
         // Sync status change to remote if card has remote
         if (card.remote_repo_key) {
           const job = createJob(card.project_id, 'sync_push', card.id, { status: payload.status })
@@ -335,10 +367,93 @@ app.whenReady().then(() => {
         enabled: payload.enabled
       })
       logAction('toggleWorker:updated', { projectId: payload.projectId, enabled: payload.enabled })
+
+      // Start or stop worker loop based on toggle state
+      if (payload.enabled) {
+        startWorkerLoop(payload.projectId)
+      } else {
+        stopWorkerLoop(payload.projectId)
+      }
     }
     notifyRenderer()
     return { project }
   })
+
+  // Update worker tool preference (Claude Code vs Codex)
+  ipcMain.handle(
+    'setWorkerToolPreference',
+    (
+      _e,
+      payload: { projectId: string; toolPreference: 'auto' | 'claude' | 'codex' }
+    ) => {
+      logAction('setWorkerToolPreference', payload)
+
+      const valid: Set<string> = new Set(['auto', 'claude', 'codex'])
+      if (!payload?.projectId) return { error: 'Project not found' }
+      if (!valid.has(payload.toolPreference)) return { error: 'Invalid tool preference' }
+
+      const project = getProject(payload.projectId)
+      if (!project) return { error: 'Project not found' }
+
+      let policy: PolicyConfig = DEFAULT_POLICY
+      if (project.policy_json) {
+        try {
+          policy = JSON.parse(project.policy_json) as PolicyConfig
+        } catch {
+          // fall back to DEFAULT_POLICY
+        }
+      }
+
+      policy.worker = {
+        ...policy.worker,
+        toolPreference: payload.toolPreference
+      }
+
+      updateProjectPolicyJson(payload.projectId, JSON.stringify(policy))
+      createEvent(payload.projectId, 'status_changed', undefined, {
+        action: 'worker_tool_preference',
+        toolPreference: payload.toolPreference
+      })
+
+      notifyRenderer()
+      return { success: true, project: getProject(payload.projectId) }
+    }
+  )
+
+  ipcMain.handle(
+    'setWorkerRollbackOnCancel',
+    (_e, payload: { projectId: string; rollbackOnCancel: boolean }) => {
+      logAction('setWorkerRollbackOnCancel', payload)
+
+      if (!payload?.projectId) return { error: 'Project not found' }
+
+      const project = getProject(payload.projectId)
+      if (!project) return { error: 'Project not found' }
+
+      let policy: PolicyConfig = DEFAULT_POLICY
+      if (project.policy_json) {
+        try {
+          policy = JSON.parse(project.policy_json) as PolicyConfig
+        } catch {
+          // fall back to DEFAULT_POLICY
+        }
+      }
+
+      policy.worker = {
+        ...policy.worker,
+        rollbackOnCancel: !!payload.rollbackOnCancel
+      }
+
+      updateProjectPolicyJson(payload.projectId, JSON.stringify(policy))
+      createEvent(payload.projectId, 'status_changed', undefined, {
+        action: 'worker_rollback_on_cancel',
+        rollbackOnCancel: !!payload.rollbackOnCancel
+      })
+
+      notifyRenderer()
+      return { success: true, project: getProject(payload.projectId) }
+    }
+  )
 
   // Sync project
   ipcMain.handle('syncProject', async (_e, payload: { projectId: string }) => {
@@ -378,12 +493,164 @@ app.whenReady().then(() => {
     createEvent(payload.projectId, 'worker_run', payload.cardId, { jobId: job.id })
     logAction('runWorker:queued', { projectId: payload.projectId, jobId: job.id })
 
-    // TODO: Actually run the worker
+    // Execute worker asynchronously (don't block IPC response)
+    executeWorkerPipeline(job.id)
+      .then((result) => {
+        logAction('runWorker:complete', {
+          jobId: job.id,
+          success: result.success,
+          phase: result.phase,
+          prUrl: result.prUrl
+        })
+        notifyRenderer()
+      })
+      .catch((err) => {
+        logAction('runWorker:error', {
+          jobId: job.id,
+          error: err instanceof Error ? err.message : String(err)
+        })
+        notifyRenderer()
+      })
+
     notifyRenderer()
     return { success: true, job }
   })
 
+  // ==================== Worktree IPC Handlers ====================
+
+  ipcMain.handle('listWorktrees', async (_e, projectId: string) => {
+    logAction('listWorktrees', { projectId })
+    return listWorktrees(projectId)
+  })
+
+  ipcMain.handle('getWorktree', async (_e, worktreeId: string) => {
+    logAction('getWorktree', { worktreeId })
+    return getWorktree(worktreeId)
+  })
+
+  ipcMain.handle('removeWorktree', async (_e, worktreeId: string) => {
+    logAction('removeWorktree', { worktreeId })
+    const wt = getWorktree(worktreeId)
+    if (!wt) return { error: 'Worktree not found' }
+
+    const project = getProject(wt.project_id)
+    if (!project) return { error: 'Project not found' }
+
+    let policy: PolicyConfig | undefined
+    try {
+      policy = project.policy_json ? JSON.parse(project.policy_json) : undefined
+    } catch {
+      // Use defaults
+    }
+
+    const manager = new GitWorktreeManager(project.local_path)
+    const config = {
+      root: policy?.worker?.worktree?.root ?? 'repo',
+      customPath: policy?.worker?.worktree?.customPath
+    }
+
+    try {
+      await manager.removeWorktree(wt.worktree_path, { force: true, config })
+      updateWorktreeStatus(worktreeId, 'cleaned')
+      notifyRenderer()
+      return { success: true }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err)
+      updateWorktreeStatus(worktreeId, 'error', errorMsg)
+      notifyRenderer()
+      return { error: errorMsg }
+    }
+  })
+
+  ipcMain.handle('recreateWorktree', async (_e, worktreeId: string) => {
+    logAction('recreateWorktree', { worktreeId })
+    const wt = getWorktree(worktreeId)
+    if (!wt) return { error: 'Worktree not found' }
+
+    const project = getProject(wt.project_id)
+    if (!project) return { error: 'Project not found' }
+
+    let policy: PolicyConfig | undefined
+    try {
+      policy = project.policy_json ? JSON.parse(project.policy_json) : undefined
+    } catch {
+      // Use defaults
+    }
+
+    const manager = new GitWorktreeManager(project.local_path)
+    const config = {
+      root: policy?.worker?.worktree?.root ?? 'repo',
+      customPath: policy?.worker?.worktree?.customPath
+    }
+
+    try {
+      // Force remove if exists
+      try {
+        await manager.removeWorktree(wt.worktree_path, { force: true, config })
+      } catch {
+        // Ignore removal errors
+      }
+
+      // Recreate
+      const baseBranch = wt.base_ref.replace(/^origin\//, '')
+      await manager.ensureWorktree(wt.worktree_path, wt.branch_name, baseBranch, {
+        fetchFirst: true,
+        force: true,
+        config
+      })
+
+      updateWorktreeStatus(worktreeId, 'ready')
+      notifyRenderer()
+      return { success: true }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err)
+      updateWorktreeStatus(worktreeId, 'error', errorMsg)
+      notifyRenderer()
+      return { error: errorMsg }
+    }
+  })
+
+  ipcMain.handle('openWorktreeFolder', async (_e, worktreePath: string) => {
+    logAction('openWorktreeFolder', { worktreePath })
+    shell.openPath(worktreePath)
+    return { success: true }
+  })
+
+  ipcMain.handle('cleanupStaleWorktrees', async (_e, projectId: string) => {
+    logAction('cleanupStaleWorktrees', { projectId })
+    const project = getProject(projectId)
+    if (!project) return { error: 'Project not found' }
+
+    let policy: PolicyConfig | undefined
+    try {
+      policy = project.policy_json ? JSON.parse(project.policy_json) : undefined
+    } catch {
+      // Use defaults
+    }
+
+    try {
+      const reconciler = new WorktreeReconciler(projectId, project.local_path, policy)
+      const result = await reconciler.reconcile()
+      notifyRenderer()
+      return { success: true, result }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err)
+      return { error: errorMsg }
+    }
+  })
+
   createWindow()
+
+  // Start worker loops for all projects that have worker enabled
+  startEnabledWorkerLoops()
+
+  // Start worktree cleanup scheduler
+  startCleanupScheduler()
+
+  // Reconcile worktrees on startup
+  reconcileAllProjects(listProjects()).catch((err) => {
+    console.error('Failed to reconcile worktrees on startup:', err)
+  })
 
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -394,6 +661,12 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+// Stop all worker loops and cleanup scheduler on app quit
+app.on('before-quit', () => {
+  stopAllWorkerLoops()
+  stopCleanupScheduler()
 })
 
 // Utility functions

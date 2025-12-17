@@ -17,10 +17,42 @@ export type EventType =
   | 'synced'
   | 'worker_plan'
   | 'worker_run'
+  | 'worker_log'
   | 'pr_created'
   | 'error'
   | 'card_created'
   | 'card_linked'
+
+// Worker state for UI display
+export type WorkerState = 'idle' | 'processing' | 'waiting' | 'error'
+
+// Worktree status for tracking lifecycle
+export type WorktreeStatus = 'creating' | 'ready' | 'running' | 'cleanup_pending' | 'cleaned' | 'error'
+
+// Worktree root location options
+export type WorktreeRoot = 'repo' | 'sibling' | 'custom'
+
+// Worktree cleanup timing options
+export type WorktreeCleanupTiming = 'immediate' | 'delay' | 'never'
+
+export interface WorkerStatus {
+  state: WorkerState
+  activeCardId?: string
+  activeCardTitle?: string
+  activeJobId?: string
+  lastError?: string
+  lastRunAt?: string
+}
+
+export interface WorkerLogMessage {
+  projectId: string
+  jobId: string
+  cardId?: string
+  ts: string
+  line: string
+  source?: string
+  stream?: 'stdout' | 'stderr'
+}
 
 export interface Project {
   id: string
@@ -65,6 +97,22 @@ export interface CardLink {
   linked_remote_repo_key: string | null
   linked_number_or_iid: string | null
   created_at: string
+}
+
+export interface Worktree {
+  id: string
+  project_id: string
+  card_id: string
+  job_id: string | null
+  worktree_path: string
+  branch_name: string
+  base_ref: string
+  status: WorktreeStatus
+  last_error: string | null
+  locked_by: string | null
+  lock_expires_at: string | null
+  created_at: string
+  updated_at: string
 }
 
 export interface Event {
@@ -138,6 +186,7 @@ export interface PolicyConfig {
     planFirst?: boolean
     maxMinutes?: number
     allowNetwork?: boolean
+    rollbackOnCancel?: boolean
     branchPattern?: string
     commitMessage?: string
     allowedCommands?: string[]
@@ -145,6 +194,20 @@ export interface PolicyConfig {
     testCommand?: string
     buildCommand?: string
     forbidPaths?: string[]
+    worktree?: {
+      enabled?: boolean
+      root?: WorktreeRoot
+      customPath?: string
+      baseBranch?: string
+      branchPrefix?: string
+      cleanup?: {
+        onSuccess?: WorktreeCleanupTiming
+        onFailure?: WorktreeCleanupTiming
+        delayMinutes?: number
+      }
+      maxConcurrent?: number
+      skipInstallIfCached?: boolean
+    }
   }
 }
 
@@ -216,6 +279,40 @@ export function slugify(text: string): string {
     .slice(0, 50)
 }
 
+/**
+ * Generate a safe branch name for worktrees.
+ * Format: {prefix}{provider}-{numberOrId}-{slug}
+ * Max length: 100 chars, safe charset: a-z0-9-/
+ */
+export function generateWorktreeBranchName(
+  provider: Provider,
+  numberOrId: string | number | null,
+  title: string,
+  prefix: string = 'patchwork/'
+): string {
+  // Normalize prefix to end with /
+  const normalizedPrefix = prefix.endsWith('/') ? prefix : `${prefix}/`
+
+  // Create ID part
+  const idPart = numberOrId ? String(numberOrId) : 'local'
+
+  // Create slug from title
+  const slug = slugify(title)
+
+  // Build full branch name
+  const fullName = `${normalizedPrefix}${provider}-${idPart}-${slug}`
+
+  // Ensure max length of 100 chars (git branch name limit is 244, but keep it reasonable)
+  if (fullName.length > 100) {
+    // Truncate slug to fit
+    const prefixAndId = `${normalizedPrefix}${provider}-${idPart}-`
+    const maxSlugLen = 100 - prefixAndId.length
+    return `${prefixAndId}${slug.slice(0, Math.max(maxSlugLen, 10))}`
+  }
+
+  return fullName
+}
+
 // Default policy configuration
 export const DEFAULT_POLICY: PolicyConfig = {
   version: 1,
@@ -241,12 +338,25 @@ export const DEFAULT_POLICY: PolicyConfig = {
     planFirst: true,
     maxMinutes: 25,
     allowNetwork: false,
+    rollbackOnCancel: false,
     branchPattern: 'kanban/{id}-{slug}',
     commitMessage: '#{issue} {title}',
     allowedCommands: ['pnpm install', 'pnpm lint', 'pnpm test', 'pnpm build'],
     lintCommand: 'pnpm lint',
     testCommand: 'pnpm test',
     buildCommand: 'pnpm build',
-    forbidPaths: ['.github/workflows/', '.gitlab-ci.yml']
+    forbidPaths: ['.github/workflows/', '.gitlab-ci.yml'],
+    worktree: {
+      enabled: false,
+      root: 'repo',
+      branchPrefix: 'patchwork/',
+      cleanup: {
+        onSuccess: 'immediate',
+        onFailure: 'delay',
+        delayMinutes: 30
+      },
+      maxConcurrent: 1,
+      skipInstallIfCached: false
+    }
   }
 }

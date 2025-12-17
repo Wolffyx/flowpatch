@@ -9,14 +9,32 @@ import { AddCardDialog, type CreateCardType } from './components/AddCardDialog'
 import { Button } from './components/ui/button'
 import { useAppStore } from './store/useAppStore'
 import type { CardStatus, Provider } from '../../shared/types'
+import { WorkerLogDialog } from './components/WorkerLogDialog'
 
 function App(): React.JSX.Element {
   const store = useAppStore()
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [addCardDialogOpen, setAddCardDialogOpen] = useState(false)
+  const [workerLogsOpen, setWorkerLogsOpen] = useState(false)
 
   const selectedProject = store.getSelectedProject()
   const selectedCard = store.getSelectedCard()
+
+  const workerJobs = (selectedProject?.jobs || []).filter((j) => j.type === 'worker_run')
+  const activeWorkerJob = workerJobs.find((j) => j.state === 'running' || j.state === 'queued') || null
+  const latestWorkerJob =
+    workerJobs.length === 0
+      ? null
+      : workerJobs.reduce((latest, job) => {
+          const latestTime = latest.updated_at || latest.created_at
+          const jobTime = job.updated_at || job.created_at
+          return jobTime > latestTime ? job : latest
+        })
+  const jobForLogs = activeWorkerJob || latestWorkerJob
+  const cardForLogs =
+    jobForLogs?.card_id
+      ? selectedProject?.cards.find((c) => c.id === jobForLogs.card_id) || null
+      : null
 
   // Determine remote provider for the selected project
   const remoteProvider: Provider | null = selectedProject?.project.remote_repo_key
@@ -84,10 +102,14 @@ function App(): React.JSX.Element {
         <TopBar
           project={selectedProject?.project || null}
           jobs={selectedProject?.jobs || []}
+          cards={selectedProject?.cards || []}
           isLoading={store.isLoading}
           onSync={store.syncProject}
           onToggleWorker={store.toggleWorker}
           onOpenCommandPalette={() => setCommandPaletteOpen(true)}
+          onSetWorkerToolPreference={store.setWorkerToolPreference}
+          onSetWorkerRollbackOnCancel={store.setWorkerRollbackOnCancel}
+          onOpenWorkerLogs={() => setWorkerLogsOpen(true)}
         />
 
         {/* Board and drawer */}
@@ -109,6 +131,7 @@ function App(): React.JSX.Element {
                 <CardDrawer
                   card={selectedCard}
                   events={selectedProject.events}
+                  projectId={selectedProject.project.id}
                   onClose={() => store.selectCard(null)}
                   onMoveCard={handleMoveCard}
                   onRunWorker={store.runWorker}
@@ -158,6 +181,15 @@ function App(): React.JSX.Element {
         hasRemote={!!selectedProject?.project.remote_repo_key}
         remoteProvider={remoteProvider}
         onCreateCard={handleCreateCard}
+      />
+
+      <WorkerLogDialog
+        open={workerLogsOpen}
+        onOpenChange={setWorkerLogsOpen}
+        job={jobForLogs}
+        card={cardForLogs}
+        liveLogs={jobForLogs ? store.workerLogsByJobId[jobForLogs.id] ?? [] : []}
+        onClearLogs={store.clearWorkerLogs}
       />
 
       {/* Error display */}
