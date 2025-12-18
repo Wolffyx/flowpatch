@@ -21,6 +21,7 @@ interface SettingsDialogProps {
   project: Project
   onSetWorkerToolPreference: (toolPreference: WorkerToolPreference) => Promise<void>
   onSetWorkerRollbackOnCancel: (rollbackOnCancel: boolean) => Promise<void>
+  onSetShowPullRequestsSection: (showPullRequestsSection: boolean) => Promise<void>
 }
 
 function readToolPreference(project: Project): WorkerToolPreference {
@@ -45,17 +46,30 @@ function readRollbackOnCancel(project: Project): boolean {
   }
 }
 
+function readShowPullRequestsSection(project: Project): boolean {
+  if (!project.policy_json) return false
+  try {
+    const policy = JSON.parse(project.policy_json) as PolicyConfig
+    return !!policy?.ui?.showPullRequestsSection
+  } catch {
+    return false
+  }
+}
+
 export function SettingsDialog({
   open,
   onOpenChange,
   project,
   onSetWorkerToolPreference,
-  onSetWorkerRollbackOnCancel
+  onSetWorkerRollbackOnCancel,
+  onSetShowPullRequestsSection
 }: SettingsDialogProps): React.JSX.Element {
   const initialPreference = useMemo(() => readToolPreference(project), [project])
   const initialRollbackOnCancel = useMemo(() => readRollbackOnCancel(project), [project])
+  const initialShowPullRequestsSection = useMemo(() => readShowPullRequestsSection(project), [project])
   const [toolPreference, setToolPreference] = useState<WorkerToolPreference>(initialPreference)
   const [rollbackOnCancel, setRollbackOnCancel] = useState(initialRollbackOnCancel)
+  const [showPullRequestsSection, setShowPullRequestsSection] = useState(initialShowPullRequestsSection)
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -63,6 +77,7 @@ export function SettingsDialog({
     if (!open) return
     setToolPreference(readToolPreference(project))
     setRollbackOnCancel(readRollbackOnCancel(project))
+    setShowPullRequestsSection(readShowPullRequestsSection(project))
     setError(null)
     setIsSaving(false)
   }, [open, project])
@@ -83,6 +98,11 @@ export function SettingsDialog({
         nextActions.push(onSetWorkerRollbackOnCancel(rollbackOnCancel))
       }
 
+      const existingShowPRs = readShowPullRequestsSection(project)
+      if (existingShowPRs !== showPullRequestsSection) {
+        nextActions.push(onSetShowPullRequestsSection(showPullRequestsSection))
+      }
+
       await Promise.all(nextActions)
       onOpenChange(false)
     } catch (err) {
@@ -90,7 +110,16 @@ export function SettingsDialog({
     } finally {
       setIsSaving(false)
     }
-  }, [onOpenChange, onSetWorkerRollbackOnCancel, onSetWorkerToolPreference, project, rollbackOnCancel, toolPreference])
+  }, [
+    onOpenChange,
+    onSetShowPullRequestsSection,
+    onSetWorkerRollbackOnCancel,
+    onSetWorkerToolPreference,
+    project,
+    rollbackOnCancel,
+    showPullRequestsSection,
+    toolPreference
+  ])
 
   const options: {
     id: WorkerToolPreference
@@ -182,6 +211,23 @@ export function SettingsDialog({
               <Switch
                 checked={rollbackOnCancel}
                 onCheckedChange={setRollbackOnCancel}
+                disabled={isSaving}
+              />
+            </div>
+          </div>
+
+          <div className="grid gap-2">
+            <label className="text-sm font-medium">Board</label>
+            <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+              <div className="flex-1">
+                <div className="font-medium text-sm">Show Pull Requests section</div>
+                <div className="text-xs text-muted-foreground">
+                  When enabled, pull requests / merge requests are shown in a separate section (and removed from the Kanban columns).
+                </div>
+              </div>
+              <Switch
+                checked={showPullRequestsSection}
+                onCheckedChange={setShowPullRequestsSection}
                 disabled={isSaving}
               />
             </div>

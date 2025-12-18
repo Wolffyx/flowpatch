@@ -29,6 +29,7 @@ interface TopBarProps {
   onOpenCommandPalette: () => void
   onSetWorkerToolPreference: (toolPreference: WorkerToolPreference) => Promise<void>
   onSetWorkerRollbackOnCancel: (rollbackOnCancel: boolean) => Promise<void>
+  onSetShowPullRequestsSection: (showPullRequestsSection: boolean) => Promise<void>
   onOpenWorkerLogs: () => void
 }
 
@@ -42,6 +43,7 @@ export function TopBar({
   onOpenCommandPalette,
   onSetWorkerToolPreference,
   onSetWorkerRollbackOnCancel,
+  onSetShowPullRequestsSection,
   onOpenWorkerLogs
 }: TopBarProps): React.JSX.Element {
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -236,6 +238,7 @@ export function TopBar({
         project={project}
         onSetWorkerToolPreference={onSetWorkerToolPreference}
         onSetWorkerRollbackOnCancel={onSetWorkerRollbackOnCancel}
+        onSetShowPullRequestsSection={onSetShowPullRequestsSection}
       />
     </>
   )

@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'child_process'
 import { promisify } from 'util'
 import { writeFileSync } from 'fs'
-import { join } from 'path'
+import { join, resolve } from 'path'
 import { GithubAdapter } from '../adapters/github'
 import { GitlabAdapter } from '../adapters/gitlab'
 import {
@@ -18,7 +18,9 @@ import {
   renewJobLease,
   createWorktree,
   updateWorktreeStatus,
+  updateWorktreeJob,
   getWorktreeByCard,
+  acquireWorktreeLock,
   releaseWorktreeLock,
   renewWorktreeLock,
   countActiveWorktrees,
@@ -90,6 +92,11 @@ export class WorkerPipeline {
     }
   }
 
+  private normalizePath(p: string): string {
+    const resolved = resolve(p)
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+  }
+
   /**
    * Get the working directory for operations.
    * Returns worktree path if using worktrees, otherwise the main repo path.
@@ -149,9 +156,11 @@ export class WorkerPipeline {
     meta?: { source?: string; stream?: 'stdout' | 'stderr' }
   ): void {
     const ts = new Date().toISOString()
-    const line = `[${ts}] ${message}`
+    const sourcePrefix = meta?.source ? `[${meta.source}${meta.stream ? `:${meta.stream}` : ''}] ` : ''
+    const fullMessage = `${sourcePrefix}${message}`
+    const line = `[${ts}] ${fullMessage}`
     this.logs.push(line)
-    console.log(`[Worker] ${message}`)
+    console.log(`[Worker] ${fullMessage}`)
 
     if (!this.jobId) return
 
@@ -332,7 +341,7 @@ export class WorkerPipeline {
         this.log(`Using worktree branch: ${branchName}`)
       } else {
         branchName = this.generateBranchName()
-        this.log(`Creating branch: ${branchName}`)
+        this.log(`Preparing branch: ${branchName}`)
         await this.createBranch(branchName)
       }
 
@@ -482,10 +491,18 @@ export class WorkerPipeline {
       // Check if there's an existing worktree for this card
       const existingWorktree = getWorktreeByCard(this.cardId)
       if (existingWorktree && existingWorktree.status === 'ready') {
+        // Acquire lock to ensure exclusive use
+        const locked = acquireWorktreeLock(existingWorktree.id, this.workerId, 10)
+        if (!locked) {
+          this.log(`Worktree is locked by another worker: ${existingWorktree.worktree_path}`)
+          return false
+        }
+
         this.log(`Reusing existing worktree: ${existingWorktree.worktree_path}`)
         this.worktreeRecord = existingWorktree
         this.worktreePath = existingWorktree.worktree_path
         this.workerBranch = existingWorktree.branch_name
+        updateWorktreeJob(existingWorktree.id, this.jobId)
         updateWorktreeStatus(existingWorktree.id, 'running')
         return true
       }
@@ -498,10 +515,15 @@ export class WorkerPipeline {
         worktreePath,
         branchName,
         baseRef: `origin/${baseBranch}`,
-        status: 'creating',
-        lockedBy: this.workerId,
-        lockExpiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString()
+        status: 'creating'
       })
+
+      // Acquire lock for this worktree record
+      const locked = acquireWorktreeLock(this.worktreeRecord.id, this.workerId, 10)
+      if (!locked) {
+        updateWorktreeStatus(this.worktreeRecord.id, 'error', 'Failed to acquire worktree lock')
+        return false
+      }
 
       this.log(`Creating worktree at: ${worktreePath}`)
 
@@ -660,7 +682,7 @@ export class WorkerPipeline {
 
       const onChunk = (stream: 'stdout' | 'stderr', chunk: Buffer): void => {
         buffers[stream] += chunk.toString('utf-8')
-        const parts = buffers[stream].split(/\r?\n/)
+        const parts = buffers[stream].split(/\r\n|\n|\r/)
         buffers[stream] = parts.pop() ?? ''
         for (const part of parts) flushLine(part, stream)
       }
@@ -761,7 +783,7 @@ export class WorkerPipeline {
       })
 
       const line = stdout
-        .split(/\r?\n/)
+        .split(/\r\n|\n|\r/)
         .find((l) => l.includes('patchwork-worker-autostash'))
       if (!line) return
 
@@ -864,12 +886,52 @@ export class WorkerPipeline {
   }
 
   private async createBranch(branchName: string): Promise<void> {
-    const baseBranch = 'main' // TODO: Make configurable
+    const baseBranch = await this.getBaseBranch()
     this.baseBranch = baseBranch
 
     try {
       if (!this.startingBranch) {
         this.startingBranch = await this.getCurrentBranch()
+      }
+
+      // If branch already exists, just check it out and continue work there.
+      if (await this.localBranchExists(branchName)) {
+        const checkedOutAt = await this.getWorktreePathForBranch(branchName)
+        if (
+          checkedOutAt &&
+          this.normalizePath(checkedOutAt) !== this.normalizePath(this.project!.local_path)
+        ) {
+          throw new Error(
+            `Branch ${branchName} is already checked out in another worktree: ${checkedOutAt}`
+          )
+        }
+        this.log(`Branch exists locally; checking out: ${branchName}`)
+        await execFileAsync('git', ['checkout', branchName], {
+          cwd: this.project!.local_path
+        })
+        this.workerBranch = branchName
+        return
+      }
+
+      // If remote branch exists, create a local tracking branch and continue there.
+      if (await this.remoteBranchExists(branchName)) {
+        const checkedOutAt = await this.getWorktreePathForBranch(branchName)
+        if (
+          checkedOutAt &&
+          this.normalizePath(checkedOutAt) !== this.normalizePath(this.project!.local_path)
+        ) {
+          throw new Error(
+            `Branch ${branchName} is already checked out in another worktree: ${checkedOutAt}`
+          )
+        }
+        this.log(`Branch exists on origin; creating local tracking branch: ${branchName}`)
+        await execFileAsync(
+          'git',
+          ['checkout', '--track', '-b', branchName, `origin/${branchName}`],
+          { cwd: this.project!.local_path }
+        )
+        this.workerBranch = branchName
+        return
       }
 
       // Checkout base branch and pull
@@ -895,6 +957,85 @@ export class WorkerPipeline {
     } catch (error) {
       this.log(`Branch creation warning: ${error}`)
       throw error
+    }
+  }
+
+  private async getWorktreePathForBranch(branchName: string): Promise<string | null> {
+    try {
+      const { stdout } = await execFileAsync('git', ['worktree', 'list', '--porcelain'], {
+        cwd: this.project!.local_path
+      })
+      const entries = stdout.split(/\r?\n\r?\n/).filter((e) => e.trim())
+      for (const entry of entries) {
+        const lines = entry.split(/\r?\n/)
+        let worktreePath: string | null = null
+        let branch: string | null = null
+        for (const line of lines) {
+          if (line.startsWith('worktree ')) worktreePath = line.slice('worktree '.length).trim()
+          if (line.startsWith('branch ')) branch = line.slice('branch '.length).trim()
+        }
+        if (worktreePath && branch === `refs/heads/${branchName}`) return worktreePath
+      }
+      return null
+    } catch {
+      return null
+    }
+  }
+
+  private async getBaseBranch(): Promise<string> {
+    // Allow reusing the same config key as worktrees for consistency.
+    const configured = this.policy.worker?.worktree?.baseBranch
+    if (configured) return configured
+
+    // Try to read default from origin/HEAD.
+    try {
+      const { stdout } = await execFileAsync(
+        'git',
+        ['symbolic-ref', 'refs/remotes/origin/HEAD'],
+        { cwd: this.project!.local_path }
+      )
+      const ref = stdout.trim()
+      if (ref) return ref.replace(/^refs\/remotes\/origin\//, '')
+    } catch {
+      // ignore
+    }
+
+    // Try common branch names.
+    for (const candidate of ['main', 'master', 'develop']) {
+      try {
+        await execFileAsync('git', ['rev-parse', '--verify', `refs/heads/${candidate}`], {
+          cwd: this.project!.local_path
+        })
+        return candidate
+      } catch {
+        // ignore
+      }
+    }
+
+    return 'main'
+  }
+
+  private async localBranchExists(branchName: string): Promise<boolean> {
+    try {
+      await execFileAsync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branchName}`], {
+        cwd: this.project!.local_path
+      })
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private async remoteBranchExists(branchName: string): Promise<boolean> {
+    try {
+      await execFileAsync(
+        'git',
+        ['show-ref', '--verify', '--quiet', `refs/remotes/origin/${branchName}`],
+        { cwd: this.project!.local_path }
+      )
+      return true
+    } catch {
+      return false
     }
   }
 
@@ -1095,7 +1236,7 @@ Please implement the changes now.`
     try {
       await this.runProcessStreaming({
         command: 'codex',
-        args: ['--quiet', '--approval-mode', 'full-auto', prompt],
+        args: ['--approval-mode', 'full-auto', prompt],
         cwd: workingDir,
         timeoutMs,
         source: 'codex'

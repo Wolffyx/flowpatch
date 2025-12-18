@@ -455,6 +455,41 @@ app.whenReady().then(() => {
     }
   )
 
+  ipcMain.handle(
+    'setShowPullRequestsSection',
+    (_e, payload: { projectId: string; showPullRequestsSection: boolean }) => {
+      logAction('setShowPullRequestsSection', payload)
+
+      if (!payload?.projectId) return { error: 'Project not found' }
+
+      const project = getProject(payload.projectId)
+      if (!project) return { error: 'Project not found' }
+
+      let policy: PolicyConfig = DEFAULT_POLICY
+      if (project.policy_json) {
+        try {
+          policy = JSON.parse(project.policy_json) as PolicyConfig
+        } catch {
+          // fall back to DEFAULT_POLICY
+        }
+      }
+
+      policy.ui = {
+        ...policy.ui,
+        showPullRequestsSection: !!payload.showPullRequestsSection
+      }
+
+      updateProjectPolicyJson(payload.projectId, JSON.stringify(policy))
+      createEvent(payload.projectId, 'status_changed', undefined, {
+        action: 'ui_show_pull_requests_section',
+        showPullRequestsSection: !!payload.showPullRequestsSection
+      })
+
+      notifyRenderer()
+      return { success: true, project: getProject(payload.projectId) }
+    }
+  )
+
   // Sync project
   ipcMain.handle('syncProject', async (_e, payload: { projectId: string }) => {
     logAction('syncProject:start', payload)

@@ -8,8 +8,19 @@ import { CommandPalette } from './components/CommandPalette'
 import { AddCardDialog, type CreateCardType } from './components/AddCardDialog'
 import { Button } from './components/ui/button'
 import { useAppStore } from './store/useAppStore'
-import type { CardStatus, Provider } from '../../shared/types'
+import type { CardStatus, PolicyConfig, Project, Provider } from '../../shared/types'
 import { WorkerLogDialog } from './components/WorkerLogDialog'
+import { PullRequestsSection } from './components/PullRequestsSection'
+
+function readShowPullRequestsSection(project: Project): boolean {
+  if (!project.policy_json) return false
+  try {
+    const policy = JSON.parse(project.policy_json) as PolicyConfig
+    return !!policy?.ui?.showPullRequestsSection
+  } catch {
+    return false
+  }
+}
 
 function App(): React.JSX.Element {
   const store = useAppStore()
@@ -19,6 +30,14 @@ function App(): React.JSX.Element {
 
   const selectedProject = store.getSelectedProject()
   const selectedCard = store.getSelectedCard()
+  const showPullRequestsSection = selectedProject ? readShowPullRequestsSection(selectedProject.project) : false
+  const pullRequestCards = selectedProject
+    ? selectedProject.cards.filter((c) => c.type === 'pr' || c.type === 'mr')
+    : []
+  const boardCards =
+    selectedProject && showPullRequestsSection
+      ? selectedProject.cards.filter((c) => c.type !== 'pr' && c.type !== 'mr')
+      : selectedProject?.cards || []
 
   const workerJobs = (selectedProject?.jobs || []).filter((j) => j.type === 'worker_run')
   const activeWorkerJob = workerJobs.find((j) => j.state === 'running' || j.state === 'queued') || null
@@ -109,6 +128,7 @@ function App(): React.JSX.Element {
           onOpenCommandPalette={() => setCommandPaletteOpen(true)}
           onSetWorkerToolPreference={store.setWorkerToolPreference}
           onSetWorkerRollbackOnCancel={store.setWorkerRollbackOnCancel}
+          onSetShowPullRequestsSection={store.setShowPullRequestsSection}
           onOpenWorkerLogs={() => setWorkerLogsOpen(true)}
         />
 
@@ -116,9 +136,17 @@ function App(): React.JSX.Element {
         <div className="flex flex-1 overflow-hidden">
           {selectedProject ? (
             <>
+              {showPullRequestsSection && (
+                <PullRequestsSection
+                  cards={pullRequestCards}
+                  selectedCardId={store.selectedCardId}
+                  onSelectCard={store.selectCard}
+                />
+              )}
+
               <div className="flex-1 overflow-hidden">
                 <KanbanBoard
-                  cards={selectedProject.cards}
+                  cards={boardCards}
                   selectedCardId={store.selectedCardId}
                   onSelectCard={store.selectCard}
                   onMoveCard={handleMoveCard}

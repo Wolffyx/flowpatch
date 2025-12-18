@@ -2,9 +2,7 @@ import { GitWorktreeManager, WorktreeConfig } from './git-worktree-manager'
 import {
   listWorktreesByStatus,
   updateWorktreeStatus,
-  getProject,
   listProjects,
-  Worktree
 } from '../db'
 import type { PolicyConfig } from '../../shared/types'
 

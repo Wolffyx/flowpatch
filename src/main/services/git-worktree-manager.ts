@@ -1,5 +1,5 @@
-import { execSync, spawnSync } from 'child_process'
-import { existsSync, rmSync } from 'fs'
+import { execSync } from 'child_process'
+import { existsSync, lstatSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import path from 'path'
 import type { WorktreeRoot } from '../../shared/types'
 
@@ -30,6 +30,11 @@ export interface WorktreeConfig {
  */
 export class GitWorktreeManager {
   constructor(private repoPath: string) {}
+
+  private normalizePath(p: string): string {
+    const resolved = path.resolve(p)
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+  }
 
   /**
    * Execute a git command in the repo directory.
@@ -132,15 +137,11 @@ export class GitWorktreeManager {
    * Get the default branch name (main, master, or develop).
    */
   getDefaultBranch(): string {
+    // Try to get the default branch from remote (cross-platform; no shell redirection)
     try {
-      // Try to get the default branch from remote
-      const remoteHead = this.git('symbolic-ref refs/remotes/origin/HEAD 2>/dev/null || echo ""')
-      if (remoteHead) {
-        return remoteHead.replace(/^refs\/remotes\/origin\//, '')
-      }
-    } catch {
-      // Ignore errors
-    }
+      const remoteHead = this.git('symbolic-ref refs/remotes/origin/HEAD')
+      if (remoteHead) return remoteHead.replace(/^refs\/remotes\/origin\//, '')
+    } catch {}
 
     // Try common branch names
     const candidates = ['main', 'master', 'develop']
@@ -202,8 +203,8 @@ export class GitWorktreeManager {
    * Only allows paths under configured worktree roots.
    */
   isValidWorktreePath(worktreePath: string, config: WorktreeConfig): boolean {
-    const resolved = path.resolve(worktreePath)
-    const repoResolved = path.resolve(this.repoPath)
+    const resolved = this.normalizePath(worktreePath)
+    const repoResolved = this.normalizePath(this.repoPath)
 
     // Must not be the main repo
     if (resolved === repoResolved) {
@@ -216,10 +217,15 @@ export class GitWorktreeManager {
     }
 
     // Get allowed root
-    const allowedRoot = path.resolve(this.getWorktreeRoot(config))
+    const allowedRoot = this.normalizePath(this.getWorktreeRoot(config))
+
+    // Never operate on the root itself; only subfolders under it.
+    if (resolved === allowedRoot) {
+      return false
+    }
 
     // Must be under the allowed root
-    return resolved.startsWith(allowedRoot + path.sep) || resolved === allowedRoot
+    return resolved.startsWith(allowedRoot + path.sep)
   }
 
   /**
@@ -251,7 +257,37 @@ export class GitWorktreeManager {
    */
   worktreeExistsAtPath(worktreePath: string): boolean {
     const worktrees = this.list()
-    return worktrees.some((wt) => path.resolve(wt.worktreePath) === path.resolve(worktreePath))
+    const target = this.normalizePath(worktreePath)
+    return worktrees.some((wt) => this.normalizePath(wt.worktreePath) === target)
+  }
+
+  private isWorktreeDirectory(p: string): boolean {
+    try {
+      const gitPath = path.join(p, '.git')
+      if (!existsSync(gitPath)) return false
+      // In worktrees, `.git` is usually a file containing "gitdir: ..."
+      // In rare cases it may be a directory; accept either.
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private isEmptyDirectory(p: string): boolean {
+    try {
+      const entries = readdirSync(p)
+      return entries.length === 0
+    } catch {
+      return false
+    }
+  }
+
+  private tryWriteMarker(worktreePath: string): void {
+    try {
+      writeFileSync(path.join(worktreePath, '.patchwork-worktree'), 'managed\n', { encoding: 'utf-8' })
+    } catch {
+      // best-effort
+    }
   }
 
   /**
@@ -284,13 +320,29 @@ export class GitWorktreeManager {
       }
     }
 
+    // If branch is already checked out in another worktree, keep the path deterministic:
+    // only reuse if it matches the requested path, otherwise fail fast with a clear error.
+    const existingByBranch = this.list().find((wt) => wt.branch === branchName)
+    if (existingByBranch) {
+      const existingPath = this.normalizePath(existingByBranch.worktreePath)
+      const requestedPath = this.normalizePath(worktreePath)
+      if (existingPath === requestedPath) {
+        this.tryWriteMarker(worktreePath)
+        return { worktreePath, branchName, created: false }
+      }
+      throw new Error(
+        `Branch ${branchName} is already checked out in another worktree: ${existingByBranch.worktreePath}`
+      )
+    }
+
     // Check if worktree already exists at this path
     if (this.worktreeExistsAtPath(worktreePath)) {
       // Verify it's for the right branch
       const existing = this.list().find(
-        (wt) => path.resolve(wt.worktreePath) === path.resolve(worktreePath)
+        (wt) => this.normalizePath(wt.worktreePath) === this.normalizePath(worktreePath)
       )
       if (existing && existing.branch === branchName) {
+        this.tryWriteMarker(worktreePath)
         return { worktreePath, branchName, created: false }
       }
       if (options?.force) {
@@ -328,6 +380,7 @@ export class GitWorktreeManager {
       this.git(`worktree add -b ${branchName} "${worktreePath}" ${baseRef}`)
     }
 
+    this.tryWriteMarker(worktreePath)
     return { worktreePath, branchName, created: true }
   }
 
@@ -364,15 +417,27 @@ export class GitWorktreeManager {
     // Verify it's an actual worktree
     const worktrees = this.list()
     const match = worktrees.find(
-      (wt) => path.resolve(wt.worktreePath) === path.resolve(worktreePath)
+      (wt) => this.normalizePath(wt.worktreePath) === this.normalizePath(worktreePath)
     )
 
     if (!match) {
       // Not a registered worktree, but might be a leftover directory
-      // Only remove if it's under our worktree root and is empty/safe
       if (existsSync(worktreePath)) {
-        // Just remove the directory since it's not a git worktree
-        rmSync(worktreePath, { recursive: true, force: true })
+        // Only remove if it looks like a worktree (has `.git`) or is empty.
+        const stats = lstatSync(worktreePath)
+        if (stats.isSymbolicLink()) {
+          throw new Error(`Refusing to remove symlink path: ${worktreePath}`)
+        }
+        if (!stats.isDirectory()) {
+          throw new Error(`Refusing to remove non-directory path: ${worktreePath}`)
+        }
+        if (this.isWorktreeDirectory(worktreePath) || this.isEmptyDirectory(worktreePath)) {
+          rmSync(worktreePath, { recursive: true, force: true })
+        } else {
+          throw new Error(
+            `Refusing to remove untracked non-empty directory (not a worktree): ${worktreePath}`
+          )
+        }
       }
       return
     }

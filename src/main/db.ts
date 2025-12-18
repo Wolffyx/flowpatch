@@ -971,11 +971,19 @@ export function getExpiredWorktreeLocks(): Worktree[] {
 
 export function countActiveWorktrees(projectId: string): number {
   const d = getDb()
+  const now = new Date().toISOString()
   const result = d
     .prepare(
-      "SELECT COUNT(*) as count FROM worktrees WHERE project_id = ? AND status IN ('creating', 'ready', 'running')"
+      `
+      SELECT COUNT(*) as count
+      FROM worktrees
+      WHERE project_id = ?
+        AND status IN ('creating', 'running')
+        AND locked_by IS NOT NULL
+        AND (lock_expires_at IS NULL OR lock_expires_at > ?)
+    `
     )
-    .get(projectId) as { count: number }
+    .get(projectId, now) as { count: number }
   return result.count
 }
 

@@ -148,6 +148,9 @@ export interface RemoteInfo {
 
 export interface PolicyConfig {
   version: number
+  ui?: {
+    showPullRequestsSection?: boolean
+  }
   repo?: {
     provider?: 'auto' | 'github' | 'gitlab'
     gitlab?: {
@@ -316,6 +319,9 @@ export function generateWorktreeBranchName(
 // Default policy configuration
 export const DEFAULT_POLICY: PolicyConfig = {
   version: 1,
+  ui: {
+    showPullRequestsSection: false
+  },
   sync: {
     webhookPreferred: true,
     pollingFallbackMinutes: 3,

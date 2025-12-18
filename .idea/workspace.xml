@@ -6,13 +6,16 @@
   <component name="ChangeListManager">
     <list default="true" id="2a70596c-d075-4df5-985f-47d56f5e40d3" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/adapters/github.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/adapters/github.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/db.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/db.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/index.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/index.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/services/git-worktree-manager.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/services/git-worktree-manager.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/services/worktree-cleanup-scheduler.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/services/worktree-cleanup-scheduler.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/services/worktree-reconciler.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/services/worktree-reconciler.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/worker/pipeline.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/worker/pipeline.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/renderer/src/App.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/App.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/CardDrawer.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/CardDrawer.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/SettingsDialog.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/SettingsDialog.tsx" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/renderer/src/components/TopBar.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/TopBar.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/WorkerLogDialog.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/WorkerLogDialog.tsx" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/renderer/src/store/useAppStore.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/store/useAppStore.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/shared/types.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/shared/types.ts" afterDir="false" />
     </list>
@@ -122,6 +125,7 @@
       <updated>1765877209190</updated>
       <workItem from="1765877210348" duration="6581000" />
       <workItem from="1765890380654" duration="23261000" />
+      <workItem from="1766056046073" duration="5983000" />
     </task>
     <servers />
   </component>

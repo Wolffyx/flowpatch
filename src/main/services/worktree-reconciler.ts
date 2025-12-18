@@ -5,10 +5,10 @@ import {
   updateWorktreeStatus,
   getExpiredWorktreeLocks,
   releaseWorktreeLock,
-  getProject,
   Worktree
 } from '../db'
 import type { PolicyConfig } from '../../shared/types'
+import path from 'path'
 
 export interface ReconciliationResult {
   orphaned: Worktree[] // In DB but not on disk
@@ -16,6 +16,17 @@ export interface ReconciliationResult {
   expiredLocks: Worktree[] // Locks that expired
   cleanedUp: Worktree[] // Successfully cleaned up
   errors: Array<{ worktree: Worktree; error: string }>
+}
+
+function normalizePath(p: string): string {
+  const resolved = path.resolve(p)
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+}
+
+function isUnderRoot(candidatePath: string, rootPath: string): boolean {
+  const candidate = normalizePath(candidatePath)
+  const root = normalizePath(rootPath)
+  return candidate.startsWith(root + path.sep)
 }
 
 /**
@@ -28,7 +39,7 @@ export class WorktreeReconciler {
 
   constructor(
     private projectId: string,
-    private repoPath: string,
+    repoPath: string,
     policy?: PolicyConfig
   ) {
     this.manager = new GitWorktreeManager(repoPath)
@@ -55,12 +66,12 @@ export class WorktreeReconciler {
     const gitWorktrees = this.manager.list()
 
     // Create lookup sets for efficient comparison
-    const dbPaths = new Set(dbWorktrees.map((wt) => wt.worktree_path))
-    const gitPaths = new Set(gitWorktrees.map((wt) => wt.worktreePath))
+    const dbPaths = new Set(dbWorktrees.map((wt) => normalizePath(wt.worktree_path)))
+    const gitPaths = new Set(gitWorktrees.map((wt) => normalizePath(wt.worktreePath)))
 
     // 2. Find orphaned DB records (in DB but not on disk)
     for (const dbWt of dbWorktrees) {
-      if (!gitPaths.has(dbWt.worktree_path)) {
+      if (!gitPaths.has(normalizePath(dbWt.worktree_path))) {
         // Worktree missing from disk
         if (dbWt.status !== 'cleaned' && dbWt.status !== 'error') {
           result.orphaned.push(dbWt)
@@ -73,11 +84,9 @@ export class WorktreeReconciler {
     // Only report worktrees that are under our managed root
     const worktreeRoot = this.manager.getWorktreeRoot(this.config)
     for (const gitWt of gitWorktrees) {
-      if (!dbPaths.has(gitWt.worktreePath)) {
-        // Only flag as untracked if it's under our managed root
-        if (gitWt.worktreePath.startsWith(worktreeRoot)) {
-          result.untracked.push(gitWt.worktreePath)
-        }
+      if (!dbPaths.has(normalizePath(gitWt.worktreePath))) {
+        // Only flag as untracked if it's under our managed root (avoid prefix false-positives)
+        if (isUnderRoot(gitWt.worktreePath, worktreeRoot)) result.untracked.push(gitWt.worktreePath)
       }
     }
 

@@ -50,6 +50,7 @@ export interface AppStore {
   toggleWorker: (enabled: boolean) => Promise<void>
   setWorkerToolPreference: (toolPreference: 'auto' | 'claude' | 'codex') => Promise<void>
   setWorkerRollbackOnCancel: (rollbackOnCancel: boolean) => Promise<void>
+  setShowPullRequestsSection: (showPullRequestsSection: boolean) => Promise<void>
   runWorker: (cardId?: string) => Promise<void>
   deleteProject: (id: string) => Promise<void>
   clearWorkerLogs: (jobId: string) => void
@@ -303,6 +304,39 @@ export function useAppStore(): AppStore {
     [selectedProjectId, projects, loadState]
   )
 
+  const setShowPullRequestsSection = useCallback(
+    async (showPullRequestsSection: boolean) => {
+      if (!selectedProjectId) return
+      try {
+        const currentProject = projects.find((p) => p.project.id === selectedProjectId)?.project
+        let policy: PolicyConfig | null = null
+        if (currentProject?.policy_json) {
+          try {
+            policy = JSON.parse(currentProject.policy_json) as PolicyConfig
+          } catch {
+            policy = null
+          }
+        }
+
+        const existingValue = policy?.ui?.showPullRequestsSection ?? false
+        if (existingValue === showPullRequestsSection) return
+
+        const result = await window.electron.ipcRenderer.invoke('setShowPullRequestsSection', {
+          projectId: selectedProjectId,
+          showPullRequestsSection
+        })
+        if (result?.error) {
+          setError(result.error)
+          return
+        }
+        await loadState()
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to update board settings')
+      }
+    },
+    [selectedProjectId, projects, loadState]
+  )
+
   const runWorker = useCallback(
     async (cardId?: string) => {
       if (!selectedProjectId) return
@@ -404,6 +438,7 @@ export function useAppStore(): AppStore {
     toggleWorker,
     setWorkerToolPreference,
     setWorkerRollbackOnCancel,
+    setShowPullRequestsSection,
     runWorker,
     deleteProject,
     clearWorkerLogs,
