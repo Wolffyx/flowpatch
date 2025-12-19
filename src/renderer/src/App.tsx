@@ -11,6 +11,7 @@ import { useAppStore } from './store/useAppStore'
 import type { CardStatus, PolicyConfig, Project, Provider } from '../../shared/types'
 import { WorkerLogDialog } from './components/WorkerLogDialog'
 import { PullRequestsSection } from './components/PullRequestsSection'
+import { RepoStartDialog } from './components/RepoStartDialog'
 
 function readShowPullRequestsSection(project: Project): boolean {
   if (!project.policy_json) return false
@@ -27,6 +28,7 @@ function App(): React.JSX.Element {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [addCardDialogOpen, setAddCardDialogOpen] = useState(false)
   const [workerLogsOpen, setWorkerLogsOpen] = useState(false)
+  const [repoStartOpen, setRepoStartOpen] = useState(false)
 
   const selectedProject = store.getSelectedProject()
   const selectedCard = store.getSelectedCard()
@@ -111,7 +113,7 @@ function App(): React.JSX.Element {
         projects={store.projects}
         selectedProjectId={store.selectedProjectId}
         onSelectProject={store.selectProject}
-        onOpenRepo={store.openRepo}
+        onOpenRepo={() => setRepoStartOpen(true)}
         onDeleteProject={store.deleteProject}
       />
 
@@ -173,7 +175,7 @@ function App(): React.JSX.Element {
                 <p className="text-muted-foreground mb-4">
                   Open a repository to get started with your Kanban board.
                 </p>
-                <Button onClick={store.openRepo}>Open Repository</Button>
+                <Button onClick={() => setRepoStartOpen(true)}>Open or Create Repository</Button>
               </div>
             </div>
           )}
@@ -196,7 +198,7 @@ function App(): React.JSX.Element {
         open={commandPaletteOpen}
         onOpenChange={setCommandPaletteOpen}
         hasProject={!!selectedProject}
-        onOpenRepo={store.openRepo}
+        onOpenRepo={() => setRepoStartOpen(true)}
         onSync={store.syncProject}
         onRunWorker={() => store.runWorker()}
         onAddCard={handleAddCard}
@@ -218,6 +220,13 @@ function App(): React.JSX.Element {
         card={cardForLogs}
         liveLogs={jobForLogs ? store.workerLogsByJobId[jobForLogs.id] ?? [] : []}
         onClearLogs={store.clearWorkerLogs}
+      />
+
+      <RepoStartDialog
+        open={repoStartOpen}
+        onOpenChange={setRepoStartOpen}
+        onOpenRepo={store.openRepo}
+        onCreateRepo={store.createRepo}
       />
 
       {/* Error display */}

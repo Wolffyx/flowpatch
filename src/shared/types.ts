@@ -223,6 +223,40 @@ export interface OpenRepoResult {
   needSelection?: boolean
 }
 
+export type RepoVisibility = 'public' | 'private'
+export type RemoteProviderChoice = 'none' | 'github' | 'gitlab'
+
+export interface SelectDirectoryResult {
+  canceled?: boolean
+  error?: string
+  path?: string
+}
+
+export interface CreateRepoPayload {
+  repoName: string
+  localParentPath: string
+  addReadme?: boolean
+  initialCommit?: boolean
+  initialCommitMessage?: string
+  remoteProvider?: RemoteProviderChoice
+  remoteVisibility?: RepoVisibility
+  remoteName?: string
+  pushToRemote?: boolean
+  githubOwner?: string
+  gitlabHost?: string
+  gitlabNamespace?: string
+}
+
+export interface CreateRepoResult {
+  canceled?: boolean
+  error?: string
+  warnings?: string[]
+  repoPath?: string
+  project?: Project
+  remotes?: RemoteInfo[]
+  needSelection?: boolean
+}
+
 export interface SelectRemotePayload {
   projectId: string
   remoteName: string

@@ -45,8 +45,8 @@ export function CommandPalette({
   const commands: CommandItem[] = [
     {
       id: 'open-repo',
-      label: 'Open Repository',
-      description: 'Open a local git repository',
+      label: 'Open / Create Repository',
+      description: 'Open an existing repo or create a new one',
       icon: <FolderOpen className="h-4 w-4" />,
       shortcut: 'Ctrl+O',
       action: () => {

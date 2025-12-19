@@ -4,18 +4,12 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="2a70596c-d075-4df5-985f-47d56f5e40d3" name="Changes" comment="">
+    <list default="true" id="2a70596c-d075-4df5-985f-47d56f5e40d3" name="Changes" comment="Added more organization and improved worker">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/db.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/db.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/index.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/index.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/services/git-worktree-manager.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/services/git-worktree-manager.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/services/worktree-cleanup-scheduler.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/services/worktree-cleanup-scheduler.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/services/worktree-reconciler.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/services/worktree-reconciler.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/worker/pipeline.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/worker/pipeline.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/renderer/src/App.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/App.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/SettingsDialog.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/SettingsDialog.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/TopBar.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/TopBar.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/WorkerLogDialog.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/WorkerLogDialog.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/CommandPalette.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/CommandPalette.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/Sidebar.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/Sidebar.tsx" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/renderer/src/store/useAppStore.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/store/useAppStore.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/shared/types.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/shared/types.ts" afterDir="false" />
     </list>
@@ -125,11 +119,25 @@
       <updated>1765877209190</updated>
       <workItem from="1765877210348" duration="6581000" />
       <workItem from="1765890380654" duration="23261000" />
-      <workItem from="1766056046073" duration="5983000" />
+      <workItem from="1766056046073" duration="6760000" />
+      <workItem from="1766152521211" duration="2138000" />
     </task>
+    <task id="LOCAL-00001" summary="Added more organization and improved worker">
+      <option name="closed" value="true" />
+      <created>1766092879889</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1766092879889</updated>
+    </task>
+    <option name="localTasksCounter" value="2" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
     <option name="version" value="3" />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="Added more organization and improved worker" />
+    <option name="LAST_COMMIT_MESSAGE" value="Added more organization and improved worker" />
   </component>
 </project>

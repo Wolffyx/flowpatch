@@ -36,9 +36,17 @@ import {
   stopAllWorkerLoops
 } from './worker/loop'
 import { execFile } from 'child_process'
-import { existsSync, readFileSync } from 'fs'
+import { existsSync, readFileSync, mkdirSync, readdirSync, writeFileSync } from 'fs'
 import YAML from 'yaml'
-import { DEFAULT_POLICY, type RemoteInfo, type PolicyConfig } from '@shared/types'
+import {
+  DEFAULT_POLICY,
+  type RemoteInfo,
+  type PolicyConfig,
+  type OpenRepoResult,
+  type CreateRepoPayload,
+  type CreateRepoResult,
+  type SelectDirectoryResult
+} from '@shared/types'
 import { logAction } from '@shared/utils'
 import { GitWorktreeManager } from './services/git-worktree-manager'
 import { WorktreeReconciler, reconcileAllProjects } from './services/worktree-reconciler'
@@ -103,6 +111,24 @@ app.whenReady().then(() => {
     }
   })
 
+  ipcMain.handle('selectDirectory', async (): Promise<SelectDirectoryResult> => {
+    logAction('selectDirectory:start')
+    try {
+      const res = await dialog.showOpenDialog({
+        properties: ['openDirectory', 'createDirectory']
+      })
+      if (res.canceled || res.filePaths.length === 0) {
+        logAction('selectDirectory:canceled')
+        return { canceled: true }
+      }
+      return { path: res.filePaths[0] }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to select directory'
+      logAction('selectDirectory:error', { message })
+      return { error: message }
+    }
+  })
+
   // Get full app state
   ipcMain.handle('getState', () => {
     logAction('getState')
@@ -124,42 +150,154 @@ app.whenReady().then(() => {
       logAction('openRepo:canceled')
       return { canceled: true }
     }
+
     const repoPath = res.filePaths[0]
-    const isGit = await isGitRepo(repoPath)
-    if (!isGit) {
-      logAction('openRepo:error:not_git', { repoPath })
-      return { error: 'Selected folder is not a git repository.' }
-    }
-    const remotes = await getGitRemotes(repoPath)
-    if (remotes.length === 0) {
-      logAction('openRepo:error:no_remotes', { repoPath })
-      return { error: 'No git remotes found in this repository.' }
+    const result = await openRepoAtPath(repoPath)
+    if (result.error) {
+      logAction('openRepo:error', { repoPath, error: result.error })
+      return result
     }
 
-    const id = cryptoId()
-    const name = repoPath.split(/[\\/]/).pop() || repoPath
-    const policy = readPolicy(repoPath)
-
-    // Auto-select if only one remote
-    const autoSelect = remotes.length === 1
-
-    const project = upsertProject({
-      id,
-      name,
-      local_path: repoPath,
-      selected_remote_name: autoSelect ? remotes[0].name.split(':')[0] : null,
-      remote_repo_key: autoSelect ? remotes[0].repoKey : null,
-      provider_hint: autoSelect ? detectProviderFromRemote(remotes[0].url) : 'auto',
-      policy_json: policy
+    logAction('openRepo:success', {
+      projectId: result.project?.id,
+      remotes: result.remotes?.length ?? 0
     })
+    return result
+  })
 
-    createEvent(project.id, 'card_created', undefined, { action: 'project_opened' })
-    logAction('openRepo:success', { projectId: project.id, remotes: remotes.length })
+  ipcMain.handle('createRepo', async (_e, payload: CreateRepoPayload): Promise<CreateRepoResult> => {
+    logAction('createRepo:start', payload)
+    const warnings: string[] = []
 
-    return {
-      project,
-      remotes,
-      needSelection: !autoSelect
+    try {
+      const repoName = (payload.repoName || '').trim()
+      const localParentPath = (payload.localParentPath || '').trim()
+      if (!repoName) return { error: 'Repository name is required.' }
+      if (!localParentPath) return { error: 'Local parent path is required.' }
+      if (!/^[a-zA-Z0-9._-]+$/.test(repoName)) {
+        return { error: 'Repository name may only include letters, numbers, ., _, and -.' }
+      }
+
+      const repoPath = join(localParentPath, repoName)
+
+      if (existsSync(repoPath)) {
+        const files = readdirSync(repoPath)
+        if (files.length > 0) {
+          return { error: 'Target folder already exists and is not empty.' }
+        }
+      } else {
+        mkdirSync(repoPath, { recursive: true })
+      }
+
+      const remoteName = payload.remoteName?.trim() || 'origin'
+      const addReadme = payload.addReadme !== false
+      const initialCommit = payload.initialCommit !== false
+      const initialCommitMessage = payload.initialCommitMessage?.trim() || 'Initial commit'
+
+      // Initialize local repo
+      await execGit(['init', '-b', 'main'], repoPath)
+
+      if (addReadme) {
+        const readmePath = join(repoPath, 'README.md')
+        if (!existsSync(readmePath)) {
+          writeFileSync(readmePath, `# ${repoName}\n`, 'utf-8')
+        }
+      }
+
+      let commitSucceeded = false
+      if (initialCommit) {
+        try {
+          await execGit(['add', '-A'], repoPath)
+          await execGit(['commit', '-m', initialCommitMessage], repoPath)
+          commitSucceeded = true
+        } catch (error) {
+          warnings.push(
+            `Initial commit failed: ${error instanceof Error ? error.message : 'unknown error'}`
+          )
+        }
+      }
+
+      const remoteProvider = payload.remoteProvider || 'none'
+      const remoteVisibility = payload.remoteVisibility || 'private'
+      const pushToRemote = payload.pushToRemote === true
+
+      if (remoteProvider === 'github') {
+        const owner = payload.githubOwner?.trim()
+        const target = owner ? `${owner}/${repoName}` : repoName
+        const args = [
+          'repo',
+          'create',
+          target,
+          remoteVisibility === 'public' ? '--public' : '--private',
+          '--source',
+          '.',
+          '--remote',
+          remoteName,
+          '--confirm'
+        ]
+        if (pushToRemote && commitSucceeded) {
+          args.push('--push')
+        }
+        await execCli('gh', args, repoPath)
+      } else if (remoteProvider === 'gitlab') {
+        // glab is required for GitLab remote repo creation
+        await execCli('glab', ['--version'], repoPath)
+
+        const visibility = remoteVisibility
+        const namespace = payload.gitlabNamespace?.trim()
+        const host = payload.gitlabHost?.trim()
+        const hostnameArgs = host ? ['--hostname', host] : []
+
+        let namespaceId: number | undefined
+        if (namespace) {
+          const encoded = namespace.replaceAll('/', '%2F')
+          const groupJson = await execCli('glab', [...hostnameArgs, 'api', `groups/${encoded}`], repoPath)
+          const group = JSON.parse(groupJson) as { id?: number }
+          if (!group.id) return { error: `Could not resolve GitLab namespace: ${namespace}` }
+          namespaceId = group.id
+        }
+
+        const createArgs = [
+          ...hostnameArgs,
+          'api',
+          'projects',
+          '-X',
+          'POST',
+          '-f',
+          `name=${repoName}`,
+          '-f',
+          `visibility=${visibility}`
+        ]
+        if (namespaceId) {
+          createArgs.push('-f', `namespace_id=${namespaceId}`)
+        }
+
+        const projectJson = await execCli('glab', createArgs, repoPath)
+        const project = JSON.parse(projectJson) as {
+          ssh_url_to_repo?: string
+          http_url_to_repo?: string
+        }
+        const remoteUrl = project.ssh_url_to_repo || project.http_url_to_repo
+        if (!remoteUrl) return { error: 'GitLab repo created, but remote URL was not returned.' }
+
+        await execGit(['remote', 'add', remoteName, remoteUrl], repoPath)
+        if (pushToRemote && commitSucceeded) {
+          await execGit(['push', '-u', remoteName, 'main'], repoPath)
+        }
+      }
+
+      const openResult = await openRepoAtPath(repoPath)
+      if (openResult.error) return { error: openResult.error, warnings, repoPath }
+
+      return {
+        ...openResult,
+        warnings,
+        repoPath
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to create repository.'
+      logAction('createRepo:error', { message })
+      return { error: message, warnings }
     }
   })
 
@@ -719,6 +857,48 @@ function execGit(args: string[], cwd: string): Promise<string> {
       else resolve(stdout.toString())
     })
   })
+}
+
+function execCli(cmd: string, args: string[], cwd: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(cmd, args, { cwd }, (err, stdout, stderr) => {
+      if (err) reject(new Error(stderr || err.message))
+      else resolve(stdout.toString())
+    })
+  })
+}
+
+async function openRepoAtPath(repoPath: string): Promise<OpenRepoResult> {
+  const isGit = await isGitRepo(repoPath)
+  if (!isGit) {
+    return { error: 'Selected folder is not a git repository.' }
+  }
+
+  const remotes = await getGitRemotes(repoPath)
+
+  const id = cryptoId()
+  const name = repoPath.split(/[\\/]/).pop() || repoPath
+  const policy = readPolicy(repoPath)
+
+  const selectedRemote = remotes.length === 1 ? remotes[0] : null
+
+  const project = upsertProject({
+    id,
+    name,
+    local_path: repoPath,
+    selected_remote_name: selectedRemote ? selectedRemote.name.split(':')[0] : null,
+    remote_repo_key: selectedRemote ? selectedRemote.repoKey : null,
+    provider_hint: selectedRemote ? detectProviderFromRemote(selectedRemote.url) : 'auto',
+    policy_json: policy
+  })
+
+  createEvent(project.id, 'card_created', undefined, { action: 'project_opened' })
+
+  return {
+    project,
+    remotes,
+    needSelection: remotes.length > 1
+  }
 }
 
 async function isGitRepo(cwd: string): Promise<boolean> {

@@ -8,7 +8,8 @@ import type {
   RemoteInfo,
   AppState,
   PolicyConfig,
-  WorkerLogMessage
+  WorkerLogMessage,
+  CreateRepoPayload
 } from '../../../shared/types'
 
 export interface ProjectData {
@@ -37,6 +38,7 @@ export interface AppStore {
   selectProject: (id: string | null) => void
   selectCard: (id: string | null) => void
   openRepo: () => Promise<void>
+  createRepo: (payload: CreateRepoPayload) => Promise<void>
   selectRemote: (remoteName: string, remoteUrl: string, repoKey: string) => Promise<void>
   cancelRemoteSelection: () => void
   moveCard: (cardId: string, status: CardStatus) => Promise<void>
@@ -127,6 +129,39 @@ export function useAppStore(): AppStore {
       setIsLoading(false)
     }
   }, [loadState])
+
+  const createRepo = useCallback(
+    async (payload: CreateRepoPayload) => {
+      setIsLoading(true)
+      setError(null)
+      try {
+        const result = await window.electron.ipcRenderer.invoke('createRepo', payload)
+        if (result.canceled) {
+          return
+        }
+        if (result.error) {
+          setError(result.error)
+          return
+        }
+        if (result.needSelection && result.remotes) {
+          setPendingRemoteSelection({
+            project: result.project,
+            remotes: result.remotes
+          })
+        } else {
+          await loadState()
+          if (result.project) {
+            setSelectedProjectId(result.project.id)
+          }
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to create repo')
+      } finally {
+        setIsLoading(false)
+      }
+    },
+    [loadState]
+  )
 
   const selectRemote = useCallback(
     async (remoteName: string, remoteUrl: string, repoKey: string) => {
@@ -429,6 +464,7 @@ export function useAppStore(): AppStore {
     selectProject,
     selectCard,
     openRepo,
+    createRepo,
     selectRemote,
     cancelRemoteSelection,
     moveCard,
