@@ -105,6 +105,14 @@ export class WorkerPipeline {
     return this.worktreePath ?? this.project!.local_path
   }
 
+  private gitEnv(): NodeJS.ProcessEnv {
+    return {
+      ...process.env,
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_ASKPASS: process.env.GIT_ASKPASS || 'echo'
+    }
+  }
+
   /**
    * Get worktree configuration from policy.
    */
@@ -817,7 +825,8 @@ export class WorkerPipeline {
   private async fetchLatest(): Promise<void> {
     try {
       await execFileAsync('git', ['fetch', 'origin'], {
-        cwd: this.project!.local_path
+        cwd: this.project!.local_path,
+        env: this.gitEnv()
       })
     } catch (error) {
       this.log(`Fetch warning: ${error}`)
@@ -936,10 +945,12 @@ export class WorkerPipeline {
 
       // Checkout base branch and pull
       await execFileAsync('git', ['checkout', baseBranch], {
-        cwd: this.project!.local_path
+        cwd: this.project!.local_path,
+        env: this.gitEnv()
       })
       await execFileAsync('git', ['pull', 'origin', baseBranch], {
-        cwd: this.project!.local_path
+        cwd: this.project!.local_path,
+        env: this.gitEnv()
       })
       try {
         const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], {
@@ -1236,7 +1247,7 @@ Please implement the changes now.`
     try {
       await this.runProcessStreaming({
         command: 'codex',
-        args: ['--approval-mode', 'full-auto', prompt],
+        args: ['exec', '--full-auto', prompt],
         cwd: workingDir,
         timeoutMs,
         source: 'codex'
@@ -1317,27 +1328,37 @@ Please implement the changes now.`
     try {
       // Add all changes
       await execFileAsync('git', ['add', '-A'], {
-        cwd: workingDir
+        cwd: workingDir,
+        env: this.gitEnv()
       })
 
       // Check if there are changes
       const { stdout } = await execFileAsync('git', ['status', '--porcelain'], {
-        cwd: workingDir
+        cwd: workingDir,
+        env: this.gitEnv()
       })
 
       if (stdout.trim()) {
         // Commit
         await execFileAsync('git', ['commit', '-m', commitMsg], {
-          cwd: workingDir
+          cwd: workingDir,
+          env: this.gitEnv()
         })
       }
 
       // Push
       await execFileAsync('git', ['push', '-u', 'origin', branchName], {
-        cwd: workingDir
+        cwd: workingDir,
+        env: this.gitEnv()
       })
     } catch (error) {
-      this.log(`Commit/push warning: ${error}`)
+      const message = error instanceof Error ? error.message : String(error)
+      if (message.includes('could not read Username') || message.includes('Authentication failed')) {
+        this.log(
+          'Git push failed: missing credentials. Configure a credential helper or ensure the remote URL includes an auth token.'
+        )
+      }
+      this.log(`Commit/push warning: ${message}`)
       throw error
     }
   }
