@@ -13,7 +13,8 @@ import type {
   JobState,
   JobType,
   EventType,
-  WorktreeStatus
+  WorktreeStatus,
+  PolicyConfig
 } from '../shared/types'
 
 export type { Project, Card, CardLink, Event, Job, Worktree, CardStatus, WorktreeStatus }
@@ -164,6 +165,15 @@ export function initDb(): Database.Database {
     );
   `)
 
+  // App settings table (for global app-level settings like theme)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `)
+
   // Worktrees table (for tracking git worktree lifecycle)
   db.exec(`
     CREATE TABLE IF NOT EXISTS worktrees (
@@ -178,6 +188,7 @@ export function initDb(): Database.Database {
       last_error TEXT,
       locked_by TEXT,
       lock_expires_at TEXT,
+      cleanup_requested_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
@@ -187,9 +198,17 @@ export function initDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_worktrees_project ON worktrees(project_id);
     CREATE INDEX IF NOT EXISTS idx_worktrees_card ON worktrees(card_id);
     CREATE INDEX IF NOT EXISTS idx_worktrees_status ON worktrees(status);
+    CREATE INDEX IF NOT EXISTS idx_worktrees_locked ON worktrees(locked_by, lock_expires_at);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_worktrees_path ON worktrees(worktree_path);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_worktrees_branch ON worktrees(project_id, branch_name);
   `)
+
+  // Migration: Add cleanup_requested_at column if it doesn't exist
+  try {
+    db.exec(`ALTER TABLE worktrees ADD COLUMN cleanup_requested_at TEXT`)
+  } catch {
+    // Column already exists
+  }
 
   return db
 }
@@ -455,6 +474,49 @@ export function updateCardStatus(cardId: string, status: CardStatus): Card | nul
   return getCard(cardId)
 }
 
+export function updateCardLabels(cardId: string, labelsJson: string | null): void {
+  const d = getDb()
+  const now = new Date().toISOString()
+  d.prepare('UPDATE cards SET labels_json = ?, updated_local_at = ? WHERE id = ?').run(
+    labelsJson,
+    now,
+    cardId
+  )
+}
+
+export function getStatusLabelFromPolicy(status: CardStatus, policy: PolicyConfig): string {
+  const statusLabels = policy.sync?.statusLabels || {}
+  const defaults: Record<CardStatus, string> = {
+    draft: 'status::draft',
+    ready: 'status::ready',
+    in_progress: 'status::in-progress',
+    in_review: 'status::in-review',
+    testing: 'status::testing',
+    done: 'status::done'
+  }
+  const keyMap: Record<CardStatus, keyof NonNullable<typeof statusLabels>> = {
+    draft: 'draft',
+    ready: 'ready',
+    in_progress: 'inProgress',
+    in_review: 'inReview',
+    testing: 'testing',
+    done: 'done'
+  }
+  return statusLabels[keyMap[status]] || defaults[status]
+}
+
+export function getAllStatusLabelsFromPolicy(policy: PolicyConfig): string[] {
+  const statusLabels = policy.sync?.statusLabels || {}
+  return [
+    statusLabels.draft || 'status::draft',
+    statusLabels.ready || 'status::ready',
+    statusLabels.inProgress || 'status::in-progress',
+    statusLabels.inReview || 'status::in-review',
+    statusLabels.testing || 'status::testing',
+    statusLabels.done || 'status::done'
+  ]
+}
+
 export function updateCardSyncState(
   cardId: string,
   syncState: 'ok' | 'pending' | 'error',
@@ -482,6 +544,17 @@ export function listCardLinks(cardId: string): CardLink[] {
   const d = getDb()
   const stmt = d.prepare('SELECT * FROM card_links WHERE card_id = ? ORDER BY created_at DESC')
   return stmt.all(cardId) as CardLink[]
+}
+
+export function listCardLinksByProject(projectId: string): CardLink[] {
+  const d = getDb()
+  const stmt = d.prepare(`
+    SELECT cl.* FROM card_links cl
+    INNER JOIN cards c ON cl.card_id = c.id
+    WHERE c.project_id = ?
+    ORDER BY cl.created_at DESC
+  `)
+  return stmt.all(projectId) as CardLink[]
 }
 
 export function createCardLink(
@@ -887,12 +960,20 @@ export function updateWorktreeStatus(
 ): Worktree | null {
   const d = getDb()
   const now = new Date().toISOString()
-  d.prepare('UPDATE worktrees SET status = ?, last_error = ?, updated_at = ? WHERE id = ?').run(
-    status,
-    error ?? null,
-    now,
-    id
-  )
+
+  // Set cleanup_requested_at when transitioning to cleanup_pending
+  if (status === 'cleanup_pending') {
+    d.prepare(
+      'UPDATE worktrees SET status = ?, last_error = ?, cleanup_requested_at = ?, updated_at = ? WHERE id = ?'
+    ).run(status, error ?? null, now, now, id)
+  } else {
+    d.prepare('UPDATE worktrees SET status = ?, last_error = ?, updated_at = ? WHERE id = ?').run(
+      status,
+      error ?? null,
+      now,
+      id
+    )
+  }
   return getWorktree(id)
 }
 
@@ -952,12 +1033,31 @@ export function renewWorktreeLock(
   return result.changes > 0
 }
 
-export function releaseWorktreeLock(id: string): void {
+/**
+ * Release a worktree lock. If lockedBy is provided, only releases if it matches the current lock holder.
+ * If lockedBy is null, force releases the lock (use with caution, e.g., during reconciliation).
+ */
+export function releaseWorktreeLock(id: string, lockedBy?: string | null): boolean {
   const d = getDb()
   const now = new Date().toISOString()
-  d.prepare(
-    'UPDATE worktrees SET locked_by = NULL, lock_expires_at = NULL, updated_at = ? WHERE id = ?'
-  ).run(now, id)
+
+  if (lockedBy) {
+    // Only release if we own the lock
+    const result = d
+      .prepare(
+        'UPDATE worktrees SET locked_by = NULL, lock_expires_at = NULL, updated_at = ? WHERE id = ? AND locked_by = ?'
+      )
+      .run(now, id, lockedBy)
+    return result.changes > 0
+  } else {
+    // Force release (for reconciliation/cleanup)
+    const result = d
+      .prepare(
+        'UPDATE worktrees SET locked_by = NULL, lock_expires_at = NULL, updated_at = ? WHERE id = ?'
+      )
+      .run(now, id)
+    return result.changes > 0
+  }
 }
 
 export function getExpiredWorktreeLocks(): Worktree[] {
@@ -985,6 +1085,28 @@ export function countActiveWorktrees(projectId: string): number {
     )
     .get(projectId, now) as { count: number }
   return result.count
+}
+
+// ==================== App Settings ====================
+
+export function getAppSetting(key: string): string | null {
+  const d = getDb()
+  const row = d.prepare('SELECT value FROM app_settings WHERE key = ?').get(key) as
+    | { value: string }
+    | undefined
+  return row?.value ?? null
+}
+
+export function setAppSetting(key: string, value: string): void {
+  const d = getDb()
+  const now = new Date().toISOString()
+  d.prepare(
+    `
+    INSERT INTO app_settings (key, value, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+  `
+  ).run(key, value, now)
 }
 
 // ==================== Utilities ====================

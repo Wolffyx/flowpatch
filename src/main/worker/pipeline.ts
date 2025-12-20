@@ -476,6 +476,11 @@ export class WorkerPipeline {
 
   /**
    * Setup a git worktree for isolated work.
+   * The flow is:
+   * 1. Check for existing worktree (and verify it's healthy)
+   * 2. Create DB record with lock already set (atomic lock acquisition)
+   * 3. Create git worktree
+   * 4. Verify worktree is healthy before marking as 'running'
    */
   private async setupWorktree(): Promise<boolean> {
     if (!this.worktreeManager || !this.card || !this.project) return false
@@ -499,23 +504,39 @@ export class WorkerPipeline {
       // Check if there's an existing worktree for this card
       const existingWorktree = getWorktreeByCard(this.cardId)
       if (existingWorktree && existingWorktree.status === 'ready') {
-        // Acquire lock to ensure exclusive use
-        const locked = acquireWorktreeLock(existingWorktree.id, this.workerId, 10)
-        if (!locked) {
-          this.log(`Worktree is locked by another worker: ${existingWorktree.worktree_path}`)
-          return false
-        }
+        // Verify the existing worktree is healthy before reusing
+        const health = this.worktreeManager.verifyWorktree(
+          existingWorktree.worktree_path,
+          existingWorktree.branch_name
+        )
 
-        this.log(`Reusing existing worktree: ${existingWorktree.worktree_path}`)
-        this.worktreeRecord = existingWorktree
-        this.worktreePath = existingWorktree.worktree_path
-        this.workerBranch = existingWorktree.branch_name
-        updateWorktreeJob(existingWorktree.id, this.jobId)
-        updateWorktreeStatus(existingWorktree.id, 'running')
-        return true
+        if (!health.healthy) {
+          this.log(`Existing worktree is unhealthy: ${health.error}. Will recreate.`)
+          // Mark as error and continue to create a new one
+          updateWorktreeStatus(existingWorktree.id, 'error', health.error)
+        } else {
+          // Acquire lock to ensure exclusive use
+          const locked = acquireWorktreeLock(existingWorktree.id, this.workerId, 10)
+          if (!locked) {
+            this.log(`Worktree is locked by another worker: ${existingWorktree.worktree_path}`)
+            return false
+          }
+
+          this.log(`Reusing existing worktree: ${existingWorktree.worktree_path}`)
+          this.worktreeRecord = existingWorktree
+          this.worktreePath = existingWorktree.worktree_path
+          this.workerBranch = existingWorktree.branch_name
+          updateWorktreeJob(existingWorktree.id, this.jobId)
+          updateWorktreeStatus(existingWorktree.id, 'running')
+          return true
+        }
       }
 
-      // Create DB record first
+      // Create DB record with lock already acquired (prevents race condition)
+      // By setting lockedBy and lockExpiresAt during creation, we atomically claim the record
+      const now = new Date()
+      const lockExpiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString()
+
       this.worktreeRecord = createWorktree({
         projectId: this.projectId,
         cardId: this.cardId,
@@ -523,15 +544,10 @@ export class WorkerPipeline {
         worktreePath,
         branchName,
         baseRef: `origin/${baseBranch}`,
-        status: 'creating'
+        status: 'creating',
+        lockedBy: this.workerId,
+        lockExpiresAt
       })
-
-      // Acquire lock for this worktree record
-      const locked = acquireWorktreeLock(this.worktreeRecord.id, this.workerId, 10)
-      if (!locked) {
-        updateWorktreeStatus(this.worktreeRecord.id, 'error', 'Failed to acquire worktree lock')
-        return false
-      }
 
       this.log(`Creating worktree at: ${worktreePath}`)
 
@@ -549,7 +565,16 @@ export class WorkerPipeline {
       this.worktreePath = result.worktreePath
       this.workerBranch = result.branchName
 
-      // Update status to ready/running
+      // Verify the worktree was created successfully before marking as running
+      const health = this.worktreeManager.verifyWorktree(result.worktreePath, result.branchName)
+      if (!health.healthy) {
+        const error = `Worktree verification failed: ${health.error}`
+        this.log(error)
+        updateWorktreeStatus(this.worktreeRecord.id, 'error', error)
+        return false
+      }
+
+      // Update status to running
       updateWorktreeStatus(this.worktreeRecord.id, 'running')
 
       this.log(`Worktree ${result.created ? 'created' : 'reused'}: ${result.branchName}`)
@@ -576,8 +601,8 @@ export class WorkerPipeline {
     const cleanup = this.policy.worker?.worktree?.cleanup
     const cleanupTiming = success ? cleanup?.onSuccess : cleanup?.onFailure
 
-    // Release lock
-    releaseWorktreeLock(this.worktreeRecord.id)
+    // Release lock (pass workerId to verify we own it)
+    releaseWorktreeLock(this.worktreeRecord.id, this.workerId)
 
     switch (cleanupTiming) {
       case 'immediate':

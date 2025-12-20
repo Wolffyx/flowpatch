@@ -1,6 +1,6 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import type { Card, CardStatus, PolicyConfig } from '@shared/types'
+import type { Card, CardStatus, PolicyConfig, RepoLabel } from '@shared/types'
 import { cryptoRandomId } from '../db'
 import { logAction } from '@shared/utils'
 
@@ -91,6 +91,46 @@ export class GithubAdapter {
     this.owner = parts[0]
     this.repo = parts[1]
     this.policy = policy
+  }
+
+  async listRepoLabels(): Promise<RepoLabel[]> {
+    try {
+      const { stdout } = await execFileAsync(
+        'gh',
+        [
+          'label',
+          'list',
+          '--repo',
+          `${this.owner}/${this.repo}`,
+          '--limit',
+          '1000',
+          '--json',
+          'name,color,description'
+        ],
+        { cwd: this.repoPath }
+      )
+      const labels = JSON.parse(stdout) as Array<{ name: string; color?: string; description?: string }>
+      return labels.map((l) => ({ name: l.name, color: l.color, description: l.description }))
+    } catch (error) {
+      logAction('github:listRepoLabels:error', { error: String(error) })
+      return []
+    }
+  }
+
+  async createRepoLabel(label: RepoLabel): Promise<{ created: boolean; error?: string }> {
+    const name = (label.name || '').trim()
+    if (!name) return { created: false, error: 'Label name is required' }
+
+    const args = ['label', 'create', name, '--repo', `${this.owner}/${this.repo}`]
+    if (label.color) args.push('--color', label.color.replace(/^#/, ''))
+    if (label.description) args.push('--description', label.description)
+
+    try {
+      await execFileAsync('gh', args, { cwd: this.repoPath })
+      return { created: true }
+    } catch (error) {
+      return { created: false, error: error instanceof Error ? error.message : String(error) }
+    }
   }
 
   /**
@@ -587,18 +627,60 @@ export class GithubAdapter {
       const repoLabels = await this.fetchRepoLabels()
       logAction('updateLabels: fetched repo labels', { repoLabels, labelsToAdd, labelsToRemove })
 
+      const failedAdds: string[] = []
       for (const label of labelsToAdd) {
         // Find matching label in repo (handles case, spaces, dashes, prefixes)
-        const matchedLabel = this.findMatchingLabel(label, repoLabels)
+        let matchedLabel = this.findMatchingLabel(label, repoLabels)
         logAction('updateLabels: matching result', { original: label, matched: matchedLabel })
-        if (matchedLabel) {
+        if (!matchedLabel) {
+          // Try adding the label by name directly first (works if fetchRepoLabels failed or matching missed).
+          try {
+            await execFileAsync(
+              'gh',
+              [
+                'issue',
+                'edit',
+                String(issueNumber),
+                '--repo',
+                `${this.owner}/${this.repo}`,
+                '--add-label',
+                label
+              ],
+              { cwd: this.repoPath }
+            )
+            continue
+          } catch (error) {
+            logAction('updateLabels: Direct add failed, attempting to create label', { label, error: String(error) })
+          }
+
+          const created = await this.createRepoLabel({ name: label })
+          if (!created.created) {
+            failedAdds.push(label)
+            logAction('updateLabels: Failed to create missing label', { label, error: created.error })
+            continue
+          }
+
+          repoLabels.push(label)
+          matchedLabel = label
+        }
+
+        try {
           await execFileAsync(
             'gh',
-            ['issue', 'edit', String(issueNumber), '--repo', `${this.owner}/${this.repo}`, '--add-label', matchedLabel],
+            [
+              'issue',
+              'edit',
+              String(issueNumber),
+              '--repo',
+              `${this.owner}/${this.repo}`,
+              '--add-label',
+              matchedLabel
+            ],
             { cwd: this.repoPath }
           )
-        } else {
-          logAction('updateLabels: No matching label found, skipping', { label, repoLabels })
+        } catch (error) {
+          failedAdds.push(label)
+          logAction('updateLabels: Failed to add label', { label, matchedLabel, error: String(error) })
         }
       }
       for (const label of labelsToRemove) {
@@ -616,6 +698,12 @@ export class GithubAdapter {
           }
         }
       }
+
+      if (failedAdds.length > 0) {
+        logAction('updateLabels: One or more labels failed to add', { failedAdds })
+        return false
+      }
+
       return true
     } catch (error) {
       console.error('Failed to update labels:', error)

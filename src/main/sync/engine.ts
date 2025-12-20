@@ -287,18 +287,13 @@ export class SyncEngine {
         }
       }
 
-      // Fall back to label-based status if Projects V2 failed or not enabled
-      if (!success) {
-        // Get the status label for the new status
-        const newLabel = this.adapter.getStatusLabel(newStatus)
-        const allStatusLabels = this.adapter.getAllStatusLabels()
-
-        // Remove all other status labels and add the new one
-        const labelsToRemove = allStatusLabels.filter((l) => l !== newLabel)
-        const labelsToAdd = [newLabel]
-
-        success = await this.adapter.updateLabels(issueNumber, labelsToAdd, labelsToRemove)
-      }
+      // Always apply label-based status as well (Projects V2 sync alone doesn't update issue labels).
+      const newLabel = this.adapter.getStatusLabel(newStatus)
+      const allStatusLabels = this.adapter.getAllStatusLabels()
+      const labelsToRemove = allStatusLabels.filter((l) => l !== newLabel)
+      const labelsToAdd = [newLabel]
+      const labelsUpdated = await this.adapter.updateLabels(issueNumber, labelsToAdd, labelsToRemove)
+      success = labelsUpdated
 
       if (success) {
         updateCardSyncState(cardId, 'ok')

@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from 'react'
 import type {
   Project,
   Card,
+  CardLink,
   Event,
   Job,
   CardStatus,
@@ -15,6 +16,7 @@ import type {
 export interface ProjectData {
   project: Project
   cards: Card[]
+  cardLinks: CardLink[]
   events: Event[]
   jobs: Job[]
 }
@@ -26,6 +28,7 @@ export interface AppStore {
   isLoading: boolean
   error: string | null
   workerLogsByJobId: Record<string, string[]>
+  cardLinksByCardId: Record<string, CardLink[]>
 
   // Remote selection dialog state
   pendingRemoteSelection: {
@@ -69,6 +72,7 @@ export function useAppStore(): AppStore {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [workerLogsByJobId, setWorkerLogsByJobId] = useState<Record<string, string[]>>({})
+  const [cardLinksByCardId, setCardLinksByCardId] = useState<Record<string, CardLink[]>>({})
   const [pendingRemoteSelection, setPendingRemoteSelection] = useState<{
     project: Project
     remotes: RemoteInfo[]
@@ -80,6 +84,18 @@ export function useAppStore(): AppStore {
     try {
       const result = (await window.electron.ipcRenderer.invoke('getState')) as AppState
       setProjects(result.projects)
+
+      // Build card links lookup map for O(1) access
+      const linkMap: Record<string, CardLink[]> = {}
+      for (const project of result.projects) {
+        const links = project.cardLinks ?? []
+        for (const link of links) {
+          if (!linkMap[link.card_id]) linkMap[link.card_id] = []
+          linkMap[link.card_id].push(link)
+        }
+      }
+      setCardLinksByCardId(linkMap)
+
       // Auto-select first project if none selected
       if (!selectedProjectId && result.projects.length > 0) {
         setSelectedProjectId(result.projects[0].project.id)
@@ -459,6 +475,7 @@ export function useAppStore(): AppStore {
     isLoading,
     error,
     workerLogsByJobId,
+    cardLinksByCardId,
     pendingRemoteSelection,
     loadState,
     selectProject,

@@ -12,16 +12,17 @@ import {
 } from 'lucide-react'
 import { Badge } from './ui/badge'
 import { cn } from '../lib/utils'
-import { formatRelativeTime, parseLabels, truncate } from '../lib/utils'
-import type { Card } from '../../../shared/types'
+import { formatRelativeTime, parseLabels, truncate, formatLabel } from '../lib/utils'
+import type { Card, CardLink } from '../../../shared/types'
 
 interface KanbanCardProps {
   card: Card
+  linkedPRs?: CardLink[]
   isSelected: boolean
   onClick: () => void
 }
 
-export function KanbanCard({ card, isSelected, onClick }: KanbanCardProps): React.JSX.Element {
+export function KanbanCard({ card, linkedPRs, isSelected, onClick }: KanbanCardProps): React.JSX.Element {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: card.id,
     data: { card }
@@ -86,6 +87,17 @@ export function KanbanCard({ card, isSelected, onClick }: KanbanCardProps): Reac
           )}
         </div>
         <div className="flex items-center gap-1">
+          {linkedPRs && linkedPRs.length > 0 && (
+            <Badge
+              variant="outline"
+              className="text-xs py-0 px-1.5 gap-1 text-chart-2 border-chart-2/50"
+              title={`${linkedPRs.length} linked PR${linkedPRs.length > 1 ? 's' : ''}`}
+            >
+              <GitPullRequest className="h-3 w-3" />
+              #{linkedPRs[0].linked_number_or_iid}
+              {linkedPRs.length > 1 && <span>+{linkedPRs.length - 1}</span>}
+            </Badge>
+          )}
           {card.sync_state === 'error' && (
             <span title={card.last_error || 'Error'}>
               <AlertCircle className="h-3 w-3 text-destructive" />
@@ -108,7 +120,7 @@ export function KanbanCard({ card, isSelected, onClick }: KanbanCardProps): Reac
         <div className="flex flex-wrap gap-1 mb-2">
           {labels.slice(0, 3).map((label) => (
             <Badge key={label} variant="secondary" className="text-xs py-0 px-1.5">
-              {truncate(label, 15)}
+              {truncate(formatLabel(label), 15)}
             </Badge>
           ))}
           {labels.length > 3 && (

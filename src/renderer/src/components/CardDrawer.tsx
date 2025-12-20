@@ -1,14 +1,15 @@
 import { useState, useEffect } from 'react'
-import { X, ExternalLink, Play, RefreshCw, Clock, AlertCircle, CheckCircle2, GitBranch, FolderOpen, Trash2 } from 'lucide-react'
+import { X, ExternalLink, Play, RefreshCw, Clock, AlertCircle, CheckCircle2, GitBranch, FolderOpen, Trash2, GitPullRequest } from 'lucide-react'
 import { Button } from './ui/button'
 import { Badge } from './ui/badge'
 import { ScrollArea } from './ui/scroll-area'
 import { cn } from '../lib/utils'
 import { formatRelativeTime, parseLabels, parseAssignees } from '../lib/utils'
-import { KANBAN_COLUMNS, type Card, type Event, type CardStatus, type Worktree } from '../../../shared/types'
+import { KANBAN_COLUMNS, type Card, type CardLink, type Event, type CardStatus, type Worktree } from '../../../shared/types'
 
 interface CardDrawerProps {
   card: Card | null
+  linkedPRs?: CardLink[]
   events: Event[]
   projectId: string | null
   onClose: () => void
@@ -18,6 +19,7 @@ interface CardDrawerProps {
 
 export function CardDrawer({
   card,
+  linkedPRs,
   events,
   projectId,
   onClose,
@@ -154,6 +156,31 @@ export function CardDrawer({
                 <ExternalLink className="h-3 w-3" />
                 Open in {card.provider === 'github' ? 'GitHub' : 'GitLab'}
               </a>
+            </div>
+          )}
+
+          {/* Linked Pull Requests */}
+          {linkedPRs && linkedPRs.length > 0 && (
+            <div>
+              <h4 className="text-sm font-medium mb-2">Linked Pull Requests</h4>
+              <div className="space-y-2 rounded-md bg-secondary p-3">
+                {linkedPRs.map((link) => (
+                  <button
+                    key={link.id}
+                    className="flex items-center gap-2 text-sm text-primary hover:underline w-full text-left"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      window.electron.ipcRenderer.send('openExternal', link.linked_url)
+                    }}
+                  >
+                    <GitPullRequest className="h-4 w-4 text-chart-2" />
+                    <span className="truncate">
+                      {link.linked_type.toUpperCase()} #{link.linked_number_or_iid}
+                    </span>
+                    <ExternalLink className="h-3 w-3 ml-auto flex-shrink-0" />
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 

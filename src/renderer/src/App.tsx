@@ -7,11 +7,14 @@ import { RemoteSelector } from './components/RemoteSelector'
 import { CommandPalette } from './components/CommandPalette'
 import { AddCardDialog, type CreateCardType } from './components/AddCardDialog'
 import { Button } from './components/ui/button'
+import { Toaster } from './components/ui/sonner'
 import { useAppStore } from './store/useAppStore'
 import type { CardStatus, PolicyConfig, Project, Provider } from '../../shared/types'
 import { WorkerLogDialog } from './components/WorkerLogDialog'
 import { PullRequestsSection } from './components/PullRequestsSection'
 import { RepoStartDialog } from './components/RepoStartDialog'
+import { LabelSetupDialog } from './components/LabelSetupDialog'
+import { GithubProjectPromptDialog } from './components/GithubProjectPromptDialog'
 
 function readShowPullRequestsSection(project: Project): boolean {
   if (!project.policy_json) return false
@@ -29,6 +32,8 @@ function App(): React.JSX.Element {
   const [addCardDialogOpen, setAddCardDialogOpen] = useState(false)
   const [workerLogsOpen, setWorkerLogsOpen] = useState(false)
   const [repoStartOpen, setRepoStartOpen] = useState(false)
+  const [labelSetupOpen, setLabelSetupOpen] = useState(false)
+  const [githubProjectPromptOpen, setGithubProjectPromptOpen] = useState(false)
 
   const selectedProject = store.getSelectedProject()
   const selectedCard = store.getSelectedCard()
@@ -65,6 +70,40 @@ function App(): React.JSX.Element {
         ? 'gitlab'
         : null
     : null
+
+  // Repo onboarding dialogs (labels + optional GitHub Project creation)
+  useEffect(() => {
+    const project = selectedProject?.project
+    if (!project?.id || !project.remote_repo_key) return
+    let canceled = false
+
+    window.electron.ipcRenderer
+      .invoke('getRepoOnboardingState', { projectId: project.id })
+      .then((state: { shouldShowLabelWizard?: boolean; shouldPromptGithubProject?: boolean }) => {
+        if (canceled) return
+        if (state?.shouldShowLabelWizard) {
+          setGithubProjectPromptOpen(false)
+          setLabelSetupOpen(true)
+          return
+        }
+        if (state?.shouldPromptGithubProject && !labelSetupOpen) {
+          setGithubProjectPromptOpen(true)
+        }
+      })
+      .catch(() => {
+        // ignore
+      })
+
+    return () => {
+      canceled = true
+    }
+  }, [
+    labelSetupOpen,
+    selectedProject?.project.id,
+    selectedProject?.project.remote_repo_key,
+    selectedProject?.project.policy_json,
+    selectedProject?.project.last_sync_at
+  ])
 
   // Global keyboard shortcuts
   useEffect(() => {
@@ -107,7 +146,7 @@ function App(): React.JSX.Element {
   )
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
+    <div className="flex h-screen w-screen overflow-hidden bg-background">
       {/* Sidebar */}
       <Sidebar
         projects={store.projects}
@@ -149,6 +188,7 @@ function App(): React.JSX.Element {
               <div className="flex-1 overflow-hidden">
                 <KanbanBoard
                   cards={boardCards}
+                  cardLinksByCardId={store.cardLinksByCardId}
                   selectedCardId={store.selectedCardId}
                   onSelectCard={store.selectCard}
                   onMoveCard={handleMoveCard}
@@ -160,6 +200,7 @@ function App(): React.JSX.Element {
               {selectedCard && (
                 <CardDrawer
                   card={selectedCard}
+                  linkedPRs={store.cardLinksByCardId[selectedCard.id]}
                   events={selectedProject.events}
                   projectId={selectedProject.project.id}
                   onClose={() => store.selectCard(null)}
@@ -229,6 +270,22 @@ function App(): React.JSX.Element {
         onCreateRepo={store.createRepo}
       />
 
+      {selectedProject?.project && (
+        <LabelSetupDialog
+          open={labelSetupOpen}
+          onOpenChange={setLabelSetupOpen}
+          project={selectedProject.project}
+        />
+      )}
+
+      {selectedProject?.project && (
+        <GithubProjectPromptDialog
+          open={githubProjectPromptOpen}
+          onOpenChange={setGithubProjectPromptOpen}
+          project={selectedProject.project}
+        />
+      )}
+
       {/* Error display */}
       {store.error && (
         <div className="fixed bottom-4 right-4 max-w-md rounded-lg border border-destructive bg-destructive/10 p-4 text-sm text-destructive shadow-lg">
@@ -236,6 +293,9 @@ function App(): React.JSX.Element {
           <p>{store.error}</p>
         </div>
       )}
+
+      {/* Toast notifications */}
+      <Toaster position="bottom-right" />
     </div>
   )
 }

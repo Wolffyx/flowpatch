@@ -45,6 +45,19 @@ export function parseLabels(labelsJson: string | null): string[] {
   }
 }
 
+export function formatLabel(label: string): string {
+  // Handle status:: prefixed labels (e.g., "status::in-progress" -> "In Progress")
+  if (label.startsWith('status::')) {
+    const status = label.replace('status::', '')
+    return status
+      .split('-')
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ')
+  }
+  // Return other labels as-is
+  return label
+}
+
 export function parseAssignees(assigneesJson: string | null): string[] {
   if (!assigneesJson) return []
   try {

@@ -1,6 +1,6 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import type { Card, CardStatus, PolicyConfig } from '../../shared/types'
+import type { Card, CardStatus, PolicyConfig, RepoLabel } from '../../shared/types'
 import { cryptoRandomId } from '../db'
 
 const execFileAsync = promisify(execFile)
@@ -60,6 +60,34 @@ export class GitlabAdapter {
         authenticated: false,
         error: error instanceof Error ? error.message : 'Authentication failed'
       }
+    }
+  }
+
+  async listRepoLabels(): Promise<RepoLabel[]> {
+    try {
+      const { stdout } = await execFileAsync('glab', ['label', 'list', '-F', 'json'], {
+        cwd: this.repoPath
+      })
+      const labels = JSON.parse(stdout) as Array<{ name: string; description?: string; color?: string }>
+      return labels.map((l) => ({ name: l.name, description: l.description, color: l.color }))
+    } catch {
+      return []
+    }
+  }
+
+  async createRepoLabel(label: RepoLabel): Promise<{ created: boolean; error?: string }> {
+    const name = (label.name || '').trim()
+    if (!name) return { created: false, error: 'Label name is required' }
+
+    const args = ['label', 'create', '--name', name]
+    if (label.description) args.push('--description', label.description)
+    if (label.color) args.push('--color', label.color)
+
+    try {
+      await execFileAsync('glab', args, { cwd: this.repoPath })
+      return { created: true }
+    } catch (error) {
+      return { created: false, error: error instanceof Error ? error.message : String(error) }
     }
   }
 

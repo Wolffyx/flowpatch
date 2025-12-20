@@ -7,8 +7,12 @@ import {
   upsertProject,
   listProjects,
   listCards,
+  listCardLinksByProject,
   createLocalTestCard,
   updateCardStatus,
+  updateCardLabels,
+  getStatusLabelFromPolicy,
+  getAllStatusLabelsFromPolicy,
   deleteProject as dbDeleteProject,
   updateProjectWorkerEnabled,
   updateProjectPolicyJson,
@@ -24,10 +28,13 @@ import {
   upsertCard,
   listWorktrees,
   getWorktree,
-  updateWorktreeStatus
+  updateWorktreeStatus,
+  getAppSetting,
+  setAppSetting
 } from './db'
 import { SyncEngine, runSync } from './sync/engine'
 import { GithubAdapter } from './adapters/github'
+import { GitlabAdapter } from './adapters/gitlab'
 import { runWorker as executeWorkerPipeline } from './worker/pipeline'
 import {
   startWorkerLoop,
@@ -45,7 +52,14 @@ import {
   type OpenRepoResult,
   type CreateRepoPayload,
   type CreateRepoResult,
-  type SelectDirectoryResult
+  type SelectDirectoryResult,
+  type ApplyLabelConfigPayload,
+  type CreateRepoLabelsPayload,
+  type CreateRepoLabelsResult,
+  type ListRepoLabelsPayload,
+  type ListRepoLabelsResult,
+  type RepoLabel,
+  type RepoOnboardingState
 } from '@shared/types'
 import { logAction } from '@shared/utils'
 import { GitWorktreeManager } from './services/git-worktree-manager'
@@ -54,6 +68,36 @@ import { startCleanupScheduler, stopCleanupScheduler } from './services/worktree
 
 let mainWindow: BrowserWindow | null = null
 
+function getOnboardingKey(projectId: string, key: string): string {
+  return `onboarding:${projectId}:${key}`
+}
+
+function getOnboardingBool(projectId: string, key: string): boolean {
+  return getAppSetting(getOnboardingKey(projectId, key)) === '1'
+}
+
+function setOnboardingBool(projectId: string, key: string, value: boolean): void {
+  setAppSetting(getOnboardingKey(projectId, key), value ? '1' : '0')
+}
+
+function parsePolicyJson(json: string | null): PolicyConfig {
+  if (!json) return DEFAULT_POLICY
+  try {
+    return JSON.parse(json) as PolicyConfig
+  } catch {
+    return DEFAULT_POLICY
+  }
+}
+
+function normalizeLabelName(s: string): string {
+  return (s || '').trim().toLowerCase()
+}
+
+function labelExists(labelName: string, existing: RepoLabel[]): boolean {
+  const needle = normalizeLabelName(labelName)
+  if (!needle) return false
+  return existing.some((l) => normalizeLabelName(l.name) === needle)
+}
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -136,6 +180,7 @@ app.whenReady().then(() => {
     const data = projects.map((p) => ({
       project: p,
       cards: listCards(p.id),
+      cardLinks: listCardLinksByProject(p.id),
       events: listEvents(p.id),
       jobs: listJobs(p.id)
     }))
@@ -312,6 +357,12 @@ app.whenReady().then(() => {
       const p = getProject(payload.projectId)
       if (!p) return { error: 'Project not found' }
 
+      if (p.remote_repo_key !== payload.repoKey) {
+        setOnboardingBool(p.id, 'labelsCompleted', false)
+        setOnboardingBool(p.id, 'labelsDismissed', false)
+        setOnboardingBool(p.id, 'githubProjectDismissed', false)
+      }
+
       const updated = upsertProject({
         id: p.id,
         name: p.name,
@@ -328,6 +379,7 @@ app.whenReady().then(() => {
       })
       logAction('selectRemote:updated', { projectId: p.id, remote: payload.remoteName })
 
+      notifyRenderer()
       return { project: updated }
     }
   )
@@ -451,6 +503,33 @@ app.whenReady().then(() => {
           from: before?.status,
           to: payload.status
         })
+
+        // Update local labels to reflect new status
+        const project = getProject(card.project_id)
+        if (project) {
+          let policy: PolicyConfig = DEFAULT_POLICY
+          if (project.policy_json) {
+            try {
+              policy = JSON.parse(project.policy_json) as PolicyConfig
+            } catch {
+              // fall back to DEFAULT_POLICY
+            }
+          }
+
+          // Get current labels
+          const currentLabels: string[] = card.labels_json ? JSON.parse(card.labels_json) : []
+
+          // Get status label configuration
+          const newStatusLabel = getStatusLabelFromPolicy(payload.status, policy)
+          const allStatusLabels = getAllStatusLabelsFromPolicy(policy)
+
+          // Replace old status labels with new one
+          const filteredLabels = currentLabels.filter((l) => !allStatusLabels.includes(l))
+          const updatedLabels = [...filteredLabels, newStatusLabel]
+
+          // Update in database
+          updateCardLabels(card.id, JSON.stringify(updatedLabels))
+        }
 
         // If the user moves a card out of Ready/In Progress, cancel any active worker job for it.
         if (payload.status === 'draft' || payload.status === 'in_review' || payload.status === 'testing' || payload.status === 'done') {
@@ -627,6 +706,322 @@ app.whenReady().then(() => {
       return { success: true, project: getProject(payload.projectId) }
     }
   )
+
+  // Theme preference handlers (global app settings)
+  ipcMain.handle('getThemePreference', () => {
+    const saved = getAppSetting('theme')
+    if (saved === 'light' || saved === 'dark' || saved === 'system') {
+      return saved
+    }
+    return 'system' // Default to system
+  })
+
+  ipcMain.handle('setThemePreference', (_e, theme: string) => {
+    if (theme !== 'light' && theme !== 'dark' && theme !== 'system') {
+      return { error: 'Invalid theme preference' }
+    }
+    setAppSetting('theme', theme)
+    return { success: true }
+  })
+
+  ipcMain.handle('getSystemTheme', () => {
+    const { nativeTheme } = require('electron')
+    return nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
+  })
+
+  // API Key handlers (global app settings)
+  ipcMain.handle('getApiKey', (_e, payload: { key: string }) => {
+    if (!payload?.key) return null
+    const settingKey = `api_key_${payload.key}`
+    return getAppSetting(settingKey) || null
+  })
+
+  ipcMain.handle('setApiKey', (_e, payload: { key: string; value: string }) => {
+    if (!payload?.key) return { error: 'Invalid key' }
+    const settingKey = `api_key_${payload.key}`
+    setAppSetting(settingKey, payload.value || '')
+    return { success: true }
+  })
+
+  // ==================== Repo Onboarding ====================
+
+  ipcMain.handle('getRepoOnboardingState', (_e, payload: { projectId: string }): RepoOnboardingState => {
+    if (!payload?.projectId) return { shouldPromptGithubProject: false, shouldShowLabelWizard: false }
+
+    const project = getProject(payload.projectId)
+    if (!project?.remote_repo_key) {
+      return { shouldPromptGithubProject: false, shouldShowLabelWizard: false }
+    }
+
+    const isGithub = project.remote_repo_key.startsWith('github:')
+    const isGitlab = project.remote_repo_key.startsWith('gitlab:')
+    const labelsCompleted = getOnboardingBool(payload.projectId, 'labelsCompleted')
+    const labelsDismissed = getOnboardingBool(payload.projectId, 'labelsDismissed')
+
+    const shouldShowLabelWizard = (isGithub || isGitlab) && !labelsCompleted && !labelsDismissed
+
+    let shouldPromptGithubProject = false
+    if (isGithub) {
+      const promptDismissed = getOnboardingBool(payload.projectId, 'githubProjectDismissed')
+      const policy = parsePolicyJson(project.policy_json)
+      const enabled = policy.sync?.githubProjectsV2?.enabled
+      const existingProjectId = policy.sync?.githubProjectsV2?.projectId
+      shouldPromptGithubProject =
+        !!project.last_sync_at &&
+        !promptDismissed &&
+        enabled !== false &&
+        !existingProjectId
+    }
+
+    return { shouldPromptGithubProject, shouldShowLabelWizard }
+  })
+
+  ipcMain.handle('dismissLabelWizard', (_e, payload: { projectId: string }) => {
+    if (!payload?.projectId) return { error: 'Project ID required' }
+    setOnboardingBool(payload.projectId, 'labelsDismissed', true)
+    return { success: true }
+  })
+
+  ipcMain.handle('resetLabelWizard', (_e, payload: { projectId: string }) => {
+    if (!payload?.projectId) return { error: 'Project ID required' }
+    setOnboardingBool(payload.projectId, 'labelsDismissed', false)
+    setOnboardingBool(payload.projectId, 'labelsCompleted', false)
+    notifyRenderer()
+    return { success: true }
+  })
+
+  ipcMain.handle('dismissGithubProjectPrompt', (_e, payload: { projectId: string }) => {
+    if (!payload?.projectId) return { error: 'Project ID required' }
+    setOnboardingBool(payload.projectId, 'githubProjectDismissed', true)
+    return { success: true }
+  })
+
+  ipcMain.handle('resetGithubProjectPrompt', (_e, payload: { projectId: string }) => {
+    if (!payload?.projectId) return { error: 'Project ID required' }
+    setOnboardingBool(payload.projectId, 'githubProjectDismissed', false)
+    notifyRenderer()
+    return { success: true }
+  })
+
+  ipcMain.handle('listRepoLabels', async (_e, payload: ListRepoLabelsPayload): Promise<ListRepoLabelsResult> => {
+    if (!payload?.projectId) return { labels: [], error: 'Project ID required' }
+    const project = getProject(payload.projectId)
+    if (!project) return { labels: [], error: 'Project not found' }
+    if (!project.remote_repo_key) return { labels: [], error: 'No remote configured' }
+
+    const policy = parsePolicyJson(project.policy_json)
+    try {
+      if (project.remote_repo_key.startsWith('github:')) {
+        const adapter = new GithubAdapter(project.local_path, project.remote_repo_key, policy)
+        const labels = await adapter.listRepoLabels()
+        return { labels }
+      }
+      if (project.remote_repo_key.startsWith('gitlab:')) {
+        const adapter = new GitlabAdapter(project.local_path, project.remote_repo_key, policy)
+        const labels = await adapter.listRepoLabels()
+        return { labels }
+      }
+      return { labels: [], error: 'Unsupported provider' }
+    } catch (error) {
+      return { labels: [], error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle(
+    'createRepoLabels',
+    async (_e, payload: CreateRepoLabelsPayload): Promise<CreateRepoLabelsResult> => {
+      if (!payload?.projectId) return { created: [], skipped: [], error: 'Project ID required' }
+      const project = getProject(payload.projectId)
+      if (!project) return { created: [], skipped: [], error: 'Project not found' }
+      if (!project.remote_repo_key) return { created: [], skipped: [], error: 'No remote configured' }
+
+      const policy = parsePolicyJson(project.policy_json)
+      const labelsToCreate = (payload.labels || []).filter((l) => (l.name || '').trim().length > 0)
+      if (labelsToCreate.length === 0) return { created: [], skipped: [] }
+
+      let existing: RepoLabel[] = []
+      if (project.remote_repo_key.startsWith('github:')) {
+        const adapter = new GithubAdapter(project.local_path, project.remote_repo_key, policy)
+        existing = await adapter.listRepoLabels()
+        const created: string[] = []
+        const skipped: string[] = []
+        for (const label of labelsToCreate) {
+          if (labelExists(label.name, existing)) {
+            skipped.push(label.name)
+            continue
+          }
+          const res = await adapter.createRepoLabel(label)
+          if (res.created) created.push(label.name)
+          else skipped.push(label.name)
+        }
+        return { created, skipped }
+      }
+
+      if (project.remote_repo_key.startsWith('gitlab:')) {
+        const adapter = new GitlabAdapter(project.local_path, project.remote_repo_key, policy)
+        existing = await adapter.listRepoLabels()
+        const created: string[] = []
+        const skipped: string[] = []
+        for (const label of labelsToCreate) {
+          if (labelExists(label.name, existing)) {
+            skipped.push(label.name)
+            continue
+          }
+          const res = await adapter.createRepoLabel(label)
+          if (res.created) created.push(label.name)
+          else skipped.push(label.name)
+        }
+        return { created, skipped }
+      }
+
+      return { created: [], skipped: [], error: 'Unsupported provider' }
+    }
+  )
+
+  ipcMain.handle('applyLabelConfig', async (_e, payload: ApplyLabelConfigPayload) => {
+    if (!payload?.projectId) return { error: 'Project ID required' }
+    const project = getProject(payload.projectId)
+    if (!project) return { error: 'Project not found' }
+
+    const readyLabel = (payload.readyLabel || '').trim()
+    const statusLabels = payload.statusLabels
+    if (!readyLabel) return { error: 'Ready label is required' }
+    if (!statusLabels?.draft || !statusLabels.ready || !statusLabels.inProgress || !statusLabels.inReview || !statusLabels.testing || !statusLabels.done) {
+      return { error: 'All status labels are required' }
+    }
+
+    const policy = parsePolicyJson(project.policy_json)
+    policy.sync = policy.sync ?? {}
+    policy.sync.readyLabel = readyLabel
+    policy.sync.statusLabels = statusLabels
+
+    if (payload.createMissingLabels && project.remote_repo_key) {
+      const requested: RepoLabel[] = [
+        { name: readyLabel },
+        { name: statusLabels.draft },
+        { name: statusLabels.ready },
+        { name: statusLabels.inProgress },
+        { name: statusLabels.inReview },
+        { name: statusLabels.testing },
+        { name: statusLabels.done }
+      ]
+
+      const adapter =
+        project.remote_repo_key.startsWith('github:')
+          ? new GithubAdapter(project.local_path, project.remote_repo_key, policy)
+          : project.remote_repo_key.startsWith('gitlab:')
+            ? new GitlabAdapter(project.local_path, project.remote_repo_key, policy)
+            : null
+      if (adapter) {
+        const existing = await adapter.listRepoLabels()
+        for (const label of requested) {
+          if (labelExists(label.name, existing)) continue
+          await adapter.createRepoLabel(label)
+        }
+      }
+    }
+
+    updateProjectPolicyJson(payload.projectId, JSON.stringify(policy))
+    setOnboardingBool(payload.projectId, 'labelsCompleted', true)
+    notifyRenderer()
+    return { success: true, project: getProject(payload.projectId) }
+  })
+
+  ipcMain.handle(
+    'createGithubProjectV2',
+    async (_e, payload: { projectId: string; title?: string }) => {
+      if (!payload?.projectId) return { error: 'Project ID required' }
+
+      const project = getProject(payload.projectId)
+      if (!project) return { error: 'Project not found' }
+      if (!project.remote_repo_key?.startsWith('github:')) return { error: 'Project is not GitHub-backed' }
+
+      const policy = parsePolicyJson(project.policy_json)
+      if (policy.sync?.githubProjectsV2?.enabled === false) {
+        return { error: 'GitHub Projects integration is disabled by policy' }
+      }
+
+      const repoKey = project.remote_repo_key.replace(/^github:/, '')
+      const [owner, repo] = repoKey.split('/')
+      if (!owner || !repo) return { error: 'Invalid GitHub repo key' }
+
+      const title = (payload.title || '').trim() || `${project.name} Kanban`
+
+      try {
+        const ownerQuery = `
+          query($owner: String!, $repo: String!) {
+            repository(owner: $owner, name: $repo) {
+              owner { id login }
+            }
+          }
+        `
+
+        const ownerResRaw = await execCli(
+          'gh',
+          ['api', 'graphql', '-f', `query=${ownerQuery}`, '-F', `owner=${owner}`, '-F', `repo=${repo}`],
+          project.local_path
+        )
+        const ownerRes = JSON.parse(ownerResRaw) as { data?: { repository?: { owner?: { id: string } } }; errors?: { message: string }[] }
+        const ownerId = ownerRes.data?.repository?.owner?.id
+        if (!ownerId) {
+          return { error: ownerRes.errors?.[0]?.message || 'Failed to resolve repository owner' }
+        }
+
+        const createMutation = `
+          mutation($ownerId: ID!, $title: String!) {
+            createProjectV2(input: { ownerId: $ownerId, title: $title }) {
+              projectV2 { id url title }
+            }
+          }
+        `
+
+        const createResRaw = await execCli(
+          'gh',
+          ['api', 'graphql', '-f', `query=${createMutation}`, '-F', `ownerId=${ownerId}`, '-F', `title=${title}`],
+          project.local_path
+        )
+        const createRes = JSON.parse(createResRaw) as { data?: { createProjectV2?: { projectV2?: { id: string; url?: string; title?: string } } }; errors?: { message: string }[] }
+        const created = createRes.data?.createProjectV2?.projectV2
+        if (!created?.id) {
+          return { error: createRes.errors?.[0]?.message || 'Failed to create GitHub Project' }
+        }
+
+        policy.sync = policy.sync ?? {}
+        policy.sync.githubProjectsV2 = policy.sync.githubProjectsV2 ?? {}
+        policy.sync.githubProjectsV2.enabled = true
+        policy.sync.githubProjectsV2.projectId = created.id
+        updateProjectPolicyJson(payload.projectId, JSON.stringify(policy))
+
+        setOnboardingBool(payload.projectId, 'githubProjectDismissed', true)
+        notifyRenderer()
+        return { success: true, projectId: created.id, url: created.url, title: created.title }
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) }
+      }
+    }
+  )
+
+  // Unlink project (removes from app but keeps files)
+  ipcMain.handle('unlinkProject', (_e, payload: { projectId: string }) => {
+    logAction('unlinkProject', payload)
+    if (!payload?.projectId) return { error: 'Project ID required' }
+
+    const project = getProject(payload.projectId)
+    if (!project) return { error: 'Project not found' }
+
+    // Stop worker loop if running
+    stopWorkerLoop(payload.projectId)
+
+    // Delete project from database (this also deletes associated cards, events, jobs, etc.)
+    const success = dbDeleteProject(payload.projectId)
+    if (!success) {
+      return { error: 'Failed to unlink project' }
+    }
+
+    logAction('unlinkProject:success', { projectId: payload.projectId, name: project.name })
+    notifyRenderer()
+    return { success: true }
+  })
 
   // Sync project
   ipcMain.handle('syncProject', async (_e, payload: { projectId: string }) => {

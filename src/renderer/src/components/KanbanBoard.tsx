@@ -12,10 +12,11 @@ import {
 import { KanbanColumn } from './KanbanColumn'
 import { KanbanCard } from './KanbanCard'
 import { ScrollArea } from './ui/scroll-area'
-import { KANBAN_COLUMNS, type Card, type CardStatus } from '../../../shared/types'
+import { KANBAN_COLUMNS, type Card, type CardLink, type CardStatus } from '../../../shared/types'
 
 interface KanbanBoardProps {
   cards: Card[]
+  cardLinksByCardId: Record<string, CardLink[]>
   selectedCardId: string | null
   onSelectCard: (id: string | null) => void
   onMoveCard: (cardId: string, status: CardStatus) => void
@@ -24,6 +25,7 @@ interface KanbanBoardProps {
 
 export function KanbanBoard({
   cards,
+  cardLinksByCardId,
   selectedCardId,
   onSelectCard,
   onMoveCard,
@@ -105,6 +107,7 @@ export function KanbanBoard({
               label={column.label}
               color={column.color}
               cards={getCardsByStatus(column.id)}
+              cardLinksByCardId={cardLinksByCardId}
               selectedCardId={selectedCardId}
               onSelectCard={onSelectCard}
               onAddCard={column.id === 'draft' ? onAddCard : undefined}
@@ -116,7 +119,12 @@ export function KanbanBoard({
       <DragOverlay>
         {activeCard && (
           <div className="drag-overlay">
-            <KanbanCard card={activeCard} isSelected={false} onClick={() => {}} />
+            <KanbanCard
+              card={activeCard}
+              linkedPRs={cardLinksByCardId[activeCard.id]}
+              isSelected={false}
+              onClick={() => {}}
+            />
           </div>
         )}
       </DragOverlay>

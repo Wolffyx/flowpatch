@@ -1,5 +1,9 @@
 // Shared types between main and renderer processes
 
+// Theme types
+export type ThemePreference = 'light' | 'dark' | 'system'
+export type ResolvedTheme = 'light' | 'dark'
+
 export type CardStatus = 'draft' | 'ready' | 'in_progress' | 'in_review' | 'testing' | 'done'
 
 export type Provider = 'github' | 'gitlab' | 'local'
@@ -111,6 +115,7 @@ export interface Worktree {
   last_error: string | null
   locked_by: string | null
   lock_expires_at: string | null
+  cleanup_requested_at: string | null
   created_at: string
   updated_at: string
 }
@@ -288,10 +293,49 @@ export interface RunWorkerPayload {
   cardId?: string
 }
 
+export interface RepoLabel {
+  name: string
+  color?: string
+  description?: string
+}
+
+export interface ListRepoLabelsPayload {
+  projectId: string
+}
+
+export interface ListRepoLabelsResult {
+  labels: RepoLabel[]
+  error?: string
+}
+
+export interface CreateRepoLabelsPayload {
+  projectId: string
+  labels: RepoLabel[]
+}
+
+export interface CreateRepoLabelsResult {
+  created: string[]
+  skipped: string[]
+  error?: string
+}
+
+export interface ApplyLabelConfigPayload {
+  projectId: string
+  readyLabel: string
+  statusLabels: NonNullable<NonNullable<PolicyConfig['sync']>['statusLabels']>
+  createMissingLabels: boolean
+}
+
+export interface RepoOnboardingState {
+  shouldShowLabelWizard: boolean
+  shouldPromptGithubProject: boolean
+}
+
 export interface AppState {
   projects: {
     project: Project
     cards: Card[]
+    cardLinks: CardLink[]
     events: Event[]
     jobs: Job[]
   }[]

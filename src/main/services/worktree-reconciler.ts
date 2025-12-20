@@ -13,9 +13,14 @@ import path from 'path'
 export interface ReconciliationResult {
   orphaned: Worktree[] // In DB but not on disk
   untracked: string[] // On disk but not in DB
+  untrackedCleaned: string[] // Untracked worktrees that were cleaned
   expiredLocks: Worktree[] // Locks that expired
   cleanedUp: Worktree[] // Successfully cleaned up
-  errors: Array<{ worktree: Worktree; error: string }>
+  errors: Array<{ worktree: Worktree | null; path?: string; error: string }>
+}
+
+export interface ReconcileOptions {
+  cleanUntracked?: boolean // If true, remove untracked worktrees that have .patchwork-worktree marker
 }
 
 function normalizePath(p: string): string {
@@ -51,11 +56,13 @@ export class WorktreeReconciler {
 
   /**
    * Perform full reconciliation between DB and disk state.
+   * @param options.cleanUntracked If true, remove untracked worktrees that have .patchwork-worktree marker
    */
-  async reconcile(): Promise<ReconciliationResult> {
+  async reconcile(options?: ReconcileOptions): Promise<ReconciliationResult> {
     const result: ReconciliationResult = {
       orphaned: [],
       untracked: [],
+      untrackedCleaned: [],
       expiredLocks: [],
       cleanedUp: [],
       errors: []
@@ -72,7 +79,7 @@ export class WorktreeReconciler {
     // 2. Find orphaned DB records (in DB but not on disk)
     for (const dbWt of dbWorktrees) {
       if (!gitPaths.has(normalizePath(dbWt.worktree_path))) {
-        // Worktree missing from disk
+        // Worktree missing from disk - also check if it's running (shouldn't be if not on disk)
         if (dbWt.status !== 'cleaned' && dbWt.status !== 'error') {
           result.orphaned.push(dbWt)
           updateWorktreeStatus(dbWt.id, 'error', 'Worktree missing from disk (possibly crashed)')
@@ -86,7 +93,25 @@ export class WorktreeReconciler {
     for (const gitWt of gitWorktrees) {
       if (!dbPaths.has(normalizePath(gitWt.worktreePath))) {
         // Only flag as untracked if it's under our managed root (avoid prefix false-positives)
-        if (isUnderRoot(gitWt.worktreePath, worktreeRoot)) result.untracked.push(gitWt.worktreePath)
+        if (isUnderRoot(gitWt.worktreePath, worktreeRoot)) {
+          result.untracked.push(gitWt.worktreePath)
+
+          // Optionally clean up untracked worktrees that have the patchwork marker
+          if (options?.cleanUntracked && this.manager.isPatchworkWorktree(gitWt.worktreePath)) {
+            try {
+              await this.manager.removeWorktree(gitWt.worktreePath, {
+                force: true,
+                config: this.config
+              })
+              result.untrackedCleaned.push(gitWt.worktreePath)
+              console.log(`[WorktreeReconciler] Cleaned untracked patchwork worktree: ${gitWt.worktreePath}`)
+            } catch (err) {
+              const errorMsg = err instanceof Error ? err.message : String(err)
+              result.errors.push({ worktree: null, path: gitWt.worktreePath, error: errorMsg })
+              console.error(`[WorktreeReconciler] Failed to clean untracked worktree ${gitWt.worktreePath}:`, errorMsg)
+            }
+          }
+        }
       }
     }
 
@@ -95,7 +120,8 @@ export class WorktreeReconciler {
     for (const wt of expiredLocks) {
       if (wt.project_id === this.projectId) {
         result.expiredLocks.push(wt)
-        releaseWorktreeLock(wt.id)
+        // Force release (no lockedBy check since we're doing cleanup)
+        releaseWorktreeLock(wt.id, null)
         updateWorktreeStatus(wt.id, 'cleanup_pending', 'Lock expired (possible crash)')
       }
     }
@@ -196,9 +222,12 @@ export class WorktreeReconciler {
 
 /**
  * Reconcile worktrees for all projects on startup.
+ * @param projects List of projects to reconcile
+ * @param options.cleanUntracked If true, remove untracked worktrees that have .patchwork-worktree marker
  */
 export async function reconcileAllProjects(
-  projects: Array<{ id: string; local_path: string; policy_json: string | null }>
+  projects: Array<{ id: string; local_path: string; policy_json: string | null }>,
+  options?: ReconcileOptions
 ): Promise<Map<string, ReconciliationResult>> {
   const results = new Map<string, ReconciliationResult>()
 
@@ -217,8 +246,19 @@ export async function reconcileAllProjects(
 
     try {
       const reconciler = new WorktreeReconciler(project.id, project.local_path, policy)
-      const result = await reconciler.reconcile()
+      const result = await reconciler.reconcile(options)
       results.set(project.id, result)
+
+      // Log summary
+      if (result.orphaned.length > 0 || result.cleanedUp.length > 0 || result.untrackedCleaned.length > 0) {
+        console.log(
+          `[WorktreeReconciler] Project ${project.id}: ` +
+            `orphaned=${result.orphaned.length}, ` +
+            `cleaned=${result.cleanedUp.length}, ` +
+            `untrackedCleaned=${result.untrackedCleaned.length}, ` +
+            `expiredLocks=${result.expiredLocks.length}`
+        )
+      }
     } catch (err) {
       console.error(`Failed to reconcile worktrees for project ${project.id}:`, err)
     }

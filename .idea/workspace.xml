@@ -4,12 +4,35 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="2a70596c-d075-4df5-985f-47d56f5e40d3" name="Changes" comment="Added more organization and improved worker">
+    <list default="true" id="2a70596c-d075-4df5-985f-47d56f5e40d3" name="Changes" comment="Added creating repo v1">
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/build/entitlements.mac.plist" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/build/icon.icns" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/build/icon.ico" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/build/icon.png" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/package-lock.json" beforeDir="false" afterPath="$PROJECT_DIR$/package-lock.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/package.json" beforeDir="false" afterPath="$PROJECT_DIR$/package.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/adapters/github.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/adapters/github.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/adapters/gitlab.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/adapters/gitlab.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/db.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/db.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/index.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/index.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/services/git-worktree-manager.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/services/git-worktree-manager.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/services/worktree-cleanup-scheduler.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/services/worktree-cleanup-scheduler.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/services/worktree-reconciler.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/services/worktree-reconciler.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/sync/engine.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/sync/engine.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/worker/pipeline.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/worker/pipeline.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/index.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/App copy.tsx" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/src/renderer/src/App.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/App.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/CommandPalette.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/CommandPalette.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/Sidebar.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/Sidebar.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/assets/main.css" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/assets/main.css" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/CardDrawer.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/CardDrawer.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/KanbanBoard.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/KanbanBoard.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/KanbanCard.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/KanbanCard.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/KanbanColumn.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/KanbanColumn.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/SettingsDialog.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/SettingsDialog.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/lib/utils.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/lib/utils.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/main.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/main.tsx" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/renderer/src/store/useAppStore.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/store/useAppStore.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/shared/types.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/shared/types.ts" afterDir="false" />
     </list>
@@ -120,7 +143,8 @@
       <workItem from="1765877210348" duration="6581000" />
       <workItem from="1765890380654" duration="23261000" />
       <workItem from="1766056046073" duration="6760000" />
-      <workItem from="1766152521211" duration="2138000" />
+      <workItem from="1766152521211" duration="2586000" />
+      <workItem from="1766230292122" duration="10738000" />
     </task>
     <task id="LOCAL-00001" summary="Added more organization and improved worker">
       <option name="closed" value="true" />
@@ -130,7 +154,15 @@
       <option name="project" value="LOCAL" />
       <updated>1766092879889</updated>
     </task>
-    <option name="localTasksCounter" value="2" />
+    <task id="LOCAL-00002" summary="Added creating repo v1">
+      <option name="closed" value="true" />
+      <created>1766181827267</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1766181827267</updated>
+    </task>
+    <option name="localTasksCounter" value="3" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -138,6 +170,19 @@
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="Added more organization and improved worker" />
-    <option name="LAST_COMMIT_MESSAGE" value="Added more organization and improved worker" />
+    <MESSAGE value="Added creating repo v1" />
+    <option name="LAST_COMMIT_MESSAGE" value="Added creating repo v1" />
+  </component>
+  <component name="XDebuggerManager">
+    <breakpoint-manager>
+      <breakpoints>
+        <line-breakpoint enabled="true" type="javascript">
+          <url>file://$PROJECT_DIR$/src/renderer/src/components/ui/dialog.tsx</url>
+          <line>9</line>
+          <properties lambdaOrdinal="-1" />
+          <option name="timeStamp" value="1" />
+        </line-breakpoint>
+      </breakpoints>
+    </breakpoint-manager>
   </component>
 </project>

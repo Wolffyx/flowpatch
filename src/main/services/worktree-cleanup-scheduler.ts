@@ -109,10 +109,14 @@ export class WorktreeCleanupScheduler {
     const manager = new GitWorktreeManager(repoPath)
 
     for (const wt of pending) {
-      const updatedAt = new Date(wt.updated_at).getTime()
-      const age = now - updatedAt
+      // Use cleanup_requested_at if available, otherwise fall back to updated_at
+      // This ensures lock renewals don't reset the cleanup timer
+      const cleanupRequestedAt = wt.cleanup_requested_at
+        ? new Date(wt.cleanup_requested_at).getTime()
+        : new Date(wt.updated_at).getTime()
+      const age = now - cleanupRequestedAt
 
-      // Only clean up if enough time has passed
+      // Only clean up if enough time has passed since cleanup was requested
       if (age >= delayMs) {
         try {
           await manager.removeWorktree(wt.worktree_path, {
@@ -120,9 +124,11 @@ export class WorktreeCleanupScheduler {
             config
           })
           updateWorktreeStatus(wt.id, 'cleaned')
+          console.log(`[WorktreeCleanupScheduler] Cleaned up worktree: ${wt.worktree_path}`)
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err)
           updateWorktreeStatus(wt.id, 'error', errorMsg)
+          console.error(`[WorktreeCleanupScheduler] Failed to clean up worktree ${wt.worktree_path}:`, errorMsg)
         }
       }
     }

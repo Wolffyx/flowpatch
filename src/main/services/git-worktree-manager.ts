@@ -1,7 +1,10 @@
-import { execSync } from 'child_process'
-import { existsSync, lstatSync, readdirSync, rmSync, writeFileSync } from 'fs'
+import { execFileSync } from 'child_process'
+import { existsSync, lstatSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import path from 'path'
 import type { WorktreeRoot } from '../../shared/types'
+
+const MAX_RETRIES = 3
+const RETRY_DELAY_MS = 1000
 
 export interface WorktreeInfo {
   worktreePath: string
@@ -38,22 +41,41 @@ export class GitWorktreeManager {
 
   /**
    * Execute a git command in the repo directory.
+   * Uses execFileSync with array arguments to prevent shell injection.
    * Returns stdout on success, throws on failure.
    */
-  private git(args: string, options?: { cwd?: string }): string {
+  private git(args: string[], options?: { cwd?: string; retry?: boolean }): string {
     const cwd = options?.cwd ?? this.repoPath
-    try {
-      const result = execSync(`git -C "${cwd}" ${args}`, {
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-        windowsHide: true
-      })
-      return result.trim()
-    } catch (err: unknown) {
-      const error = err as { stderr?: Buffer | string; message?: string }
-      const stderr = error.stderr?.toString() ?? error.message ?? 'Unknown git error'
-      throw new Error(`Git command failed: git ${args}\n${stderr}`)
+    const shouldRetry = options?.retry ?? false
+    const fullArgs = ['-C', cwd, ...args]
+
+    let lastError: Error | null = null
+    const attempts = shouldRetry ? MAX_RETRIES : 1
+
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        const result = execFileSync('git', fullArgs, {
+          encoding: 'utf-8',
+          stdio: ['pipe', 'pipe', 'pipe'],
+          windowsHide: true
+        })
+        return result.trim()
+      } catch (err: unknown) {
+        const error = err as { stderr?: Buffer | string; message?: string }
+        const stderr = error.stderr?.toString() ?? error.message ?? 'Unknown git error'
+        lastError = new Error(`Git command failed: git ${args.join(' ')}\n${stderr}`)
+
+        if (attempt < attempts) {
+          // Wait before retrying (synchronous delay)
+          const start = Date.now()
+          while (Date.now() - start < RETRY_DELAY_MS) {
+            // Busy wait - not ideal but necessary for sync function
+          }
+        }
+      }
     }
+
+    throw lastError!
   }
 
   /**
@@ -61,7 +83,7 @@ export class GitWorktreeManager {
    */
   checkWorktreeSupport(): boolean {
     try {
-      const version = this.git('--version')
+      const version = this.git(['--version'])
       const match = version.match(/git version (\d+)\.(\d+)/)
       if (!match) return false
       const major = parseInt(match[1], 10)
@@ -78,7 +100,7 @@ export class GitWorktreeManager {
    */
   list(): WorktreeInfo[] {
     try {
-      const output = this.git('worktree list --porcelain')
+      const output = this.git(['worktree', 'list', '--porcelain'])
       return this.parsePorcelainOutput(output)
     } catch {
       return []
@@ -139,7 +161,7 @@ export class GitWorktreeManager {
   getDefaultBranch(): string {
     // Try to get the default branch from remote (cross-platform; no shell redirection)
     try {
-      const remoteHead = this.git('symbolic-ref refs/remotes/origin/HEAD')
+      const remoteHead = this.git(['symbolic-ref', 'refs/remotes/origin/HEAD'])
       if (remoteHead) return remoteHead.replace(/^refs\/remotes\/origin\//, '')
     } catch {}
 
@@ -147,7 +169,7 @@ export class GitWorktreeManager {
     const candidates = ['main', 'master', 'develop']
     for (const branch of candidates) {
       try {
-        this.git(`rev-parse --verify refs/heads/${branch}`)
+        this.git(['rev-parse', '--verify', `refs/heads/${branch}`])
         return branch
       } catch {
         // Branch doesn't exist, try next
@@ -159,9 +181,10 @@ export class GitWorktreeManager {
 
   /**
    * Fetch from remote to ensure we have latest refs.
+   * Uses retry logic for network operations.
    */
   fetch(remote: string = 'origin'): void {
-    this.git(`fetch ${remote} --prune`)
+    this.git(['fetch', remote, '--prune'], { retry: true })
   }
 
   /**
@@ -236,14 +259,14 @@ export class GitWorktreeManager {
     let remote = false
 
     try {
-      this.git(`rev-parse --verify refs/heads/${branchName}`)
+      this.git(['rev-parse', '--verify', `refs/heads/${branchName}`])
       local = true
     } catch {
       // Branch doesn't exist locally
     }
 
     try {
-      this.git(`rev-parse --verify refs/remotes/origin/${branchName}`)
+      this.git(['rev-parse', '--verify', `refs/remotes/origin/${branchName}`])
       remote = true
     } catch {
       // Branch doesn't exist on remote
@@ -358,12 +381,12 @@ export class GitWorktreeManager {
     // Determine the base ref
     let baseRef = `origin/${baseBranch}`
     try {
-      this.git(`rev-parse --verify ${baseRef}`)
+      this.git(['rev-parse', '--verify', baseRef])
     } catch {
       // Remote branch doesn't exist, try local
       baseRef = baseBranch
       try {
-        this.git(`rev-parse --verify ${baseRef}`)
+        this.git(['rev-parse', '--verify', baseRef])
       } catch {
         throw new Error(`Base branch ${baseBranch} not found locally or on remote`)
       }
@@ -371,13 +394,13 @@ export class GitWorktreeManager {
 
     if (local) {
       // Branch exists locally, create worktree for it
-      this.git(`worktree add "${worktreePath}" ${branchName}`)
+      this.git(['worktree', 'add', worktreePath, branchName])
     } else if (remote) {
       // Branch exists on remote, create tracking branch with worktree
-      this.git(`worktree add --track -b ${branchName} "${worktreePath}" origin/${branchName}`)
+      this.git(['worktree', 'add', '--track', '-b', branchName, worktreePath, `origin/${branchName}`])
     } else {
       // Branch doesn't exist, create new branch from base
-      this.git(`worktree add -b ${branchName} "${worktreePath}" ${baseRef}`)
+      this.git(['worktree', 'add', '-b', branchName, worktreePath, baseRef])
     }
 
     this.tryWriteMarker(worktreePath)
@@ -389,7 +412,7 @@ export class GitWorktreeManager {
    */
   isDirty(worktreePath: string): boolean {
     try {
-      const status = this.git('status --porcelain', { cwd: worktreePath })
+      const status = this.git(['status', '--porcelain'], { cwd: worktreePath })
       return status.length > 0
     } catch {
       return false
@@ -443,9 +466,14 @@ export class GitWorktreeManager {
     }
 
     // Remove via git worktree command
-    const forceFlag = options?.force ? '--force' : ''
+    const args = ['worktree', 'remove']
+    if (options?.force) {
+      args.push('--force')
+    }
+    args.push(worktreePath)
+
     try {
-      this.git(`worktree remove ${forceFlag} "${worktreePath}"`)
+      this.git(args)
     } catch (err) {
       if (options?.force) {
         // Force remove failed, try manual cleanup
@@ -461,7 +489,7 @@ export class GitWorktreeManager {
    * Prune stale worktree entries.
    */
   prune(): void {
-    this.git('worktree prune')
+    this.git(['worktree', 'prune'])
   }
 
   /**
@@ -470,7 +498,7 @@ export class GitWorktreeManager {
   deleteBranch(branchName: string, force: boolean = false): boolean {
     try {
       const flag = force ? '-D' : '-d'
-      this.git(`branch ${flag} ${branchName}`)
+      this.git(['branch', flag, branchName])
       return true
     } catch {
       return false
@@ -481,7 +509,7 @@ export class GitWorktreeManager {
    * Get the current HEAD SHA of a worktree.
    */
   getHeadSha(worktreePath: string): string {
-    return this.git('rev-parse HEAD', { cwd: worktreePath })
+    return this.git(['rev-parse', 'HEAD'], { cwd: worktreePath })
   }
 
   /**
@@ -489,10 +517,69 @@ export class GitWorktreeManager {
    */
   getCurrentBranch(worktreePath: string): string | null {
     try {
-      const ref = this.git('symbolic-ref --short HEAD', { cwd: worktreePath })
+      const ref = this.git(['symbolic-ref', '--short', 'HEAD'], { cwd: worktreePath })
       return ref || null
     } catch {
       return null // Detached HEAD
+    }
+  }
+
+  /**
+   * Verify that a worktree is healthy (exists on disk with correct branch).
+   */
+  verifyWorktree(worktreePath: string, expectedBranch?: string): {
+    exists: boolean
+    healthy: boolean
+    branch: string | null
+    error?: string
+  } {
+    // Check if path exists
+    if (!existsSync(worktreePath)) {
+      return { exists: false, healthy: false, branch: null, error: 'Worktree path does not exist' }
+    }
+
+    // Check if it's a valid worktree directory
+    if (!this.isWorktreeDirectory(worktreePath)) {
+      return { exists: true, healthy: false, branch: null, error: 'Path exists but is not a worktree' }
+    }
+
+    // Verify git recognizes it as a worktree
+    const worktrees = this.list()
+    const match = worktrees.find(
+      (wt) => this.normalizePath(wt.worktreePath) === this.normalizePath(worktreePath)
+    )
+
+    if (!match) {
+      return { exists: true, healthy: false, branch: null, error: 'Directory exists but not registered as worktree' }
+    }
+
+    // Get current branch
+    const branch = this.getCurrentBranch(worktreePath)
+
+    // Verify branch matches if expected
+    if (expectedBranch && branch !== expectedBranch) {
+      return {
+        exists: true,
+        healthy: false,
+        branch,
+        error: `Branch mismatch: expected ${expectedBranch}, got ${branch}`
+      }
+    }
+
+    return { exists: true, healthy: true, branch }
+  }
+
+  /**
+   * Check if a worktree has the .patchwork-worktree marker file.
+   */
+  isPatchworkWorktree(worktreePath: string): boolean {
+    try {
+      const markerPath = path.join(worktreePath, '.patchwork-worktree')
+      if (!existsSync(markerPath)) return false
+      const content = readFileSync(markerPath, 'utf-8')
+      return content.trim() === 'managed'
+    } catch {
+      return false
     }
   }
 }

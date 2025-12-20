@@ -5,13 +5,14 @@ import { Button } from './ui/button'
 import { ScrollArea } from './ui/scroll-area'
 import { KanbanCard } from './KanbanCard'
 import { cn } from '../lib/utils'
-import type { Card, CardStatus } from '../../../shared/types'
+import type { Card, CardLink, CardStatus } from '../../../shared/types'
 
 interface KanbanColumnProps {
   id: CardStatus
   label: string
   color: string
   cards: Card[]
+  cardLinksByCardId: Record<string, CardLink[]>
   selectedCardId: string | null
   onSelectCard: (id: string) => void
   onAddCard?: () => void
@@ -22,6 +23,7 @@ export function KanbanColumn({
   label,
   color,
   cards,
+  cardLinksByCardId,
   selectedCardId,
   onSelectCard,
   onAddCard
@@ -63,6 +65,7 @@ export function KanbanColumn({
               <KanbanCard
                 key={card.id}
                 card={card}
+                linkedPRs={cardLinksByCardId[card.id]}
                 isSelected={card.id === selectedCardId}
                 onClick={() => onSelectCard(card.id)}
               />
