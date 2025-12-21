@@ -15,6 +15,7 @@ import { PullRequestsSection } from './components/PullRequestsSection'
 import { RepoStartDialog } from './components/RepoStartDialog'
 import { LabelSetupDialog } from './components/LabelSetupDialog'
 import { GithubProjectPromptDialog } from './components/GithubProjectPromptDialog'
+import { StartupCheckDialog } from './components/StartupCheckDialog'
 
 function readShowPullRequestsSection(project: Project): boolean {
   if (!project.policy_json) return false
@@ -34,6 +35,8 @@ function App(): React.JSX.Element {
   const [repoStartOpen, setRepoStartOpen] = useState(false)
   const [labelSetupOpen, setLabelSetupOpen] = useState(false)
   const [githubProjectPromptOpen, setGithubProjectPromptOpen] = useState(false)
+  const [startupCheckOpen, setStartupCheckOpen] = useState(false)
+  const [startupCheckPassed, setStartupCheckPassed] = useState(false)
 
   const selectedProject = store.getSelectedProject()
   const selectedCard = store.getSelectedCard()
@@ -104,6 +107,30 @@ function App(): React.JSX.Element {
     selectedProject?.project.policy_json,
     selectedProject?.project.last_sync_at
   ])
+
+  // Startup CLI agent check (first launch only)
+  useEffect(() => {
+    let canceled = false
+    window.electron.ipcRenderer
+      .invoke('checkCliAgents')
+      .then((result: { anyAvailable: boolean; isFirstCheck: boolean }) => {
+        if (canceled) return
+        if (result.anyAvailable) {
+          setStartupCheckPassed(true)
+        } else if (result.isFirstCheck) {
+          setStartupCheckOpen(true)
+        } else {
+          // Subsequent launches without agent: still allow app to proceed
+          setStartupCheckPassed(true)
+        }
+      })
+      .catch(() => {
+        if (!canceled) setStartupCheckPassed(true)
+      })
+    return () => {
+      canceled = true
+    }
+  }, [])
 
   // Global keyboard shortcuts
   useEffect(() => {
@@ -285,6 +312,12 @@ function App(): React.JSX.Element {
           project={selectedProject.project}
         />
       )}
+
+      <StartupCheckDialog
+        open={startupCheckOpen}
+        onOpenChange={setStartupCheckOpen}
+        onCheckComplete={() => setStartupCheckPassed(true)}
+      />
 
       {/* Error display */}
       {store.error && (

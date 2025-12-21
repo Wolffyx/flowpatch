@@ -43,6 +43,7 @@ import {
   stopAllWorkerLoops
 } from './worker/loop'
 import { execFile } from 'child_process'
+import { promisify } from 'util'
 import { existsSync, readFileSync, mkdirSync, readdirSync, writeFileSync } from 'fs'
 import YAML from 'yaml'
 import {
@@ -741,6 +742,37 @@ app.whenReady().then(() => {
     const settingKey = `api_key_${payload.key}`
     setAppSetting(settingKey, payload.value || '')
     return { success: true }
+  })
+
+  // ==================== CLI Agent Check ====================
+
+  ipcMain.handle('checkCliAgents', async () => {
+    const isFirstCheck = getAppSetting('startup_agent_check_completed') !== '1'
+
+    const execFileAsync = promisify(execFile)
+    const checkCommand = async (cmd: string): Promise<boolean> => {
+      try {
+        if (process.platform === 'win32') {
+          await execFileAsync('where', [cmd])
+        } else {
+          await execFileAsync('which', [cmd])
+        }
+        return true
+      } catch {
+        return false
+      }
+    }
+
+    const [claude, codex] = await Promise.all([checkCommand('claude'), checkCommand('codex')])
+
+    const anyAvailable = claude || codex
+
+    // Mark completed only if an agent is found on first check
+    if (anyAvailable && isFirstCheck) {
+      setAppSetting('startup_agent_check_completed', '1')
+    }
+
+    return { claude, codex, anyAvailable, isFirstCheck }
   })
 
   // ==================== Repo Onboarding ====================
