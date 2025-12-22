@@ -66,6 +66,8 @@ import { logAction } from '@shared/utils'
 import { GitWorktreeManager } from './services/git-worktree-manager'
 import { WorktreeReconciler, reconcileAllProjects } from './services/worktree-reconciler'
 import { startCleanupScheduler, stopCleanupScheduler } from './services/worktree-cleanup-scheduler'
+import { registerShellHandlers } from './ipc/shellHandlers'
+import { sendToAllTabs, getTabByProjectId, closeTab } from './tabManager'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -108,9 +110,12 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     autoHideMenuBar: true,
+    frame: false, // Custom title bar for tabs
+    titleBarStyle: 'hidden',
+    backgroundColor: '#0b0b0c',
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
+      preload: join(__dirname, '../preload/shell.js'),
       sandbox: false
     }
   })
@@ -124,10 +129,14 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
+  // Register shell IPC handlers (includes tab manager initialization)
+  registerShellHandlers(mainWindow)
+
+  // Load the shell renderer
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    mainWindow.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/shell/index.html`)
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    mainWindow.loadFile(join(__dirname, '../renderer/shell/index.html'))
   }
 }
 
@@ -135,6 +144,8 @@ function notifyRenderer(): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('stateUpdated')
   }
+  // Also notify all project tabs (WebContentsViews)
+  sendToAllTabs('stateUpdated')
 }
 
 app.whenReady().then(() => {
@@ -545,20 +556,31 @@ app.whenReady().then(() => {
           }
         }
 
-        // Sync status change to remote if card has remote
+        // Queue async remote sync in background (fire-and-forget for fast UI response)
         if (card.remote_repo_key) {
-          const job = createJob(card.project_id, 'sync_push', card.id, { status: payload.status })
-          // Execute the sync push
-          const engine = new SyncEngine(card.project_id)
-          const initialized = await engine.initialize()
-          if (initialized) {
-            const success = await engine.pushStatusChange(payload.cardId, payload.status)
-            updateJobState(job.id, success ? 'succeeded' : 'failed')
-            logAction('moveCard:pushStatus', { cardId: payload.cardId, success })
-          } else {
-            updateJobState(job.id, 'failed', undefined, 'Failed to initialize sync engine')
-            logAction('moveCard:pushStatus:init_failed', { cardId: payload.cardId })
-          }
+          const projectId = card.project_id
+          const cardId = payload.cardId
+          const status = payload.status
+
+          setImmediate(async () => {
+            const job = createJob(projectId, 'sync_push', cardId, { status })
+            try {
+              const engine = new SyncEngine(projectId)
+              const initialized = await engine.initialize()
+              if (initialized) {
+                const success = await engine.pushStatusChange(cardId, status)
+                updateJobState(job.id, success ? 'succeeded' : 'failed')
+                logAction('moveCard:pushStatus', { cardId, success })
+              } else {
+                updateJobState(job.id, 'failed', undefined, 'Failed to initialize sync engine')
+                logAction('moveCard:pushStatus:init_failed', { cardId })
+              }
+            } catch (error) {
+              updateJobState(job.id, 'failed', undefined, String(error))
+              logAction('moveCard:pushStatus:error', { cardId, error: String(error) })
+            }
+            notifyRenderer() // Notify when sync completes
+          })
         }
       }
       notifyRenderer()
@@ -722,6 +744,15 @@ app.whenReady().then(() => {
       return { error: 'Invalid theme preference' }
     }
     setAppSetting('theme', theme)
+
+    // Broadcast theme change to all project tabs
+    // Resolve the theme if it's 'system'
+    const { nativeTheme } = require('electron')
+    const resolvedTheme = theme === 'system'
+      ? (nativeTheme.shouldUseDarkColors ? 'dark' : 'light')
+      : theme
+    sendToAllTabs('themeChanged', { preference: theme, resolved: resolvedTheme })
+
     return { success: true }
   })
 
@@ -729,6 +760,52 @@ app.whenReady().then(() => {
     const { nativeTheme } = require('electron')
     return nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
   })
+
+  // Get project by ID
+  ipcMain.handle('getProject', (_e, payload: { projectId: string }) => {
+    if (!payload?.projectId) return null
+    return getProject(payload.projectId)
+  })
+
+  // Generic updateProjectPolicy handler (merges partial policy updates)
+  ipcMain.handle(
+    'updateProjectPolicy',
+    (_e, payload: { projectId: string; policy: Partial<PolicyConfig> }) => {
+      logAction('updateProjectPolicy', payload)
+
+      if (!payload?.projectId) return { error: 'Project ID required' }
+      if (!payload?.policy) return { error: 'Policy patch required' }
+
+      const project = getProject(payload.projectId)
+      if (!project) return { error: 'Project not found' }
+
+      let currentPolicy: PolicyConfig = DEFAULT_POLICY
+      if (project.policy_json) {
+        try {
+          currentPolicy = JSON.parse(project.policy_json) as PolicyConfig
+        } catch {
+          // fall back to DEFAULT_POLICY
+        }
+      }
+
+      // Deep merge the policy update
+      const updatedPolicy: PolicyConfig = {
+        ...currentPolicy,
+        worker: {
+          ...currentPolicy.worker,
+          ...(payload.policy.worker || {})
+        },
+        ui: {
+          ...currentPolicy.ui,
+          ...(payload.policy.ui || {})
+        }
+      }
+
+      updateProjectPolicyJson(payload.projectId, JSON.stringify(updatedPolicy))
+      notifyRenderer()
+      return { success: true, project: getProject(payload.projectId) }
+    }
+  )
 
   // API Key handlers (global app settings)
   ipcMain.handle('getApiKey', (_e, payload: { key: string }) => {
@@ -815,10 +892,17 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('resetLabelWizard', (_e, payload: { projectId: string }) => {
-    if (!payload?.projectId) return { error: 'Project ID required' }
+    console.log('[Main] resetLabelWizard called with payload:', payload)
+    if (!payload?.projectId) {
+      console.log('[Main] resetLabelWizard: No projectId provided')
+      return { error: 'Project ID required' }
+    }
+    console.log('[Main] resetLabelWizard: Setting onboarding bools for project:', payload.projectId)
     setOnboardingBool(payload.projectId, 'labelsDismissed', false)
     setOnboardingBool(payload.projectId, 'labelsCompleted', false)
+    console.log('[Main] resetLabelWizard: Calling notifyRenderer()')
     notifyRenderer()
+    console.log('[Main] resetLabelWizard: Done, returning success')
     return { success: true }
   })
 
@@ -1034,7 +1118,7 @@ app.whenReady().then(() => {
   )
 
   // Unlink project (removes from app but keeps files)
-  ipcMain.handle('unlinkProject', (_e, payload: { projectId: string }) => {
+  ipcMain.handle('unlinkProject', async (_e, payload: { projectId: string }) => {
     logAction('unlinkProject', payload)
     if (!payload?.projectId) return { error: 'Project ID required' }
 
@@ -1044,10 +1128,20 @@ app.whenReady().then(() => {
     // Stop worker loop if running
     stopWorkerLoop(payload.projectId)
 
+    // Close the tab for this project if open
+    const tab = getTabByProjectId(payload.projectId)
+    if (tab) {
+      await closeTab(tab.id)
+    }
+
     // Delete project from database (this also deletes associated cards, events, jobs, etc.)
-    const success = dbDeleteProject(payload.projectId)
-    if (!success) {
-      return { error: 'Failed to unlink project' }
+    try {
+      const success = dbDeleteProject(payload.projectId)
+      if (!success) {
+        return { error: 'Failed to unlink project' }
+      }
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) }
     }
 
     logAction('unlinkProject:success', { projectId: payload.projectId, name: project.name })
@@ -1320,6 +1414,29 @@ async function openRepoAtPath(repoPath: string): Promise<OpenRepoResult> {
   })
 
   createEvent(project.id, 'card_created', undefined, { action: 'project_opened' })
+
+  // Auto-configure worktree for autonomous workers
+  try {
+    const { initializeProjectWorktree } = await import('./services/project-initializer')
+    const initResult = await initializeProjectWorktree(project.id)
+    if (initResult.configured) {
+      logAction('project:worktreeInitialized', {
+        projectId: project.id,
+        worktreeRoot: initResult.worktreeRoot,
+        maxWorkers: initResult.maxWorkers
+      })
+    } else if (initResult.error) {
+      logAction('project:worktreeInitError', {
+        projectId: project.id,
+        error: initResult.error
+      })
+    }
+  } catch (error) {
+    logAction('project:worktreeInitException', {
+      projectId: project.id,
+      error: error instanceof Error ? error.message : String(error)
+    })
+  }
 
   return {
     project,

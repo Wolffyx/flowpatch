@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useMemo, useState, useEffect, useRef } from 'react'
 import {
   FolderOpen,
   RefreshCw,
@@ -9,13 +9,15 @@ import {
 import { Dialog, DialogContent } from './ui/dialog'
 import { Input } from './ui/input'
 import { cn } from '../lib/utils'
+import { acceleratorToDisplay, detectPlatform } from '@shared/accelerator'
+import { SHORTCUT_COMMANDS, type ShortcutCommandId } from '@shared/shortcuts'
 
 interface CommandItem {
   id: string
   label: string
   description?: string
   icon: React.ReactNode
-  shortcut?: string
+  shortcutId?: ShortcutCommandId
   action: () => void
 }
 
@@ -27,6 +29,7 @@ interface CommandPaletteProps {
   onSync: () => void
   onRunWorker: () => void
   onAddCard: () => void
+  shortcuts?: Partial<Record<ShortcutCommandId, string>>
 }
 
 export function CommandPalette({
@@ -36,11 +39,26 @@ export function CommandPalette({
   onOpenRepo,
   onSync,
   onRunWorker,
-  onAddCard
+  onAddCard,
+  shortcuts
 }: CommandPaletteProps): React.JSX.Element {
   const [search, setSearch] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
+  const platform = detectPlatform()
+
+  const defaultById = useMemo(() => {
+    const map: Record<string, string> = {}
+    for (const cmd of SHORTCUT_COMMANDS) map[cmd.id] = cmd.defaultAccelerator
+    return map
+  }, [])
+
+  const shortcutLabel = (id: ShortcutCommandId | undefined): string | null => {
+    if (!id) return null
+    const accel = shortcuts?.[id] ?? defaultById[id]
+    if (!accel) return null
+    return acceleratorToDisplay(accel, platform)
+  }
 
   const commands: CommandItem[] = [
     {
@@ -48,7 +66,7 @@ export function CommandPalette({
       label: 'Open / Create Repository',
       description: 'Open an existing repo or create a new one',
       icon: <FolderOpen className="h-4 w-4" />,
-      shortcut: 'Ctrl+O',
+      shortcutId: 'repo.open' as ShortcutCommandId,
       action: () => {
         onOpenRepo()
         onOpenChange(false)
@@ -61,7 +79,7 @@ export function CommandPalette({
             label: 'Sync Now',
             description: 'Sync cards with remote',
             icon: <RefreshCw className="h-4 w-4" />,
-            shortcut: 'Ctrl+S',
+            shortcutId: 'sync.now' as ShortcutCommandId,
             action: () => {
               onSync()
               onOpenChange(false)
@@ -72,7 +90,7 @@ export function CommandPalette({
             label: 'Run Worker',
             description: 'Run worker on ready cards',
             icon: <Play className="h-4 w-4" />,
-            shortcut: 'Ctrl+R',
+            shortcutId: 'worker.run' as ShortcutCommandId,
             action: () => {
               onRunWorker()
               onOpenChange(false)
@@ -83,7 +101,7 @@ export function CommandPalette({
             label: 'Add Card',
             description: 'Create a new local card',
             icon: <Plus className="h-4 w-4" />,
-            shortcut: 'Ctrl+N',
+            shortcutId: 'card.add' as ShortcutCommandId,
             action: () => {
               onAddCard()
               onOpenChange(false)
@@ -170,9 +188,9 @@ export function CommandPalette({
                     <p className="text-xs text-muted-foreground">{cmd.description}</p>
                   )}
                 </div>
-                {cmd.shortcut && (
+                {cmd.shortcutId && shortcutLabel(cmd.shortcutId) && (
                   <kbd className="hidden sm:inline-flex h-5 items-center gap-1 rounded border bg-muted px-1.5 font-mono text-xs text-muted-foreground">
-                    {cmd.shortcut}
+                    {shortcutLabel(cmd.shortcutId)}
                   </kbd>
                 )}
               </button>

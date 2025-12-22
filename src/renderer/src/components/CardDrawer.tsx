@@ -108,7 +108,7 @@ export function CardDrawer({
   }
 
   return (
-    <div className="flex h-full w-80 shrink-0 flex-col border-l bg-card">
+    <div className="flex h-full w-80 max-w-full shrink-0 flex-col border-l bg-card min-h-0">
       {/* Header */}
       <div className="flex items-center justify-between border-b p-4">
         <h2 className="font-semibold truncate">Card Details</h2>
@@ -117,8 +117,8 @@ export function CardDrawer({
         </Button>
       </div>
 
-      <ScrollArea className="flex-1">
-        <div className="p-4 space-y-6">
+      <ScrollArea className="flex-1 min-h-0">
+        <div className="p-4 pr-6 space-y-6">
           {/* Title and number */}
           <div>
             <div className="flex items-center gap-2 mb-2">
@@ -163,7 +163,7 @@ export function CardDrawer({
           {linkedPRs && linkedPRs.length > 0 && (
             <div>
               <h4 className="text-sm font-medium mb-2">Linked Pull Requests</h4>
-              <div className="space-y-2 rounded-md bg-secondary p-3">
+              <div className="space-y-2 rounded-md bg-muted p-3">
                 {linkedPRs.map((link) => (
                   <button
                     key={link.id}
@@ -188,7 +188,7 @@ export function CardDrawer({
           {card.body && (
             <div>
               <h4 className="text-sm font-medium mb-2">Description</h4>
-              <div className="text-sm text-muted-foreground whitespace-pre-wrap rounded-md bg-secondary p-3 max-h-48 overflow-auto">
+              <div className="text-sm text-muted-foreground whitespace-pre-wrap break-words overflow-x-hidden rounded-md bg-muted p-3">
                 {card.body}
               </div>
             </div>
@@ -260,7 +260,7 @@ export function CardDrawer({
           {worktree && (
             <div>
               <h4 className="text-sm font-medium mb-2">Worktree</h4>
-              <div className="space-y-2 rounded-md bg-secondary p-3">
+              <div className="space-y-2 rounded-md bg-muted p-3">
                 <div className="flex items-center gap-2">
                   <GitBranch className="h-4 w-4 text-muted-foreground" />
                   <span className="text-sm font-mono truncate">{worktree.branch_name}</span>

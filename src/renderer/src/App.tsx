@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
 import { KanbanBoard } from './components/KanbanBoard'
@@ -16,6 +16,13 @@ import { RepoStartDialog } from './components/RepoStartDialog'
 import { LabelSetupDialog } from './components/LabelSetupDialog'
 import { GithubProjectPromptDialog } from './components/GithubProjectPromptDialog'
 import { StartupCheckDialog } from './components/StartupCheckDialog'
+import { matchAccelerator } from '@shared/accelerator'
+import { useShortcuts } from './lib/useShortcuts'
+import {
+  buildLinkedPullRequestIndex,
+  filterOutLinkedPullRequestCards,
+  isLinkedPullRequestCard
+} from './lib/linkedPullRequests'
 
 function readShowPullRequestsSection(project: Project): boolean {
   if (!project.policy_json) return false
@@ -36,18 +43,29 @@ function App(): React.JSX.Element {
   const [labelSetupOpen, setLabelSetupOpen] = useState(false)
   const [githubProjectPromptOpen, setGithubProjectPromptOpen] = useState(false)
   const [startupCheckOpen, setStartupCheckOpen] = useState(false)
-  const [startupCheckPassed, setStartupCheckPassed] = useState(false)
 
   const selectedProject = store.getSelectedProject()
   const selectedCard = store.getSelectedCard()
+  const { byId: shortcutById } = useShortcuts()
   const showPullRequestsSection = selectedProject ? readShowPullRequestsSection(selectedProject.project) : false
+
+  const linkedPrIndex = useMemo(
+    () => buildLinkedPullRequestIndex(selectedProject?.cardLinks),
+    [selectedProject?.cardLinks]
+  )
+
   const pullRequestCards = selectedProject
-    ? selectedProject.cards.filter((c) => c.type === 'pr' || c.type === 'mr')
+    ? selectedProject.cards.filter((c) => (c.type === 'pr' || c.type === 'mr') && !isLinkedPullRequestCard(c, linkedPrIndex))
     : []
-  const boardCards =
-    selectedProject && showPullRequestsSection
-      ? selectedProject.cards.filter((c) => c.type !== 'pr' && c.type !== 'mr')
-      : selectedProject?.cards || []
+
+  const boardCards = selectedProject
+    ? filterOutLinkedPullRequestCards(
+        showPullRequestsSection
+          ? selectedProject.cards.filter((c) => c.type !== 'pr' && c.type !== 'mr')
+          : selectedProject.cards,
+        linkedPrIndex
+      )
+    : []
 
   const workerJobs = (selectedProject?.jobs || []).filter((j) => j.type === 'worker_run')
   const activeWorkerJob = workerJobs.find((j) => j.state === 'running' || j.state === 'queued') || null
@@ -73,6 +91,15 @@ function App(): React.JSX.Element {
         ? 'gitlab'
         : null
     : null
+
+  // If a PR becomes "collapsed into" an issue (linked), ensure it doesn't remain selected.
+  useEffect(() => {
+    if (!selectedProject || !store.selectedCardId) return
+    const card = selectedProject.cards.find((c) => c.id === store.selectedCardId)
+    if (card && isLinkedPullRequestCard(card, linkedPrIndex)) {
+      store.selectCard(null)
+    }
+  }, [linkedPrIndex, selectedProject, store])
 
   // Repo onboarding dialogs (labels + optional GitHub Project creation)
   useEffect(() => {
@@ -115,17 +142,12 @@ function App(): React.JSX.Element {
       .invoke('checkCliAgents')
       .then((result: { anyAvailable: boolean; isFirstCheck: boolean }) => {
         if (canceled) return
-        if (result.anyAvailable) {
-          setStartupCheckPassed(true)
-        } else if (result.isFirstCheck) {
+        if (!result.anyAvailable && result.isFirstCheck) {
           setStartupCheckOpen(true)
-        } else {
-          // Subsequent launches without agent: still allow app to proceed
-          setStartupCheckPassed(true)
         }
       })
       .catch(() => {
-        if (!canceled) setStartupCheckPassed(true)
+        // ignore
       })
     return () => {
       canceled = true
@@ -135,24 +157,67 @@ function App(): React.JSX.Element {
   // Global keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent): void => {
-      // Ctrl+K or Cmd+K to open command palette
-      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+      const target = e.target as HTMLElement | null
+      const tag = target?.tagName?.toLowerCase()
+      const isEditable =
+        tag === 'input' ||
+        tag === 'textarea' ||
+        tag === 'select' ||
+        target?.isContentEditable === true
+
+      const shortcutOpenPalette = shortcutById['commandPalette.open'] ?? 'CmdOrCtrl+K'
+      const shortcutEscape = shortcutById['ui.escape'] ?? 'Escape'
+      const shortcutOpenRepo = shortcutById['repo.open'] ?? 'CmdOrCtrl+O'
+      const shortcutSync = shortcutById['sync.now'] ?? 'CmdOrCtrl+S'
+      const shortcutRunWorker = shortcutById['worker.run'] ?? 'CmdOrCtrl+R'
+      const shortcutAddCard = shortcutById['card.add'] ?? 'CmdOrCtrl+N'
+
+      if (!isEditable && matchAccelerator(shortcutOpenPalette, e)) {
         e.preventDefault()
         setCommandPaletteOpen(true)
+        return
       }
-      // Escape to close panels
-      if (e.key === 'Escape') {
+
+      if (matchAccelerator(shortcutEscape, e)) {
+        e.preventDefault()
         if (commandPaletteOpen) {
           setCommandPaletteOpen(false)
         } else if (store.selectedCardId) {
           store.selectCard(null)
         }
+        return
+      }
+
+      if (isEditable) return
+
+      if (matchAccelerator(shortcutOpenRepo, e)) {
+        e.preventDefault()
+        setRepoStartOpen(true)
+        return
+      }
+
+      if (selectedProject && matchAccelerator(shortcutSync, e)) {
+        e.preventDefault()
+        void store.syncProject()
+        return
+      }
+
+      if (selectedProject && matchAccelerator(shortcutRunWorker, e)) {
+        e.preventDefault()
+        void store.runWorker()
+        return
+      }
+
+      if (selectedProject && matchAccelerator(shortcutAddCard, e)) {
+        e.preventDefault()
+        setAddCardDialogOpen(true)
+        return
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [commandPaletteOpen, store])
+  }, [commandPaletteOpen, selectedProject, shortcutById, store])
 
   const handleAddCard = useCallback(() => {
     setAddCardDialogOpen(true)
@@ -194,6 +259,7 @@ function App(): React.JSX.Element {
           onSync={store.syncProject}
           onToggleWorker={store.toggleWorker}
           onOpenCommandPalette={() => setCommandPaletteOpen(true)}
+          commandPaletteShortcut={shortcutById['commandPalette.open']}
           onSetWorkerToolPreference={store.setWorkerToolPreference}
           onSetWorkerRollbackOnCancel={store.setWorkerRollbackOnCancel}
           onSetShowPullRequestsSection={store.setShowPullRequestsSection}
@@ -201,7 +267,7 @@ function App(): React.JSX.Element {
         />
 
         {/* Board and drawer */}
-        <div className="flex flex-1 overflow-hidden">
+        <div className="flex flex-1 overflow-hidden min-h-0">
           {selectedProject ? (
             <>
               {showPullRequestsSection && (
@@ -212,7 +278,7 @@ function App(): React.JSX.Element {
                 />
               )}
 
-              <div className="flex-1 overflow-hidden">
+              <div className="flex-1 overflow-hidden min-h-0">
                 <KanbanBoard
                   cards={boardCards}
                   cardLinksByCardId={store.cardLinksByCardId}
@@ -270,6 +336,7 @@ function App(): React.JSX.Element {
         onSync={store.syncProject}
         onRunWorker={() => store.runWorker()}
         onAddCard={handleAddCard}
+        shortcuts={shortcutById}
       />
 
       {/* Add card dialog */}
@@ -316,7 +383,7 @@ function App(): React.JSX.Element {
       <StartupCheckDialog
         open={startupCheckOpen}
         onOpenChange={setStartupCheckOpen}
-        onCheckComplete={() => setStartupCheckPassed(true)}
+        onCheckComplete={() => setStartupCheckOpen(false)}
       />
 
       {/* Error display */}

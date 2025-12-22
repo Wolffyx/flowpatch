@@ -9,15 +9,20 @@ import type {
   Event,
   Job,
   Worktree,
+  Subtask,
+  WorkerSlot,
+  WorkerProgress,
   CardStatus,
   JobState,
   JobType,
   EventType,
   WorktreeStatus,
+  SubtaskStatus,
+  WorkerSlotStatus,
   PolicyConfig
 } from '../shared/types'
 
-export type { Project, Card, CardLink, Event, Job, Worktree, CardStatus, WorktreeStatus }
+export type { Project, Card, CardLink, Event, Job, Worktree, Subtask, WorkerSlot, WorkerProgress, CardStatus, WorktreeStatus, SubtaskStatus, WorkerSlotStatus }
 
 let db: Database.Database | null = null
 
@@ -210,6 +215,74 @@ export function initDb(): Database.Database {
     // Column already exists
   }
 
+  // Subtasks table (for decomposed tasks)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS subtasks (
+      id TEXT PRIMARY KEY,
+      parent_card_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT,
+      estimated_minutes INTEGER,
+      sequence INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      remote_issue_number TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT,
+      FOREIGN KEY (parent_card_id) REFERENCES cards(id) ON DELETE CASCADE,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_subtasks_parent ON subtasks(parent_card_id);
+    CREATE INDEX IF NOT EXISTS idx_subtasks_project ON subtasks(project_id);
+    CREATE INDEX IF NOT EXISTS idx_subtasks_status ON subtasks(status);
+  `)
+
+  // Worker slots table (for pool management)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS worker_slots (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      slot_number INTEGER NOT NULL,
+      card_id TEXT,
+      job_id TEXT,
+      worktree_id TEXT,
+      status TEXT NOT NULL DEFAULT 'idle',
+      started_at TEXT,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+      FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE SET NULL,
+      FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL,
+      FOREIGN KEY (worktree_id) REFERENCES worktrees(id) ON DELETE SET NULL,
+      UNIQUE(project_id, slot_number)
+    );
+    CREATE INDEX IF NOT EXISTS idx_slots_project ON worker_slots(project_id);
+    CREATE INDEX IF NOT EXISTS idx_slots_status ON worker_slots(status);
+  `)
+
+  // Worker progress table (for iterative AI sessions)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS worker_progress (
+      id TEXT PRIMARY KEY,
+      card_id TEXT NOT NULL,
+      job_id TEXT,
+      iteration INTEGER NOT NULL DEFAULT 1,
+      total_iterations INTEGER NOT NULL DEFAULT 1,
+      subtask_index INTEGER NOT NULL DEFAULT 0,
+      subtasks_completed INTEGER NOT NULL DEFAULT 0,
+      files_modified_json TEXT,
+      context_summary TEXT,
+      progress_file_path TEXT,
+      last_checkpoint TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE CASCADE,
+      FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_progress_card ON worker_progress(card_id);
+    CREATE INDEX IF NOT EXISTS idx_progress_job ON worker_progress(job_id);
+  `)
+
   return db
 }
 
@@ -296,8 +369,46 @@ export function upsertProject(
 
 export function deleteProject(id: string): boolean {
   const d = getDb()
-  const result = d.prepare('DELETE FROM projects WHERE id = ?').run(id)
-  return result.changes > 0
+
+  const deleteByIds = (table: string, column: string, ids: string[]): void => {
+    // SQLite default max variables is 999
+    const chunkSize = 900
+    for (let i = 0; i < ids.length; i += chunkSize) {
+      const chunk = ids.slice(i, i + chunkSize)
+      const placeholders = chunk.map(() => '?').join(',')
+      d.prepare(`DELETE FROM ${table} WHERE ${column} IN (${placeholders})`).run(...chunk)
+    }
+  }
+
+  try {
+    const tx = d.transaction((): boolean => {
+      const cardIds = (d.prepare('SELECT id FROM cards WHERE project_id = ?').all(id) as { id: string }[]).map(
+        (r) => r.id
+      )
+
+      if (cardIds.length) {
+        deleteByIds('worker_progress', 'card_id', cardIds)
+        deleteByIds('card_links', 'card_id', cardIds)
+        deleteByIds('events', 'card_id', cardIds)
+        deleteByIds('subtasks', 'parent_card_id', cardIds)
+      }
+
+      d.prepare('DELETE FROM worker_slots WHERE project_id = ?').run(id)
+      d.prepare('DELETE FROM worktrees WHERE project_id = ?').run(id)
+      d.prepare('DELETE FROM jobs WHERE project_id = ?').run(id)
+      d.prepare('DELETE FROM sync_state WHERE project_id = ?').run(id)
+      d.prepare('DELETE FROM events WHERE project_id = ?').run(id)
+      d.prepare('DELETE FROM subtasks WHERE project_id = ?').run(id)
+      d.prepare('DELETE FROM cards WHERE project_id = ?').run(id)
+
+      const result = d.prepare('DELETE FROM projects WHERE id = ?').run(id)
+      return result.changes > 0
+    })
+
+    return tx()
+  } catch {
+    return false
+  }
 }
 
 export function updateProjectWorkerEnabled(projectId: string, enabled: boolean): Project | null {
@@ -574,6 +685,36 @@ export function createCardLink(
   `
   ).run(id, cardId, linkedType, linkedUrl, linkedRemoteRepoKey ?? null, linkedNumberOrIid ?? null, now)
   return d.prepare('SELECT * FROM card_links WHERE id = ?').get(id) as CardLink
+}
+
+export function ensureCardLink(
+  cardId: string,
+  linkedType: 'pr' | 'mr',
+  linkedUrl: string,
+  linkedRemoteRepoKey?: string,
+  linkedNumberOrIid?: string
+): CardLink {
+  const d = getDb()
+  const existing = d
+    .prepare('SELECT * FROM card_links WHERE card_id = ? AND linked_url = ? LIMIT 1')
+    .get(cardId, linkedUrl) as CardLink | undefined
+
+  if (!existing) {
+    return createCardLink(cardId, linkedType, linkedUrl, linkedRemoteRepoKey, linkedNumberOrIid)
+  }
+
+  const shouldUpdateNumber = !existing.linked_number_or_iid && linkedNumberOrIid
+  const shouldUpdateRepoKey = !existing.linked_remote_repo_key && linkedRemoteRepoKey
+  if (shouldUpdateNumber || shouldUpdateRepoKey) {
+    d.prepare('UPDATE card_links SET linked_remote_repo_key = ?, linked_number_or_iid = ? WHERE id = ?').run(
+      linkedRemoteRepoKey ?? existing.linked_remote_repo_key,
+      linkedNumberOrIid ?? existing.linked_number_or_iid,
+      existing.id
+    )
+    return d.prepare('SELECT * FROM card_links WHERE id = ?').get(existing.id) as CardLink
+  }
+
+  return existing
 }
 
 // ==================== Events ====================
@@ -1107,6 +1248,387 @@ export function setAppSetting(key: string, value: string): void {
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
   `
   ).run(key, value, now)
+}
+
+export function deleteAppSetting(key: string): void {
+  const d = getDb()
+  d.prepare('DELETE FROM app_settings WHERE key = ?').run(key)
+}
+
+// ==================== Subtasks ====================
+
+export interface SubtaskCreate {
+  parentCardId: string
+  projectId: string
+  title: string
+  description?: string
+  estimatedMinutes?: number
+  sequence: number
+  remoteIssueNumber?: string
+}
+
+export function listSubtasks(parentCardId: string): Subtask[] {
+  const d = getDb()
+  const stmt = d.prepare(
+    'SELECT * FROM subtasks WHERE parent_card_id = ? ORDER BY sequence ASC'
+  )
+  return stmt.all(parentCardId) as Subtask[]
+}
+
+export function listSubtasksByProject(projectId: string): Subtask[] {
+  const d = getDb()
+  const stmt = d.prepare(
+    'SELECT * FROM subtasks WHERE project_id = ? ORDER BY created_at DESC'
+  )
+  return stmt.all(projectId) as Subtask[]
+}
+
+export function getSubtask(id: string): Subtask | null {
+  const d = getDb()
+  const stmt = d.prepare('SELECT * FROM subtasks WHERE id = ?')
+  return (stmt.get(id) as Subtask) ?? null
+}
+
+export function createSubtask(data: SubtaskCreate): Subtask {
+  const d = getDb()
+  const id = cryptoRandomId()
+  const now = new Date().toISOString()
+
+  d.prepare(
+    `
+    INSERT INTO subtasks (
+      id, parent_card_id, project_id, title, description,
+      estimated_minutes, sequence, status, remote_issue_number,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+  `
+  ).run(
+    id,
+    data.parentCardId,
+    data.projectId,
+    data.title,
+    data.description ?? null,
+    data.estimatedMinutes ?? null,
+    data.sequence,
+    data.remoteIssueNumber ?? null,
+    now,
+    now
+  )
+
+  return d.prepare('SELECT * FROM subtasks WHERE id = ?').get(id) as Subtask
+}
+
+export function updateSubtaskStatus(
+  id: string,
+  status: SubtaskStatus
+): Subtask | null {
+  const d = getDb()
+  const now = new Date().toISOString()
+  const completedAt = status === 'completed' ? now : null
+
+  d.prepare(
+    'UPDATE subtasks SET status = ?, completed_at = ?, updated_at = ? WHERE id = ?'
+  ).run(status, completedAt, now, id)
+
+  return getSubtask(id)
+}
+
+export function getNextPendingSubtask(parentCardId: string): Subtask | null {
+  const d = getDb()
+  const stmt = d.prepare(
+    `SELECT * FROM subtasks
+     WHERE parent_card_id = ? AND status = 'pending'
+     ORDER BY sequence ASC LIMIT 1`
+  )
+  return (stmt.get(parentCardId) as Subtask) ?? null
+}
+
+export function deleteSubtask(id: string): boolean {
+  const d = getDb()
+  const result = d.prepare('DELETE FROM subtasks WHERE id = ?').run(id)
+  return result.changes > 0
+}
+
+export function deleteSubtasksByCard(cardId: string): number {
+  const d = getDb()
+  const result = d.prepare('DELETE FROM subtasks WHERE parent_card_id = ?').run(cardId)
+  return result.changes
+}
+
+// ==================== Worker Slots ====================
+
+export function listWorkerSlots(projectId: string): WorkerSlot[] {
+  const d = getDb()
+  const stmt = d.prepare(
+    'SELECT * FROM worker_slots WHERE project_id = ? ORDER BY slot_number ASC'
+  )
+  return stmt.all(projectId) as WorkerSlot[]
+}
+
+export function getWorkerSlot(id: string): WorkerSlot | null {
+  const d = getDb()
+  const stmt = d.prepare('SELECT * FROM worker_slots WHERE id = ?')
+  return (stmt.get(id) as WorkerSlot) ?? null
+}
+
+export function initializeWorkerSlots(projectId: string, count: number): void {
+  const d = getDb()
+  const now = new Date().toISOString()
+
+  // Delete existing slots for this project
+  d.prepare('DELETE FROM worker_slots WHERE project_id = ?').run(projectId)
+
+  // Create new slots
+  const insertStmt = d.prepare(
+    `INSERT INTO worker_slots (id, project_id, slot_number, status, updated_at)
+     VALUES (?, ?, ?, 'idle', ?)`
+  )
+
+  for (let i = 0; i < count; i++) {
+    const id = cryptoRandomId()
+    insertStmt.run(id, projectId, i, now)
+  }
+}
+
+export function acquireWorkerSlot(projectId: string): WorkerSlot | null {
+  const d = getDb()
+  const now = new Date().toISOString()
+
+  // Find first idle slot
+  const slot = d
+    .prepare(
+      `SELECT * FROM worker_slots
+       WHERE project_id = ? AND status = 'idle'
+       ORDER BY slot_number ASC LIMIT 1`
+    )
+    .get(projectId) as WorkerSlot | undefined
+
+  if (!slot) return null
+
+  // Mark as running
+  d.prepare(
+    `UPDATE worker_slots SET status = 'running', started_at = ?, updated_at = ? WHERE id = ?`
+  ).run(now, now, slot.id)
+
+  return getWorkerSlot(slot.id)
+}
+
+export function updateWorkerSlot(
+  id: string,
+  data: {
+    cardId?: string | null
+    jobId?: string | null
+    worktreeId?: string | null
+    status?: WorkerSlotStatus
+    startedAt?: string | null
+  }
+): WorkerSlot | null {
+  const d = getDb()
+  const now = new Date().toISOString()
+  const existing = getWorkerSlot(id)
+  if (!existing) return null
+
+  d.prepare(
+    `UPDATE worker_slots SET
+      card_id = ?, job_id = ?, worktree_id = ?, status = ?, started_at = ?, updated_at = ?
+     WHERE id = ?`
+  ).run(
+    data.cardId !== undefined ? data.cardId : existing.card_id,
+    data.jobId !== undefined ? data.jobId : existing.job_id,
+    data.worktreeId !== undefined ? data.worktreeId : existing.worktree_id,
+    data.status ?? existing.status,
+    data.startedAt !== undefined ? data.startedAt : existing.started_at,
+    now,
+    id
+  )
+
+  return getWorkerSlot(id)
+}
+
+export function releaseWorkerSlot(id: string): WorkerSlot | null {
+  const d = getDb()
+  const now = new Date().toISOString()
+
+  d.prepare(
+    `UPDATE worker_slots SET
+      card_id = NULL, job_id = NULL, worktree_id = NULL,
+      status = 'idle', started_at = NULL, updated_at = ?
+     WHERE id = ?`
+  ).run(now, id)
+
+  return getWorkerSlot(id)
+}
+
+export function getIdleSlotCount(projectId: string): number {
+  const d = getDb()
+  const result = d
+    .prepare(
+      `SELECT COUNT(*) as count FROM worker_slots
+       WHERE project_id = ? AND status = 'idle'`
+    )
+    .get(projectId) as { count: number }
+  return result.count
+}
+
+export function getRunningSlotCount(projectId: string): number {
+  const d = getDb()
+  const result = d
+    .prepare(
+      `SELECT COUNT(*) as count FROM worker_slots
+       WHERE project_id = ? AND status = 'running'`
+    )
+    .get(projectId) as { count: number }
+  return result.count
+}
+
+// ==================== Worker Progress ====================
+
+export interface WorkerProgressCreate {
+  cardId: string
+  jobId?: string
+  totalIterations?: number
+}
+
+export function getWorkerProgress(cardId: string): WorkerProgress | null {
+  const d = getDb()
+  const stmt = d.prepare(
+    'SELECT * FROM worker_progress WHERE card_id = ? ORDER BY created_at DESC LIMIT 1'
+  )
+  return (stmt.get(cardId) as WorkerProgress) ?? null
+}
+
+export function getWorkerProgressByJob(jobId: string): WorkerProgress | null {
+  const d = getDb()
+  const stmt = d.prepare('SELECT * FROM worker_progress WHERE job_id = ?')
+  return (stmt.get(jobId) as WorkerProgress) ?? null
+}
+
+export function createWorkerProgress(data: WorkerProgressCreate): WorkerProgress {
+  const d = getDb()
+  const id = cryptoRandomId()
+  const now = new Date().toISOString()
+
+  d.prepare(
+    `INSERT INTO worker_progress (
+      id, card_id, job_id, iteration, total_iterations,
+      subtask_index, subtasks_completed, last_checkpoint,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, 1, ?, 0, 0, ?, ?, ?)`
+  ).run(
+    id,
+    data.cardId,
+    data.jobId ?? null,
+    data.totalIterations ?? 5,
+    now,
+    now,
+    now
+  )
+
+  return d.prepare('SELECT * FROM worker_progress WHERE id = ?').get(id) as WorkerProgress
+}
+
+export function updateWorkerProgress(
+  id: string,
+  data: {
+    iteration?: number
+    subtaskIndex?: number
+    subtasksCompleted?: number
+    filesModified?: string[]
+    contextSummary?: string
+    progressFilePath?: string
+  }
+): WorkerProgress | null {
+  const d = getDb()
+  const now = new Date().toISOString()
+  const existing = d.prepare('SELECT * FROM worker_progress WHERE id = ?').get(id) as WorkerProgress | undefined
+  if (!existing) return null
+
+  d.prepare(
+    `UPDATE worker_progress SET
+      iteration = ?,
+      subtask_index = ?,
+      subtasks_completed = ?,
+      files_modified_json = ?,
+      context_summary = ?,
+      progress_file_path = ?,
+      last_checkpoint = ?,
+      updated_at = ?
+     WHERE id = ?`
+  ).run(
+    data.iteration ?? existing.iteration,
+    data.subtaskIndex ?? existing.subtask_index,
+    data.subtasksCompleted ?? existing.subtasks_completed,
+    data.filesModified ? JSON.stringify(data.filesModified) : existing.files_modified_json,
+    data.contextSummary ?? existing.context_summary,
+    data.progressFilePath ?? existing.progress_file_path,
+    now,
+    now,
+    id
+  )
+
+  return d.prepare('SELECT * FROM worker_progress WHERE id = ?').get(id) as WorkerProgress
+}
+
+export function clearWorkerProgress(cardId: string): void {
+  const d = getDb()
+  d.prepare('DELETE FROM worker_progress WHERE card_id = ?').run(cardId)
+}
+
+// ==================== Extended Card Queries ====================
+
+/**
+ * Get multiple ready cards for parallel processing.
+ * Used by worker pool to acquire multiple cards at once.
+ */
+export function getNextReadyCards(
+  projectId: string,
+  limit: number,
+  retryCooldownMinutes = 30
+): Card[] {
+  const d = getDb()
+  const cooldownTime = new Date(Date.now() - retryCooldownMinutes * 60 * 1000).toISOString()
+
+  const stmt = d.prepare(`
+    SELECT c.* FROM cards c
+    WHERE c.project_id = ?
+      AND c.status = 'ready'
+      AND c.provider != 'local'
+      AND c.remote_repo_key IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM jobs j
+        WHERE j.card_id = c.id
+          AND j.type = 'worker_run'
+          AND j.state IN ('queued', 'running')
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM jobs j
+        WHERE j.card_id = c.id
+          AND j.type = 'worker_run'
+          AND j.state = 'failed'
+          AND j.updated_at > ?
+      )
+    ORDER BY c.updated_local_at ASC
+    LIMIT ?
+  `)
+
+  return stmt.all(projectId, cooldownTime, limit) as Card[]
+}
+
+/**
+ * Get count of active worker jobs for a project.
+ * Used by worker pool to check capacity.
+ */
+export function getActiveWorkerJobCount(projectId: string): number {
+  const d = getDb()
+  const result = d
+    .prepare(
+      `SELECT COUNT(*) as count FROM jobs
+       WHERE project_id = ?
+         AND type = 'worker_run'
+         AND state IN ('queued', 'running')`
+    )
+    .get(projectId) as { count: number }
+  return result.count
 }
 
 // ==================== Utilities ====================

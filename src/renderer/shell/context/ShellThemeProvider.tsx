@@ -1,5 +1,14 @@
+/**
+ * Shell Theme Provider
+ *
+ * Theme context provider for the shell renderer that uses shellAPI
+ * instead of the electron bridge.
+ */
+
 import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from 'react'
-import type { ThemePreference, ResolvedTheme } from '../../../shared/types'
+
+type ThemePreference = 'light' | 'dark' | 'system'
+type ResolvedTheme = 'light' | 'dark'
 
 interface ThemeContextValue {
   theme: ThemePreference
@@ -12,16 +21,16 @@ const ThemeContext = createContext<ThemeContextValue | null>(null)
 export function useTheme(): ThemeContextValue {
   const context = useContext(ThemeContext)
   if (!context) {
-    throw new Error('useTheme must be used within a ThemeProvider')
+    throw new Error('useTheme must be used within a ShellThemeProvider')
   }
   return context
 }
 
-interface ThemeProviderProps {
+interface ShellThemeProviderProps {
   children: ReactNode
 }
 
-export function ThemeProvider({ children }: ThemeProviderProps): React.JSX.Element {
+export function ShellThemeProvider({ children }: ShellThemeProviderProps): React.JSX.Element {
   const [theme, setThemeState] = useState<ThemePreference>('system')
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>('light')
   const [isInitialized, setIsInitialized] = useState(false)
@@ -29,8 +38,8 @@ export function ThemeProvider({ children }: ThemeProviderProps): React.JSX.Eleme
   // Resolve the actual theme based on preference and system setting
   const resolveTheme = useCallback(async (preference: ThemePreference): Promise<ResolvedTheme> => {
     if (preference === 'system') {
-      const systemTheme = await window.electron.ipcRenderer.invoke('getSystemTheme')
-      return systemTheme as ResolvedTheme
+      const systemTheme = await window.shellAPI.getSystemTheme()
+      return systemTheme
     }
     return preference
   }, [])
@@ -49,16 +58,22 @@ export function ThemeProvider({ children }: ThemeProviderProps): React.JSX.Eleme
   // Initialize theme from stored preference
   useEffect(() => {
     async function init(): Promise<void> {
-      const savedTheme = await window.electron.ipcRenderer.invoke('getThemePreference')
-      const preference = (savedTheme as ThemePreference) || 'system'
+      try {
+        const savedTheme = await window.shellAPI.getThemePreference()
+        const preference = savedTheme || 'system'
 
-      // Sync localStorage for flash prevention on next load
-      localStorage.setItem('theme-preference', preference)
+        // Sync localStorage for flash prevention on next load
+        localStorage.setItem('theme-preference', preference)
 
-      setThemeState(preference)
-      const resolved = await resolveTheme(preference)
-      applyTheme(resolved)
-      setIsInitialized(true)
+        setThemeState(preference)
+        const resolved = await resolveTheme(preference)
+        applyTheme(resolved)
+        setIsInitialized(true)
+      } catch (error) {
+        console.error('Failed to initialize theme:', error)
+        // Default to system theme
+        setIsInitialized(true)
+      }
     }
     init()
   }, [resolveTheme, applyTheme])
@@ -78,41 +93,13 @@ export function ThemeProvider({ children }: ThemeProviderProps): React.JSX.Eleme
     return () => mediaQuery.removeEventListener('change', handleChange)
   }, [isInitialized, theme, applyTheme])
 
-  // Listen for theme changes broadcast from main process (for project views)
-  useEffect(() => {
-    if (!isInitialized) return
-
-    const handleThemeChanged = (
-      _event: unknown,
-      data: { preference: ThemePreference; resolved: ResolvedTheme }
-    ): void => {
-      setThemeState(data.preference)
-      applyTheme(data.resolved)
-      localStorage.setItem('theme-preference', data.preference)
-    }
-
-    // Check if we have access to electron IPC (project views)
-    if (window.electron?.ipcRenderer?.on) {
-      try {
-        window.electron.ipcRenderer.on('themeChanged', handleThemeChanged)
-        return () => {
-          window.electron.ipcRenderer.removeListener('themeChanged', handleThemeChanged)
-        }
-      } catch {
-        // Channel might not be allowed in this context, that's ok
-      }
-    }
-
-    return undefined
-  }, [isInitialized, applyTheme])
-
   // Set theme preference
   const setTheme = useCallback(
     async (newTheme: ThemePreference): Promise<void> => {
       // Update localStorage for flash prevention on next load
       localStorage.setItem('theme-preference', newTheme)
 
-      await window.electron.ipcRenderer.invoke('setThemePreference', newTheme)
+      await window.shellAPI.setThemePreference(newTheme)
       setThemeState(newTheme)
       const resolved = await resolveTheme(newTheme)
       applyTheme(resolved)

@@ -26,6 +26,13 @@ export type EventType =
   | 'error'
   | 'card_created'
   | 'card_linked'
+  | 'task_decomposed'
+
+// Subtask status for decomposed tasks
+export type SubtaskStatus = 'pending' | 'in_progress' | 'completed' | 'failed'
+
+// Worker slot status for pool management
+export type WorkerSlotStatus = 'idle' | 'running' | 'cleanup'
 
 // Worker state for UI display
 export type WorkerState = 'idle' | 'processing' | 'waiting' | 'error'
@@ -56,6 +63,54 @@ export interface WorkerLogMessage {
   line: string
   source?: string
   stream?: 'stdout' | 'stderr'
+}
+
+// ============================================================================
+// Shell/Project Architecture Types
+// ============================================================================
+
+/**
+ * Log entry for the log store.
+ */
+export interface LogEntry {
+  id: string
+  ts: string
+  projectKey: string
+  projectId?: string
+  jobId?: string
+  cardId?: string
+  source: string
+  stream: 'stdout' | 'stderr' | 'info' | 'error' | 'warn'
+  line: string
+}
+
+/**
+ * Activity state for a single project.
+ */
+export interface ProjectActivity {
+  projectId: string
+  activeRuns: number
+  isBusy: boolean
+  lastUpdated: string
+}
+
+/**
+ * Global activity state across all projects.
+ */
+export interface GlobalActivity {
+  totalActiveRuns: number
+  isBusy: boolean
+  busyProjects: string[]
+}
+
+/**
+ * Summary of an open project for the shell.
+ */
+export interface OpenProjectSummary {
+  projectId: string
+  projectKey: string
+  projectPath: string
+  projectName: string
 }
 
 export interface Project {
@@ -144,6 +199,102 @@ export interface Job {
   updated_at: string
 }
 
+// ============================================================================
+// Worker Pool & Autonomous Worker Types
+// ============================================================================
+
+/**
+ * Worker pool configuration for parallel processing
+ */
+export interface WorkerPoolConfig {
+  /** Maximum concurrent workers per project (1-8) */
+  maxWorkers: number
+  /** Strategy for picking next card to process */
+  queueStrategy: 'fifo' | 'priority'
+  /** Label prefix for priority (e.g., "priority::") */
+  priorityField?: string
+}
+
+/**
+ * Task decomposition configuration
+ */
+export interface TaskDecompositionConfig {
+  /** Enable automatic task decomposition */
+  enabled: boolean
+  /** When to decompose: 'auto' uses AI judgment, 'always'/'never' are explicit */
+  threshold: 'auto' | 'always' | 'never'
+  /** Create GitHub/GitLab issues for subtasks (default: true) */
+  createSubIssues: boolean
+  /** Maximum subtasks per card (3-10) */
+  maxSubtasks: number
+}
+
+/**
+ * AI session configuration for iterative processing
+ */
+export interface AISessionConfig {
+  /** Single long session vs multiple short sessions */
+  sessionMode: 'single' | 'iterative'
+  /** Maximum iterations for iterative mode */
+  maxIterations: number
+  /** Save progress between sessions */
+  progressCheckpoint: boolean
+  /** How much context to carry between sessions */
+  contextCarryover?: 'full' | 'summary' | 'none'
+}
+
+/**
+ * Subtask entity for decomposed tasks
+ */
+export interface Subtask {
+  id: string
+  parent_card_id: string
+  project_id: string
+  title: string
+  description: string | null
+  estimated_minutes: number | null
+  sequence: number
+  status: SubtaskStatus
+  remote_issue_number: string | null
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+}
+
+/**
+ * Worker slot for pool management
+ */
+export interface WorkerSlot {
+  id: string
+  project_id: string
+  slot_number: number
+  card_id: string | null
+  job_id: string | null
+  worktree_id: string | null
+  status: WorkerSlotStatus
+  started_at: string | null
+  updated_at: string
+}
+
+/**
+ * Progress tracking for iterative AI sessions
+ */
+export interface WorkerProgress {
+  id: string
+  card_id: string
+  job_id: string | null
+  iteration: number
+  total_iterations: number
+  subtask_index: number
+  subtasks_completed: number
+  files_modified_json: string | null
+  context_summary: string | null
+  progress_file_path: string | null
+  last_checkpoint: string
+  created_at: string
+  updated_at: string
+}
+
 export interface RemoteInfo {
   name: string
   url: string
@@ -216,6 +367,12 @@ export interface PolicyConfig {
       maxConcurrent?: number
       skipInstallIfCached?: boolean
     }
+    /** Worker pool configuration for parallel processing */
+    pool?: WorkerPoolConfig
+    /** Task decomposition configuration */
+    decomposition?: TaskDecompositionConfig
+    /** AI session configuration for iterative processing */
+    session?: AISessionConfig
   }
 }
 
@@ -441,6 +598,22 @@ export const DEFAULT_POLICY: PolicyConfig = {
       },
       maxConcurrent: 1,
       skipInstallIfCached: false
+    },
+    pool: {
+      maxWorkers: 1,
+      queueStrategy: 'fifo'
+    },
+    decomposition: {
+      enabled: false,
+      threshold: 'auto',
+      createSubIssues: true,
+      maxSubtasks: 5
+    },
+    session: {
+      sessionMode: 'single',
+      maxIterations: 5,
+      progressCheckpoint: false,
+      contextCarryover: 'summary'
     }
   }
 }

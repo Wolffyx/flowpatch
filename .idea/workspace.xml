@@ -4,10 +4,28 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="2a70596c-d075-4df5-985f-47d56f5e40d3" name="Changes" comment="Added creating repo v1">
+    <list default="true" id="2a70596c-d075-4df5-985f-47d56f5e40d3" name="Changes" comment="Added check to for cli on startup">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/electron.vite.config.ts" beforeDir="false" afterPath="$PROJECT_DIR$/electron.vite.config.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/adapters/github.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/adapters/github.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/db.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/db.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/index.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/index.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/ipc/broadcast.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/ipc/broadcast.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/sync/engine.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/sync/engine.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/worker/loop.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/worker/loop.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/worker/pipeline.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/worker/pipeline.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/renderer/src/App.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/App.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/assets/main.css" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/assets/main.css" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/CardDrawer.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/CardDrawer.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/CommandPalette.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/CommandPalette.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/KanbanColumn.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/KanbanColumn.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/LabelSetupDialog.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/LabelSetupDialog.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/SettingsDialog.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/SettingsDialog.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/TopBar.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/TopBar.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/ui/scroll-area.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/ui/scroll-area.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/context/ThemeContext.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/context/ThemeContext.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/store/useAppStore.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/store/useAppStore.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/shared/types.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/shared/types.ts" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -118,7 +136,8 @@
       <workItem from="1766056046073" duration="6760000" />
       <workItem from="1766152521211" duration="2586000" />
       <workItem from="1766230292122" duration="10738000" />
-      <workItem from="1766329940126" duration="1296000" />
+      <workItem from="1766329940126" duration="5024000" />
+      <workItem from="1766389033598" duration="22311000" />
     </task>
     <task id="LOCAL-00001" summary="Added more organization and improved worker">
       <option name="closed" value="true" />
@@ -136,7 +155,15 @@
       <option name="project" value="LOCAL" />
       <updated>1766181827267</updated>
     </task>
-    <option name="localTasksCounter" value="3" />
+    <task id="LOCAL-00003" summary="Added check to for cli on startup">
+      <option name="closed" value="true" />
+      <created>1766331279335</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1766331279335</updated>
+    </task>
+    <option name="localTasksCounter" value="4" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -145,7 +172,8 @@
   <component name="VcsManagerConfiguration">
     <MESSAGE value="Added more organization and improved worker" />
     <MESSAGE value="Added creating repo v1" />
-    <option name="LAST_COMMIT_MESSAGE" value="Added creating repo v1" />
+    <MESSAGE value="Added check to for cli on startup" />
+    <option name="LAST_COMMIT_MESSAGE" value="Added check to for cli on startup" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>

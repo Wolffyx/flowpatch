@@ -1,0 +1,436 @@
+/**
+ * Shell IPC Handlers
+ *
+ * Handles IPC requests from the shell renderer:
+ * - Project management
+ * - Settings
+ * - Activity
+ * - Logs
+ */
+
+import { ipcMain, BrowserWindow } from 'electron'
+import { listProjects, getProject, upsertProject } from '../db'
+import {
+  initTabManager,
+  createTab,
+  closeTab,
+  activateTab,
+  getAllTabs,
+  getActiveTabId,
+  moveTab,
+  closeOtherTabs,
+  closeTabsToRight,
+  duplicateTab,
+  deactivateAllTabs,
+  setLogsPanelHeight,
+  setModalOpen,
+  restoreTabs
+} from '../tabManager'
+import {
+  getDefault,
+  getResolved,
+  patchDefaults,
+  patchProjectOverrides,
+  getAllResolvedSettings,
+  SETTINGS_SCHEMA
+} from '../settingsStore'
+import {
+  getGlobalActivity,
+  getProjectActivity
+} from '../activityStore'
+import {
+  getAllLogs,
+  getProjectLogs,
+  getRecentLogs,
+  exportLogs,
+  clearAllLogs,
+  clearProjectLogs
+} from '../logStore'
+import {
+  closeProjectView,
+  getCurrentProjectState
+} from '../projectView'
+import { detectProjectIdentity, detectProviderFromRemote } from '../projectIdentity'
+import { logAction } from '@shared/utils'
+import { registerProjectHandlers } from './projectHandlers'
+import { broadcastToRenderers } from './broadcast'
+import { getAllShortcuts, setShortcuts } from '../shortcuts'
+
+function cryptoId(): string {
+  const buf = Buffer.alloc(16)
+  for (let i = 0; i < 16; i++) buf[i] = Math.floor(Math.random() * 256)
+  return [...buf].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+// ============================================================================
+// State
+// ============================================================================
+
+let currentProjectId: string | null = null
+
+// ============================================================================
+// Registration
+// ============================================================================
+
+export function registerShellHandlers(mainWindow: BrowserWindow): void {
+  // Initialize tab manager
+  initTabManager(mainWindow)
+
+  // Register project handlers (for WebContentsView tabs)
+  registerProjectHandlers()
+
+  // Restore any tabs from the previous session.
+  void restoreTabs()
+
+  // -------------------------------------------------------------------------
+  // Tab Management
+  // -------------------------------------------------------------------------
+
+  ipcMain.handle(
+    'tabs:create',
+    async (_event, { projectId, projectPath }: { projectId: string; projectPath: string }) => {
+      logAction('tabs:create', { projectId, projectPath })
+
+      try {
+        const project = getProject(projectId)
+        if (!project) {
+          throw new Error('Project not found')
+        }
+
+        const identity = await detectProjectIdentity(projectPath)
+        const tab = await createTab(
+          projectId,
+          identity.projectKey,
+          projectPath,
+          project.name
+        )
+
+        return {
+          id: tab.id,
+          projectId: tab.projectId,
+          projectKey: tab.projectKey,
+          projectPath: tab.projectPath,
+          projectName: tab.projectName,
+          isLoading: tab.isLoading
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to create tab'
+        logAction('tabs:create:error', { message })
+        throw error
+      }
+    }
+  )
+
+  ipcMain.handle('tabs:close', async (_event, { tabId }: { tabId: string }) => {
+    logAction('tabs:close', { tabId })
+    await closeTab(tabId)
+  })
+
+  ipcMain.handle('tabs:activate', async (_event, { tabId }: { tabId: string }) => {
+    logAction('tabs:activate', { tabId })
+    await activateTab(tabId)
+  })
+
+  ipcMain.handle('tabs:getAll', () => {
+    return {
+      tabs: getAllTabs(),
+      activeTabId: getActiveTabId()
+    }
+  })
+
+  ipcMain.handle(
+    'tabs:move',
+    (_event, { tabId, newIndex }: { tabId: string; newIndex: number }) => {
+      logAction('tabs:move', { tabId, newIndex })
+      moveTab(tabId, newIndex)
+    }
+  )
+
+  ipcMain.handle('tabs:closeOthers', async (_event, { tabId }: { tabId: string }) => {
+    logAction('tabs:closeOthers', { tabId })
+    await closeOtherTabs(tabId)
+  })
+
+  ipcMain.handle('tabs:closeToRight', async (_event, { tabId }: { tabId: string }) => {
+    logAction('tabs:closeToRight', { tabId })
+    await closeTabsToRight(tabId)
+  })
+
+  ipcMain.handle('tabs:duplicate', async (_event, { tabId }: { tabId: string }) => {
+    logAction('tabs:duplicate', { tabId })
+    const tab = await duplicateTab(tabId)
+    if (!tab) return null
+
+    return {
+      id: tab.id,
+      projectId: tab.projectId,
+      projectKey: tab.projectKey,
+      projectPath: tab.projectPath,
+      projectName: tab.projectName,
+      isLoading: tab.isLoading
+    }
+  })
+
+  ipcMain.handle('tabs:deactivateAll', () => {
+    logAction('tabs:deactivateAll')
+    deactivateAllTabs()
+  })
+
+  // -------------------------------------------------------------------------
+  // Project Management
+  // -------------------------------------------------------------------------
+
+  ipcMain.handle('shell:openProject', async (_event, { projectRoot }: { projectRoot: string }) => {
+    logAction('shell:openProject', { projectRoot })
+
+    try {
+      // Detect project identity
+      const identity = await detectProjectIdentity(projectRoot)
+
+      if (!identity.isGit) {
+        return { error: 'Selected folder is not a git repository.' }
+      }
+
+      // Find or create project in database (by local path)
+      const projects = listProjects()
+      let project = projects.find((p) => p.local_path === projectRoot)
+
+      if (!project) {
+        const name = projectRoot.split(/[\\/]/).pop() || projectRoot
+        const selectedRemote = identity.remotes.length === 1 ? identity.remotes[0] : null
+
+        project = upsertProject({
+          id: cryptoId(),
+          name,
+          local_path: projectRoot,
+          selected_remote_name: selectedRemote ? selectedRemote.name.split(':')[0] : null,
+          remote_repo_key: selectedRemote ? selectedRemote.repoKey : null,
+          provider_hint: selectedRemote ? detectProviderFromRemote(selectedRemote.url) : 'auto',
+          policy_json: null
+        })
+
+        // Best-effort auto-configure worktree for autonomous workers
+        try {
+          const { initializeProjectWorktree } = await import('../services/project-initializer')
+          const initResult = await initializeProjectWorktree(project.id)
+          if (initResult.configured) {
+            logAction('project:worktreeInitialized', {
+              projectId: project.id,
+              worktreeRoot: initResult.worktreeRoot,
+              maxWorkers: initResult.maxWorkers
+            })
+          } else if (initResult.error) {
+            logAction('project:worktreeInitError', {
+              projectId: project.id,
+              error: initResult.error
+            })
+          }
+        } catch (error) {
+          logAction('project:worktreeInitException', {
+            projectId: project.id,
+            error: error instanceof Error ? error.message : String(error)
+          })
+        }
+      }
+
+      currentProjectId = project.id
+
+      return {
+        project,
+        remotes: identity.remotes,
+        needSelection: identity.remotes.length > 1
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to open project'
+      logAction('shell:openProject:error', { message })
+      return { error: message }
+    }
+  })
+
+  ipcMain.handle('shell:closeProject', async () => {
+    logAction('shell:closeProject')
+    try {
+      await closeProjectView(mainWindow)
+      currentProjectId = null
+    } catch (error) {
+      console.error('Failed to close project:', error)
+    }
+  })
+
+  ipcMain.handle('shell:getProjects', () => {
+    return listProjects()
+  })
+
+  ipcMain.handle('shell:getCurrentProject', () => {
+    const state = getCurrentProjectState()
+    if (!state) return null
+
+    const project = getProject(state.projectId)
+    if (!project) return null
+
+    return {
+      projectId: state.projectId,
+      projectKey: state.projectKey,
+      projectPath: state.projectPath,
+      projectName: project.name
+    }
+  })
+
+  ipcMain.handle(
+    'shell:getProjectIdentity',
+    async (_event, { projectId }: { projectId: string }) => {
+      const project = getProject(projectId)
+      if (!project) {
+        return { repoId: null, remotes: [], identityRemote: null }
+      }
+
+      const identity = await detectProjectIdentity(project.local_path)
+      return {
+        repoId: identity.repoId,
+        remotes: identity.remotes,
+        identityRemote: project.selected_remote_name
+      }
+    }
+  )
+
+  // -------------------------------------------------------------------------
+  // Settings
+  // -------------------------------------------------------------------------
+
+  ipcMain.handle('settings:getDefaults', () => {
+    const result: Record<string, string | null> = {}
+    for (const key of Object.keys(SETTINGS_SCHEMA)) {
+      result[key] = getDefault(key) ?? getResolved(null, key)
+    }
+    return result
+  })
+
+  ipcMain.handle(
+    'settings:setDefaults',
+    (_event, { patch }: { patch: Record<string, string | null> }) => {
+      patchDefaults(patch)
+    }
+  )
+
+  ipcMain.handle(
+    'settings:getProjectResolved',
+    (_event, { projectKey }: { projectKey: string }) => {
+      return getAllResolvedSettings(projectKey)
+    }
+  )
+
+  ipcMain.handle(
+    'settings:setProjectOverride',
+    (_event, { projectKey, patch }: { projectKey: string; patch: Record<string, string | null> }) => {
+      patchProjectOverrides(projectKey, patch)
+    }
+  )
+
+  ipcMain.handle(
+    'settings:clearProjectOverride',
+    (_event, { projectKey, keys }: { projectKey: string; keys?: string[] }) => {
+      if (!keys || keys.length === 0) {
+        logAction('settings:clearProjectOverride:noKeys', { projectKey })
+        return
+      }
+      const patch: Record<string, null> = {}
+      for (const key of keys) patch[key] = null
+      patchProjectOverrides(projectKey, patch)
+    }
+  )
+
+  // -------------------------------------------------------------------------
+  // Shortcuts
+  // -------------------------------------------------------------------------
+
+  ipcMain.handle('shortcuts:getAll', () => {
+    return getAllShortcuts()
+  })
+
+  ipcMain.handle(
+    'shortcuts:setAll',
+    (_event, { patch }: { patch: Record<string, string | null> }) => {
+      setShortcuts(patch)
+      broadcastToRenderers('shortcutsUpdated')
+    }
+  )
+
+  // -------------------------------------------------------------------------
+  // Activity
+  // -------------------------------------------------------------------------
+
+  ipcMain.handle('activity:getGlobal', () => {
+    return getGlobalActivity()
+  })
+
+  ipcMain.handle('activity:getProject', (_event, { projectId }: { projectId: string }) => {
+    return getProjectActivity(projectId)
+  })
+
+  // -------------------------------------------------------------------------
+  // Logs
+  // -------------------------------------------------------------------------
+
+  ipcMain.handle('logs:getBuffer', (_event, { projectKey }: { projectKey?: string }) => {
+    if (projectKey) {
+      return getProjectLogs(projectKey)
+    }
+    return getAllLogs()
+  })
+
+  ipcMain.handle('logs:getRecent', (_event, { count }: { count: number }) => {
+    return getRecentLogs(count)
+  })
+
+  ipcMain.handle('logs:export', (_event, { projectKey }: { projectKey?: string }) => {
+    return exportLogs(projectKey)
+  })
+
+  ipcMain.handle('logs:clear', (_event, { projectKey }: { projectKey?: string }) => {
+    if (projectKey) {
+      clearProjectLogs(projectKey)
+    } else {
+      clearAllLogs()
+    }
+  })
+
+  // -------------------------------------------------------------------------
+  // Window Controls
+  // -------------------------------------------------------------------------
+
+  ipcMain.on('window:minimize', () => {
+    mainWindow.minimize()
+  })
+
+  ipcMain.on('window:maximize', () => {
+    if (mainWindow.isMaximized()) {
+      mainWindow.unmaximize()
+    } else {
+      mainWindow.maximize()
+    }
+  })
+
+  ipcMain.on('window:close', () => {
+    mainWindow.close()
+  })
+
+  // -------------------------------------------------------------------------
+  // View Layer Management (for modals and panels)
+  // -------------------------------------------------------------------------
+
+  ipcMain.on('ui:setLogsPanelHeight', (_event, height: number) => {
+    setLogsPanelHeight(height)
+  })
+
+  ipcMain.on('ui:setModalOpen', (_event, open: boolean) => {
+    setModalOpen(open)
+  })
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+export function getCurrentProjectId(): string | null {
+  return currentProjectId
+}

@@ -1,4 +1,15 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+/**
+ * Settings Modal Component
+ *
+ * Sidebar-style settings dialog matching the original SettingsDialog design:
+ * - Appearance: Theme settings
+ * - Features: Board settings, cancel behavior, repo integration
+ * - Shortcuts: Keyboard shortcuts editor
+ * - AI Agents: Tool preference, API keys
+ * - Danger Zone: Unlink project
+ */
+
+import { useState, useEffect, useCallback, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import {
   Dialog,
@@ -7,76 +18,41 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle
-} from './ui/dialog'
-import { Button } from './ui/button'
-import { Switch } from './ui/switch'
-import { Input } from './ui/input'
-import { ScrollArea } from './ui/scroll-area'
-import { cn } from '../lib/utils'
+} from '../../src/components/ui/dialog'
+import { Button } from '../../src/components/ui/button'
+import { Switch } from '../../src/components/ui/switch'
+import { Input } from '../../src/components/ui/input'
+import { ScrollArea } from '../../src/components/ui/scroll-area'
+import { cn } from '../../src/lib/utils'
 import {
-  Check,
-  Loader2,
-  Sparkles,
-  Bot,
-  Code,
   Sun,
   Moon,
   Monitor,
   Palette,
   Settings2,
-  AlertTriangle,
   Key,
+  Bot,
+  AlertTriangle,
   Unlink,
+  Sparkles,
+  Code,
+  Check,
+  Loader2,
   Eye,
   EyeOff
 } from 'lucide-react'
-import type { PolicyConfig, Project, ThemePreference } from '../../../shared/types'
-import { useTheme } from '../context/ThemeContext'
-import { ShortcutsEditor } from './ShortcutsEditor'
+import { ShortcutsEditor } from '../../src/components/ShortcutsEditor'
 import type { ShortcutBinding } from '@shared/shortcuts'
+import type { Project } from '@shared/types'
 
-export type WorkerToolPreference = 'auto' | 'claude' | 'codex'
 type SettingsSection = 'appearance' | 'features' | 'shortcuts' | 'ai-agents' | 'danger-zone'
+type ThemePreference = 'light' | 'dark' | 'system'
+type WorkerToolPreference = 'auto' | 'claude' | 'codex'
 
-interface SettingsDialogProps {
+interface SettingsModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  project: Project
-  onSetWorkerToolPreference: (toolPreference: WorkerToolPreference) => Promise<void>
-  onSetWorkerRollbackOnCancel: (rollbackOnCancel: boolean) => Promise<void>
-  onSetShowPullRequestsSection: (showPullRequestsSection: boolean) => Promise<void>
-}
-
-function readToolPreference(project: Project): WorkerToolPreference {
-  if (!project.policy_json) return 'auto'
-  try {
-    const policy = JSON.parse(project.policy_json) as PolicyConfig
-    const pref = policy?.worker?.toolPreference
-    if (pref === 'claude' || pref === 'codex' || pref === 'auto') return pref
-    return 'auto'
-  } catch {
-    return 'auto'
-  }
-}
-
-function readRollbackOnCancel(project: Project): boolean {
-  if (!project.policy_json) return false
-  try {
-    const policy = JSON.parse(project.policy_json) as PolicyConfig
-    return !!policy?.worker?.rollbackOnCancel
-  } catch {
-    return false
-  }
-}
-
-function readShowPullRequestsSection(project: Project): boolean {
-  if (!project.policy_json) return false
-  try {
-    const policy = JSON.parse(project.policy_json) as PolicyConfig
-    return !!policy?.ui?.showPullRequestsSection
-  } catch {
-    return false
-  }
+  project: Project | null
 }
 
 const SETTINGS_SECTIONS: {
@@ -91,29 +67,23 @@ const SETTINGS_SECTIONS: {
   { id: 'danger-zone', label: 'Danger Zone', icon: AlertTriangle }
 ]
 
-export function SettingsDialog({
+export function SettingsModal({
   open,
   onOpenChange,
-  project,
-  onSetWorkerToolPreference,
-  onSetWorkerRollbackOnCancel,
-  onSetShowPullRequestsSection
-}: SettingsDialogProps): React.JSX.Element {
-  const { theme: currentTheme, setTheme } = useTheme()
-
-  // Section navigation
+  project
+}: SettingsModalProps): React.JSX.Element {
   const [activeSection, setActiveSection] = useState<SettingsSection>('appearance')
+  const [themePreference, setThemePreference] = useState<ThemePreference>('system')
+  const [shortcuts, setShortcuts] = useState<ShortcutBinding[]>([])
+  const [shortcutsLoading, setShortcutsLoading] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
 
-  // Local state for settings (synced from project)
-  const [toolPreference, setToolPreference] = useState<WorkerToolPreference>(() =>
-    readToolPreference(project)
-  )
-  const [rollbackOnCancel, setRollbackOnCancel] = useState(() => readRollbackOnCancel(project))
-  const [showPullRequestsSection, setShowPullRequestsSection] = useState(() =>
-    readShowPullRequestsSection(project)
-  )
+  // Project-specific settings
+  const [toolPreference, setToolPreference] = useState<WorkerToolPreference>('auto')
+  const [rollbackOnCancel, setRollbackOnCancel] = useState(false)
+  const [showPullRequestsSection, setShowPullRequestsSection] = useState(false)
 
-  // API Keys state
+  // API Keys
   const [anthropicApiKey, setAnthropicApiKey] = useState('')
   const [openaiApiKey, setOpenaiApiKey] = useState('')
   const [showAnthropicKey, setShowAnthropicKey] = useState(false)
@@ -121,31 +91,46 @@ export function SettingsDialog({
   const [savingAnthropicKey, setSavingAnthropicKey] = useState(false)
   const [savingOpenaiKey, setSavingOpenaiKey] = useState(false)
 
-  // Shortcuts state
-  const [shortcuts, setShortcuts] = useState<ShortcutBinding[]>([])
-  const [shortcutsLoading, setShortcutsLoading] = useState(false)
-
   // Unlink confirmation
   const [showUnlinkConfirm, setShowUnlinkConfirm] = useState(false)
   const [isUnlinking, setIsUnlinking] = useState(false)
 
-  // Reset to appearance section only when dialog opens (not on every project change)
+  const supportsShortcuts =
+    typeof window.shellAPI.getShortcuts === 'function' &&
+    typeof window.shellAPI.setShortcuts === 'function' &&
+    typeof window.shellAPI.onShortcutsUpdated === 'function'
+
+  // Reset to appearance section when dialog opens
   useEffect(() => {
     if (open) {
       setActiveSection('appearance')
       setShowUnlinkConfirm(false)
+      loadSettings()
     }
   }, [open])
 
-  // Sync settings state when project changes
+  // Load shortcuts when section is selected
   useEffect(() => {
-    if (!open) return
-    setToolPreference(readToolPreference(project))
-    setRollbackOnCancel(readRollbackOnCancel(project))
-    setShowPullRequestsSection(readShowPullRequestsSection(project))
+    if (!open || activeSection !== 'shortcuts') return
+    loadShortcuts()
+  }, [open, activeSection])
 
-    // Load API keys
-    const loadApiKeys = async () => {
+  // Subscribe to shortcut updates
+  useEffect(() => {
+    if (!open || !supportsShortcuts) return
+    return window.shellAPI.onShortcutsUpdated(async () => {
+      const shortcutsData = await window.shellAPI.getShortcuts()
+      setShortcuts(shortcutsData)
+    })
+  }, [open, supportsShortcuts])
+
+  const loadSettings = async (): Promise<void> => {
+    setIsLoading(true)
+    try {
+      const theme = await window.shellAPI.getThemePreference()
+      setThemePreference(theme)
+
+      // Load API keys
       try {
         const anthropic = await window.electron.ipcRenderer.invoke('getApiKey', { key: 'anthropic' })
         const openai = await window.electron.ipcRenderer.invoke('getApiKey', { key: 'openai' })
@@ -154,125 +139,165 @@ export function SettingsDialog({
       } catch {
         // API keys feature may not be implemented yet
       }
+
+      // Load project-specific settings if project is selected
+      if (project) {
+        loadProjectSettings(project)
+      }
+    } catch (error) {
+      console.error('Failed to load settings:', error)
+    } finally {
+      setIsLoading(false)
     }
-    loadApiKeys()
-  }, [open, project])
+  }
+
+  const loadProjectSettings = (proj: Project): void => {
+    if (!proj.policy_json) {
+      setToolPreference('auto')
+      setRollbackOnCancel(false)
+      setShowPullRequestsSection(false)
+      return
+    }
+    try {
+      const policy = JSON.parse(proj.policy_json)
+      const pref = policy?.worker?.toolPreference
+      if (pref === 'claude' || pref === 'codex' || pref === 'auto') {
+        setToolPreference(pref)
+      } else {
+        setToolPreference('auto')
+      }
+      setRollbackOnCancel(!!policy?.worker?.rollbackOnCancel)
+      setShowPullRequestsSection(!!policy?.ui?.showPullRequestsSection)
+    } catch {
+      setToolPreference('auto')
+      setRollbackOnCancel(false)
+      setShowPullRequestsSection(false)
+    }
+  }
 
   const loadShortcuts = useCallback(async (): Promise<void> => {
+    if (!supportsShortcuts) return
     setShortcutsLoading(true)
     try {
-      const data = (await window.electron.ipcRenderer.invoke('shortcuts:getAll')) as ShortcutBinding[]
+      const data = await window.shellAPI.getShortcuts()
       setShortcuts(data)
     } catch {
       setShortcuts([])
     } finally {
       setShortcutsLoading(false)
     }
-  }, [])
+  }, [supportsShortcuts])
 
-  useEffect(() => {
-    if (!open) return
-    loadShortcuts()
-  }, [open, loadShortcuts])
-
-  useEffect(() => {
-    if (!open) return
-    const handler = () => loadShortcuts()
-    window.electron.ipcRenderer.on('shortcutsUpdated', handler)
-    return () => {
-      window.electron.ipcRenderer.removeListener('shortcutsUpdated', handler)
+  const handleThemeChange = async (theme: ThemePreference): Promise<void> => {
+    try {
+      await window.shellAPI.setThemePreference(theme)
+      setThemePreference(theme)
+      const resolved =
+        theme === 'system' ? await window.shellAPI.getSystemTheme() : theme
+      document.documentElement.classList.toggle('dark', resolved === 'dark')
+      toast.success('Theme updated', {
+        description: `Switched to ${theme} theme`
+      })
+    } catch (error) {
+      console.error('Failed to save theme:', error)
+      toast.error('Failed to update theme', {
+        description: error instanceof Error ? error.message : 'Unknown error'
+      })
     }
-  }, [open, loadShortcuts])
+  }
 
   const handleShortcutsPatch = useCallback(
-    async (patch: Record<string, string | null>) => {
-      await window.electron.ipcRenderer.invoke('shortcuts:setAll', { patch })
+    async (patch: Record<string, string | null>): Promise<void> => {
+      if (!supportsShortcuts) return
+      await window.shellAPI.setShortcuts(patch)
       await loadShortcuts()
       toast.success('Shortcut updated')
     },
-    [loadShortcuts]
-  )
-
-  // Instant apply handlers
-  const handleThemeChange = useCallback(
-    async (newTheme: ThemePreference) => {
-      try {
-        await setTheme(newTheme)
-        toast.success('Theme updated', {
-          description: `Switched to ${newTheme} theme`
-        })
-      } catch (err) {
-        toast.error('Failed to update theme', {
-          description: err instanceof Error ? err.message : 'Unknown error'
-        })
-      }
-    },
-    [setTheme]
+    [supportsShortcuts, loadShortcuts]
   )
 
   const handleToolPreferenceChange = useCallback(
-    async (newPref: WorkerToolPreference) => {
+    async (newPref: WorkerToolPreference): Promise<void> => {
+      if (!project) return
       const previousValue = toolPreference
-      setToolPreference(newPref) // Optimistic update
+      setToolPreference(newPref)
       try {
-        await onSetWorkerToolPreference(newPref)
+        await window.electron.ipcRenderer.invoke('updateProjectPolicy', {
+          projectId: project.id,
+          policy: { worker: { toolPreference: newPref } }
+        })
         toast.success('AI tool preference updated', {
           description: `Worker will use ${newPref === 'auto' ? 'Auto' : newPref === 'claude' ? 'Claude Code' : 'Codex'}`
         })
       } catch (err) {
-        setToolPreference(previousValue) // Rollback
+        setToolPreference(previousValue)
+        console.error('Failed to update tool preference:', err)
         toast.error('Failed to update tool preference', {
           description: err instanceof Error ? err.message : 'Unknown error'
         })
       }
     },
-    [toolPreference, onSetWorkerToolPreference]
+    [project, toolPreference]
   )
 
   const handleRollbackOnCancelChange = useCallback(
-    async (enabled: boolean) => {
+    async (enabled: boolean): Promise<void> => {
+      if (!project) return
       const previousValue = rollbackOnCancel
-      setRollbackOnCancel(enabled) // Optimistic update
+      setRollbackOnCancel(enabled)
       try {
-        await onSetWorkerRollbackOnCancel(enabled)
+        await window.electron.ipcRenderer.invoke('updateProjectPolicy', {
+          projectId: project.id,
+          policy: { worker: { rollbackOnCancel: enabled } }
+        })
         toast.success('Cancel behavior updated', {
           description: enabled ? 'Changes will be rolled back on cancel' : 'Changes will be kept on cancel'
         })
       } catch (err) {
-        setRollbackOnCancel(previousValue) // Rollback
+        setRollbackOnCancel(previousValue)
+        console.error('Failed to update cancel behavior:', err)
         toast.error('Failed to update cancel behavior', {
           description: err instanceof Error ? err.message : 'Unknown error'
         })
       }
     },
-    [rollbackOnCancel, onSetWorkerRollbackOnCancel]
+    [project, rollbackOnCancel]
   )
 
   const handleShowPRsSectionChange = useCallback(
-    async (enabled: boolean) => {
+    async (enabled: boolean): Promise<void> => {
+      if (!project) return
       const previousValue = showPullRequestsSection
-      setShowPullRequestsSection(enabled) // Optimistic update
+      setShowPullRequestsSection(enabled)
       try {
-        await onSetShowPullRequestsSection(enabled)
+        await window.electron.ipcRenderer.invoke('updateProjectPolicy', {
+          projectId: project.id,
+          policy: { ui: { showPullRequestsSection: enabled } }
+        })
         toast.success('Board layout updated', {
           description: enabled ? 'Pull requests section is now visible' : 'Pull requests section is now hidden'
         })
       } catch (err) {
-        setShowPullRequestsSection(previousValue) // Rollback
+        setShowPullRequestsSection(previousValue)
+        console.error('Failed to update board layout:', err)
         toast.error('Failed to update board layout', {
           description: err instanceof Error ? err.message : 'Unknown error'
         })
       }
     },
-    [showPullRequestsSection, onSetShowPullRequestsSection]
+    [project, showPullRequestsSection]
   )
 
-  const handleSaveAnthropicKey = useCallback(async () => {
+  const handleSaveAnthropicKey = useCallback(async (): Promise<void> => {
     setSavingAnthropicKey(true)
     try {
-      await window.electron.ipcRenderer.invoke('setApiKey', { key: 'anthropic', value: anthropicApiKey })
+      await window.electron.ipcRenderer.invoke('setApiKey', {
+        key: 'anthropic',
+        value: anthropicApiKey
+      })
       toast.success('Anthropic API key saved')
     } catch (err) {
+      console.error('Failed to save Anthropic API key:', err)
       toast.error('Failed to save Anthropic API key', {
         description: err instanceof Error ? err.message : 'Unknown error'
       })
@@ -281,12 +306,16 @@ export function SettingsDialog({
     }
   }, [anthropicApiKey])
 
-  const handleSaveOpenaiKey = useCallback(async () => {
+  const handleSaveOpenaiKey = useCallback(async (): Promise<void> => {
     setSavingOpenaiKey(true)
     try {
-      await window.electron.ipcRenderer.invoke('setApiKey', { key: 'openai', value: openaiApiKey })
+      await window.electron.ipcRenderer.invoke('setApiKey', {
+        key: 'openai',
+        value: openaiApiKey
+      })
       toast.success('OpenAI API key saved')
     } catch (err) {
+      console.error('Failed to save OpenAI API key:', err)
       toast.error('Failed to save OpenAI API key', {
         description: err instanceof Error ? err.message : 'Unknown error'
       })
@@ -295,7 +324,46 @@ export function SettingsDialog({
     }
   }, [openaiApiKey])
 
-  const handleUnlink = useCallback(async () => {
+  const handleReconfigureLabels = useCallback(async (): Promise<void> => {
+    console.log('[SettingsModal] handleReconfigureLabels called, project:', project?.id)
+    console.log('[SettingsModal] window.electron:', window.electron)
+    console.log('[SettingsModal] window.electron?.ipcRenderer:', window.electron?.ipcRenderer)
+    if (!project) {
+      console.log('[SettingsModal] No project, returning early')
+      return
+    }
+    try {
+      console.log('[SettingsModal] Calling resetLabelWizard...')
+      const result = await window.electron.ipcRenderer.invoke('resetLabelWizard', { projectId: project.id })
+      console.log('[SettingsModal] resetLabelWizard result:', result)
+      toast.success('Label setup reopened')
+      onOpenChange(false)
+    } catch (err) {
+      console.error('[SettingsModal] Failed to reopen label setup:', err)
+      toast.error('Failed to reopen label setup', {
+        description: err instanceof Error ? err.message : 'Unknown error'
+      })
+    }
+  }, [project, onOpenChange])
+
+  const handleReopenGithubProjectPrompt = useCallback(async (): Promise<void> => {
+    if (!project) return
+    try {
+      await window.electron.ipcRenderer.invoke('resetGithubProjectPrompt', {
+        projectId: project.id
+      })
+      toast.success('GitHub Project prompt reopened')
+      onOpenChange(false)
+    } catch (err) {
+      console.error('Failed to reopen GitHub Project prompt:', err)
+      toast.error('Failed to reopen GitHub Project prompt', {
+        description: err instanceof Error ? err.message : 'Unknown error'
+      })
+    }
+  }, [project, onOpenChange])
+
+  const handleUnlink = useCallback(async (): Promise<void> => {
+    if (!project) return
     setIsUnlinking(true)
     try {
       await window.electron.ipcRenderer.invoke('unlinkProject', { projectId: project.id })
@@ -305,37 +373,14 @@ export function SettingsDialog({
       setShowUnlinkConfirm(false)
       onOpenChange(false)
     } catch (err) {
+      console.error('Failed to unlink project:', err)
       toast.error('Failed to unlink project', {
         description: err instanceof Error ? err.message : 'Unknown error'
       })
     } finally {
       setIsUnlinking(false)
     }
-  }, [project.id, project.name, onOpenChange])
-
-  const handleReconfigureLabels = useCallback(async () => {
-    try {
-      await window.electron.ipcRenderer.invoke('resetLabelWizard', { projectId: project.id })
-      toast.success('Label setup reopened')
-      onOpenChange(false)
-    } catch (err) {
-      toast.error('Failed to reopen label setup', {
-        description: err instanceof Error ? err.message : 'Unknown error'
-      })
-    }
-  }, [onOpenChange, project.id])
-
-  const handleReopenGithubProjectPrompt = useCallback(async () => {
-    try {
-      await window.electron.ipcRenderer.invoke('resetGithubProjectPrompt', { projectId: project.id })
-      toast.success('GitHub Project prompt reopened')
-      onOpenChange(false)
-    } catch (err) {
-      toast.error('Failed to reopen GitHub Project prompt', {
-        description: err instanceof Error ? err.message : 'Unknown error'
-      })
-    }
-  }, [onOpenChange, project.id])
+  }, [project, onOpenChange])
 
   const themeOptions: {
     id: ThemePreference
@@ -389,8 +434,7 @@ export function SettingsDialog({
     }
   ]
 
-  // Render section content
-  const renderSectionContent = () => {
+  const renderSectionContent = (): ReactNode => {
     switch (activeSection) {
       case 'appearance':
         return (
@@ -409,18 +453,20 @@ export function SettingsDialog({
                   onClick={() => handleThemeChange(opt.id)}
                   className={cn(
                     'flex items-center gap-3 rounded-lg border p-3 text-left transition-colors',
-                    currentTheme === opt.id ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'
+                    themePreference === opt.id
+                      ? 'border-primary bg-primary/5'
+                      : 'hover:bg-muted/50'
                   )}
                 >
                   <div
                     className={cn(
                       'flex h-4 w-4 items-center justify-center rounded-full border',
-                      currentTheme === opt.id
+                      themePreference === opt.id
                         ? 'border-primary bg-primary text-primary-foreground'
                         : 'border-muted-foreground'
                     )}
                   >
-                    {currentTheme === opt.id && <Check className="h-3 w-3" />}
+                    {themePreference === opt.id && <Check className="h-3 w-3" />}
                   </div>
                   {opt.icon}
                   <div className="flex-1">
@@ -436,114 +482,130 @@ export function SettingsDialog({
       case 'features':
         return (
           <div className="grid gap-6">
-            <div className="grid gap-2">
-              <h3 className="text-sm font-medium">Cancel Behavior</h3>
-              <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
-                <div className="flex-1">
-                  <div className="font-medium text-sm">Rollback changes on cancel</div>
-                  <div className="text-xs text-muted-foreground">
-                    If you move a running card back to Draft (or forward to In Review/Testing/Done),
-                    the worker is canceled. Enable this to attempt to roll back the worker&apos;s
-                    local changes.
-                  </div>
-                </div>
-                <Switch
-                  checked={rollbackOnCancel}
-                  onCheckedChange={handleRollbackOnCancelChange}
-                />
-              </div>
-            </div>
-
-            <div className="grid gap-2">
-              <h3 className="text-sm font-medium">Board Settings</h3>
-              <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
-                <div className="flex-1">
-                  <div className="font-medium text-sm">Show Pull Requests section</div>
-                  <div className="text-xs text-muted-foreground">
-                    When enabled, pull requests / merge requests are shown in a separate section
-                    (and removed from the Kanban columns).
-                  </div>
-                </div>
-                <Switch
-                  checked={showPullRequestsSection}
-                  onCheckedChange={handleShowPRsSectionChange}
-                />
-              </div>
-            </div>
-
-            <div className="grid gap-2">
-              <h3 className="text-sm font-medium">Repo Integration</h3>
-              <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
-                <div className="flex-1">
-                  <div className="font-medium text-sm">Issue label mapping</div>
-                  <div className="text-xs text-muted-foreground">
-                    Configure (or re-run) the label mapping wizard for this repo.
-                  </div>
-                </div>
-                <Button variant="outline" size="sm" onClick={handleReconfigureLabels}>
-                  Configure
-                </Button>
-              </div>
-
-              {project.remote_repo_key?.startsWith('github:') && (
-                <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
-                  <div className="flex-1">
-                    <div className="font-medium text-sm">GitHub Projects V2</div>
-                    <div className="text-xs text-muted-foreground">
-                      Reopen the prompt to create a GitHub Project for status syncing.
+            {project && (
+              <>
+                <div className="grid gap-2">
+                  <h3 className="text-sm font-medium">Cancel Behavior</h3>
+                  <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                    <div className="flex-1">
+                      <div className="font-medium text-sm">Rollback changes on cancel</div>
+                      <div className="text-xs text-muted-foreground">
+                        If you move a running card back to Draft (or forward to In Review/Testing/Done),
+                        the worker is canceled. Enable this to attempt to roll back the worker&apos;s
+                        local changes.
+                      </div>
                     </div>
+                    <Switch
+                      checked={rollbackOnCancel}
+                      onCheckedChange={handleRollbackOnCancelChange}
+                    />
                   </div>
-                  <Button variant="outline" size="sm" onClick={handleReopenGithubProjectPrompt}>
-                    Reopen
-                  </Button>
                 </div>
-              )}
-            </div>
+
+                <div className="grid gap-2">
+                  <h3 className="text-sm font-medium">Board Settings</h3>
+                  <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                    <div className="flex-1">
+                      <div className="font-medium text-sm">Show Pull Requests section</div>
+                      <div className="text-xs text-muted-foreground">
+                        When enabled, pull requests / merge requests are shown in a separate section
+                        (and removed from the Kanban columns).
+                      </div>
+                    </div>
+                    <Switch
+                      checked={showPullRequestsSection}
+                      onCheckedChange={handleShowPRsSectionChange}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid gap-2">
+                  <h3 className="text-sm font-medium">Repo Integration</h3>
+                  <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                    <div className="flex-1">
+                      <div className="font-medium text-sm">Issue label mapping</div>
+                      <div className="text-xs text-muted-foreground">
+                        Configure (or re-run) the label mapping wizard for this repo.
+                      </div>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={handleReconfigureLabels}>
+                      Configure
+                    </Button>
+                  </div>
+
+                  {project.remote_repo_key?.startsWith('github:') && (
+                    <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                      <div className="flex-1">
+                        <div className="font-medium text-sm">GitHub Projects V2</div>
+                        <div className="text-xs text-muted-foreground">
+                          Reopen the prompt to create a GitHub Project for status syncing.
+                        </div>
+                      </div>
+                      <Button variant="outline" size="sm" onClick={handleReopenGithubProjectPrompt}>
+                        Reopen
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+
+            {!project && (
+              <div className="text-sm text-muted-foreground">
+                Select a project to configure its features.
+              </div>
+            )}
           </div>
         )
 
       case 'ai-agents':
         return (
           <div className="grid gap-6">
-            <div className="grid gap-2">
-              <h3 className="text-sm font-medium">Tool Preference</h3>
-              <p className="text-xs text-muted-foreground">Select which AI tool the worker should use.</p>
+            {project && (
               <div className="grid gap-2">
-                {toolOptions.map((opt) => (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    onClick={() => handleToolPreferenceChange(opt.id)}
-                    className={cn(
-                      'flex items-center gap-3 rounded-lg border p-3 text-left transition-colors',
-                      toolPreference === opt.id ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'
-                    )}
-                  >
-                    <div
+                <h3 className="text-sm font-medium">Tool Preference</h3>
+                <p className="text-xs text-muted-foreground">
+                  Select which AI tool the worker should use.
+                </p>
+                <div className="grid gap-2">
+                  {toolOptions.map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => handleToolPreferenceChange(opt.id)}
                       className={cn(
-                        'flex h-4 w-4 items-center justify-center rounded-full border',
+                        'flex items-center gap-3 rounded-lg border p-3 text-left transition-colors',
                         toolPreference === opt.id
-                          ? 'border-primary bg-primary text-primary-foreground'
-                          : 'border-muted-foreground'
+                          ? 'border-primary bg-primary/5'
+                          : 'hover:bg-muted/50'
                       )}
                     >
-                      {toolPreference === opt.id && <Check className="h-3 w-3" />}
-                    </div>
-                    {opt.icon}
-                    <div className="flex-1">
-                      <div className="font-medium">{opt.title}</div>
-                      <div className="text-xs text-muted-foreground">{opt.description}</div>
-                    </div>
-                  </button>
-                ))}
+                      <div
+                        className={cn(
+                          'flex h-4 w-4 items-center justify-center rounded-full border',
+                          toolPreference === opt.id
+                            ? 'border-primary bg-primary text-primary-foreground'
+                            : 'border-muted-foreground'
+                        )}
+                      >
+                        {toolPreference === opt.id && <Check className="h-3 w-3" />}
+                      </div>
+                      {opt.icon}
+                      <div className="flex-1">
+                        <div className="font-medium">{opt.title}</div>
+                        <div className="text-xs text-muted-foreground">{opt.description}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Stored in this project&apos;s policy (database). The worker still falls back if the
+                  selected CLI isn&apos;t installed.
+                </p>
               </div>
-              <p className="text-xs text-muted-foreground">
-                Stored in this project&apos;s policy (database). The worker still falls back if the
-                selected CLI isn&apos;t installed.
-              </p>
-            </div>
+            )}
 
-            <div className="border-t pt-4">
+            <div className={cn(project && 'border-t pt-4')}>
               <div className="flex items-center gap-2 mb-3">
                 <Key className="h-4 w-4 text-foreground/70" />
                 <h3 className="text-sm font-medium">API Keys</h3>
@@ -627,24 +689,30 @@ export function SettingsDialog({
       case 'danger-zone':
         return (
           <div className="grid gap-4">
-            <div className="rounded-lg border border-destructive/50 p-4">
-              <div className="flex items-center gap-2 mb-2">
-                <Unlink className="h-4 w-4 text-destructive" />
-                <h3 className="text-sm font-medium text-destructive">Unlink Project</h3>
+            {project ? (
+              <div className="rounded-lg border border-destructive/50 p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Unlink className="h-4 w-4 text-destructive" />
+                  <h3 className="text-sm font-medium text-destructive">Unlink Project</h3>
+                </div>
+                <p className="text-xs text-muted-foreground mb-4">
+                  Remove this project from Patchwork. Your files and repository will not be deleted —
+                  only the project entry in Patchwork will be removed.
+                </p>
+                <Button
+                  variant="outline"
+                  className="border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground"
+                  onClick={() => setShowUnlinkConfirm(true)}
+                >
+                  <Unlink className="h-4 w-4 mr-2" />
+                  Unlink Project
+                </Button>
               </div>
-              <p className="text-xs text-muted-foreground mb-4">
-                Remove this project from Patchwork. Your files and repository will not be deleted —
-                only the project entry in Patchwork will be removed.
-              </p>
-              <Button
-                variant="outline"
-                className="border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground"
-                onClick={() => setShowUnlinkConfirm(true)}
-              >
-                <Unlink className="h-4 w-4 mr-2" />
-                Unlink Project
-              </Button>
-            </div>
+            ) : (
+              <div className="text-sm text-muted-foreground">
+                Select a project to access danger zone options.
+              </div>
+            )}
           </div>
         )
 
@@ -655,7 +723,12 @@ export function SettingsDialog({
               <Key className="h-4 w-4 text-muted-foreground" />
               <h3 className="text-sm font-medium">Keyboard Shortcuts</h3>
             </div>
-            {shortcutsLoading ? (
+            {!supportsShortcuts ? (
+              <div className="text-sm text-muted-foreground">
+                Shortcuts are not available in this session. Restart the app to load the updated
+                preload.
+              </div>
+            ) : shortcutsLoading ? (
               <div className="text-sm text-muted-foreground flex items-center gap-2">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 Loading shortcuts...
@@ -665,6 +738,9 @@ export function SettingsDialog({
             )}
           </div>
         )
+
+      default:
+        return null
     }
   }
 
@@ -721,7 +797,16 @@ export function SettingsDialog({
 
             {/* Content */}
             <ScrollArea className="flex-1">
-              <div className="p-6">{renderSectionContent()}</div>
+              <div className="p-6">
+                {isLoading ? (
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading...
+                  </div>
+                ) : (
+                  renderSectionContent()
+                )}
+              </div>
             </ScrollArea>
           </div>
 
@@ -742,7 +827,7 @@ export function SettingsDialog({
               Unlink Project
             </DialogTitle>
             <DialogDescription>
-              Are you sure you want to unlink &quot;{project.name}&quot;? This will remove the
+              Are you sure you want to unlink &quot;{project?.name}&quot;? This will remove the
               project from Patchwork but will not delete your files.
             </DialogDescription>
           </DialogHeader>
@@ -755,7 +840,12 @@ export function SettingsDialog({
             >
               Cancel
             </Button>
-            <Button type="button" variant="destructive" onClick={handleUnlink} disabled={isUnlinking}>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={handleUnlink}
+              disabled={isUnlinking}
+            >
               {isUnlinking ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />

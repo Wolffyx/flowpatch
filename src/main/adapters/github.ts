@@ -36,6 +36,12 @@ interface GithubPR {
   draft?: boolean
 }
 
+interface GithubPullRequestIssueLink {
+  prNumber: number
+  prUrl: string
+  issueNumbers: number[]
+}
+
 // GitHub Projects V2 GraphQL types
 interface ProjectV2Item {
   id: string
@@ -491,6 +497,102 @@ export class GithubAdapter {
     }
   }
 
+  async listPRIssueLinks(): Promise<GithubPullRequestIssueLink[]> {
+    const results: GithubPullRequestIssueLink[] = []
+
+    try {
+      const query = `
+        query($owner: String!, $repo: String!, $cursor: String) {
+          repository(owner: $owner, name: $repo) {
+            pullRequests(
+              first: 100,
+              after: $cursor,
+              states: [OPEN, MERGED, CLOSED],
+              orderBy: { field: UPDATED_AT, direction: DESC }
+            ) {
+              nodes {
+                number
+                url
+                closingIssuesReferences(first: 25) {
+                  nodes {
+                    number
+                  }
+                }
+              }
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+            }
+          }
+        }
+      `
+
+      let cursor: string | null = null
+      let hasNextPage = true
+
+      while (hasNextPage) {
+        const args = [
+          'api',
+          'graphql',
+          '-f',
+          `query=${query}`,
+          '-F',
+          `owner=${this.owner}`,
+          '-F',
+          `repo=${this.repo}`
+        ]
+        if (cursor) args.push('-F', `cursor=${cursor}`)
+
+        const { stdout } = await execFileAsync('gh', args, { cwd: this.repoPath })
+        const response = JSON.parse(stdout) as {
+          data?: {
+            repository?: {
+              pullRequests?: {
+                nodes?: Array<{
+                  number?: number
+                  url?: string
+                  closingIssuesReferences?: { nodes?: Array<{ number?: number }> }
+                }>
+                pageInfo?: { hasNextPage?: boolean; endCursor?: string | null }
+              }
+            }
+          }
+          errors?: Array<{ message?: string }>
+        }
+
+        if (response.errors?.length) {
+          console.error('GraphQL errors fetching PR issue links:', response.errors)
+          break
+        }
+
+        const prConn = response.data?.repository?.pullRequests
+        const nodes = prConn?.nodes ?? []
+        for (const pr of nodes) {
+          const prNumber = pr.number
+          const prUrl = pr.url
+          if (!prNumber || !prUrl) continue
+
+          const issueNumbers = (pr.closingIssuesReferences?.nodes ?? [])
+            .map((n) => n.number)
+            .filter((n): n is number => typeof n === 'number')
+
+          if (issueNumbers.length === 0) continue
+
+          results.push({ prNumber, prUrl, issueNumbers })
+        }
+
+        hasNextPage = !!prConn?.pageInfo?.hasNextPage
+        cursor = prConn?.pageInfo?.endCursor ?? null
+      }
+    } catch (error) {
+      console.error('Failed to fetch PR issue links:', error)
+      return []
+    }
+
+    return results
+  }
+
   /**
    * List draft items ("DraftIssue") from a GitHub Projects V2 board.
    * These items don't appear in `gh issue list`, so we fetch them from the project directly.
@@ -805,86 +907,29 @@ export class GithubAdapter {
     }
 
     try {
-      // First, find the project item ID for this issue
-      const findItemQuery = `
-        query($projectId: ID!) {
-          node(id: $projectId) {
-            ... on ProjectV2 {
-              items(first: 100) {
-                nodes {
-                  id
-                  content {
-                    ... on Issue {
-                      number
-                    }
-                    ... on PullRequest {
-                      number
-                    }
-                  }
-                }
-              }
-              fields(first: 20) {
-                nodes {
-                  ... on ProjectV2SingleSelectField {
-                    id
-                    name
-                    options {
-                      id
-                      name
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      `
-
-      const { stdout } = await execFileAsync(
-        'gh',
-        ['api', 'graphql', '-f', `query=${findItemQuery}`, '-F', `projectId=${projectId}`],
-        { cwd: this.repoPath }
-      )
-
-      const response = JSON.parse(stdout)
-      const project = response.data?.node
-      if (!project) {
-        console.error('Project not found')
-        return false
-      }
-
-      // Find the item ID
-      const item = project.items.nodes.find(
-        (i: { content?: { number?: number } }) => i.content?.number === issueNumber
-      )
-      if (!item) {
-        logAction('updateProjectStatus: Issue not found in project', { issueNumber })
-        return false
-      }
-
-      // Find the status field and option
-      const statusFieldName = projectConfig?.statusFieldName || 'Status'
-      const statusField = project.fields.nodes.find(
-        (f: { name?: string }) => f.name === statusFieldName
-      )
+      const statusFieldName = (projectConfig?.statusFieldName || 'Status').trim()
+      const statusField = await this.findProjectV2SingleSelectField(projectId, statusFieldName)
       if (!statusField) {
         console.error('Status field not found:', statusFieldName)
         return false
       }
 
-      // Map CardStatus to project status value
       const statusValues = projectConfig?.statusValues || {}
       const targetStatusName = this.getProjectStatusValue(newStatus, statusValues)
-
       const statusOption = statusField.options.find(
-        (o: { name: string }) => o.name.toLowerCase() === targetStatusName.toLowerCase()
+        (o) => o.name.toLowerCase() === targetStatusName.toLowerCase()
       )
       if (!statusOption) {
         logAction('updateProjectStatus: Status option not found', { targetStatusName })
         return false
       }
 
-      // Update the field value
+      const itemId = await this.findProjectV2ItemIdByIssueNumber(projectId, issueNumber)
+      if (!itemId) {
+        logAction('updateProjectStatus: Issue not found in project', { issueNumber })
+        return false
+      }
+
       const updateMutation = `
         mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
           updateProjectV2ItemFieldValue(
@@ -895,31 +940,22 @@ export class GithubAdapter {
               value: { singleSelectOptionId: $optionId }
             }
           ) {
-            projectV2Item {
-              id
-            }
+            projectV2Item { id }
           }
         }
       `
 
-      await execFileAsync(
-        'gh',
-        [
-          'api',
-          'graphql',
-          '-f',
-          `query=${updateMutation}`,
-          '-F',
-          `projectId=${projectId}`,
-          '-F',
-          `itemId=${item.id}`,
-          '-F',
-          `fieldId=${statusField.id}`,
-          '-F',
-          `optionId=${statusOption.id}`
-        ],
-        { cwd: this.repoPath }
-      )
+      const updateRes = await this.ghApiGraphql<{ errors?: Array<{ message: string }> }>(updateMutation, {
+        projectId,
+        itemId,
+        fieldId: statusField.id,
+        optionId: statusOption.id
+      })
+
+      if (updateRes.errors?.length) {
+        console.error('GraphQL errors updating project status:', updateRes.errors)
+        return false
+      }
 
       logAction('updateProjectStatus: Success', { issueNumber, newStatus })
       return true
@@ -950,62 +986,8 @@ export class GithubAdapter {
     }
 
     try {
-      const findItemQuery = `
-        query($projectId: ID!) {
-          node(id: $projectId) {
-            ... on ProjectV2 {
-              items(first: 100) {
-                nodes {
-                  id
-                  content {
-                    __typename
-                    ... on DraftIssue {
-                      id
-                    }
-                  }
-                }
-              }
-              fields(first: 20) {
-                nodes {
-                  ... on ProjectV2SingleSelectField {
-                    id
-                    name
-                    options {
-                      id
-                      name
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      `
-
-      const { stdout } = await execFileAsync(
-        'gh',
-        ['api', 'graphql', '-f', `query=${findItemQuery}`, '-F', `projectId=${projectId}`],
-        { cwd: this.repoPath }
-      )
-
-      const response = JSON.parse(stdout)
-      const project = response.data?.node
-      if (!project) {
-        console.error('Project not found')
-        return false
-      }
-
-      const item = project.items.nodes.find(
-        (i: { content?: { __typename?: string; id?: string } }) =>
-          i.content?.__typename === 'DraftIssue' && i.content?.id === draftNodeId
-      )
-      if (!item) {
-        logAction('updateProjectDraftStatus: Draft not found in project', { draftNodeId })
-        return false
-      }
-
-      const statusFieldName = projectConfig?.statusFieldName || 'Status'
-      const statusField = project.fields.nodes.find((f: { name?: string }) => f.name === statusFieldName)
+      const statusFieldName = (projectConfig?.statusFieldName || 'Status').trim()
+      const statusField = await this.findProjectV2SingleSelectField(projectId, statusFieldName)
       if (!statusField) {
         console.error('Status field not found:', statusFieldName)
         return false
@@ -1014,10 +996,16 @@ export class GithubAdapter {
       const statusValues = projectConfig?.statusValues || {}
       const targetStatusName = this.getProjectStatusValue(newStatus, statusValues)
       const statusOption = statusField.options.find(
-        (o: { name: string }) => o.name.toLowerCase() === targetStatusName.toLowerCase()
+        (o) => o.name.toLowerCase() === targetStatusName.toLowerCase()
       )
       if (!statusOption) {
         logAction('updateProjectDraftStatus: Status option not found', { targetStatusName })
+        return false
+      }
+
+      const itemId = await this.findProjectV2ItemIdByDraftNodeId(projectId, draftNodeId)
+      if (!itemId) {
+        logAction('updateProjectDraftStatus: Draft not found in project', { draftNodeId })
         return false
       }
 
@@ -1031,31 +1019,22 @@ export class GithubAdapter {
               value: { singleSelectOptionId: $optionId }
             }
           ) {
-            projectV2Item {
-              id
-            }
+            projectV2Item { id }
           }
         }
       `
 
-      await execFileAsync(
-        'gh',
-        [
-          'api',
-          'graphql',
-          '-f',
-          `query=${updateMutation}`,
-          '-F',
-          `projectId=${projectId}`,
-          '-F',
-          `itemId=${item.id}`,
-          '-F',
-          `fieldId=${statusField.id}`,
-          '-F',
-          `optionId=${statusOption.id}`
-        ],
-        { cwd: this.repoPath }
-      )
+      const updateRes = await this.ghApiGraphql<{ errors?: Array<{ message: string }> }>(updateMutation, {
+        projectId,
+        itemId,
+        fieldId: statusField.id,
+        optionId: statusOption.id
+      })
+
+      if (updateRes.errors?.length) {
+        console.error('GraphQL errors updating project draft status:', updateRes.errors)
+        return false
+      }
 
       logAction('updateProjectDraftStatus: Success', { draftNodeId, newStatus })
       return true
@@ -1063,6 +1042,188 @@ export class GithubAdapter {
       console.error('Failed to update project draft status:', error)
       return false
     }
+  }
+
+  private async ghApiGraphql<T>(
+    query: string,
+    variables: Record<string, string | undefined | null>
+  ): Promise<T> {
+    const args = ['api', 'graphql', '-f', `query=${query}`]
+    for (const [key, value] of Object.entries(variables)) {
+      if (value === undefined || value === null || value === '') continue
+      // Use `-f` (string) instead of `-F` (type-coercing) so numeric-looking IDs
+      // like singleSelectOptionId ("98236657") aren't sent as JSON numbers.
+      args.push('-f', `${key}=${value}`)
+    }
+    const { stdout } = await execFileAsync('gh', args, { cwd: this.repoPath })
+    return JSON.parse(stdout) as T
+  }
+
+  private async findProjectV2SingleSelectField(
+    projectId: string,
+    fieldName: string
+  ): Promise<{ id: string; name: string; options: Array<{ id: string; name: string }> } | null> {
+    const normalizedTarget = fieldName.trim().toLowerCase()
+    if (!normalizedTarget) return null
+
+    const query = `
+      query($projectId: ID!, $after: String) {
+        node(id: $projectId) {
+          ... on ProjectV2 {
+            fields(first: 50, after: $after) {
+              nodes {
+                ... on ProjectV2SingleSelectField {
+                  id
+                  name
+                  options { id name }
+                }
+              }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        }
+      }
+    `
+
+    let after: string | null = null
+    for (let page = 0; page < 50; page++) {
+      const res = await this.ghApiGraphql<{
+        data?: {
+          node?: {
+            fields?: {
+              nodes?: Array<{
+                id?: string
+                name?: string
+                options?: Array<{ id: string; name: string }>
+              }>
+              pageInfo?: { hasNextPage: boolean; endCursor: string | null }
+            }
+          }
+        }
+        errors?: Array<{ message: string }>
+      }>(query, { projectId, after: after ?? undefined })
+
+      if (res.errors?.length) {
+        console.error('GraphQL errors fetching project fields:', res.errors)
+        return null
+      }
+
+      const fields = res.data?.node?.fields
+      const found = fields?.nodes?.find((f) => f.name?.trim().toLowerCase() === normalizedTarget)
+      if (found?.id && found.name && found.options) {
+        return { id: found.id, name: found.name, options: found.options }
+      }
+
+      const pageInfo = fields?.pageInfo
+      if (!pageInfo?.hasNextPage || !pageInfo.endCursor) break
+      after = pageInfo.endCursor
+    }
+
+    return null
+  }
+
+  private async findProjectV2ItemIdByIssueNumber(projectId: string, issueNumber: number): Promise<string | null> {
+    const query = `
+      query($projectId: ID!, $after: String) {
+        node(id: $projectId) {
+          ... on ProjectV2 {
+            items(first: 100, after: $after) {
+              nodes {
+                id
+                content {
+                  ... on Issue { number }
+                  ... on PullRequest { number }
+                }
+              }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        }
+      }
+    `
+
+    let after: string | null = null
+    for (let page = 0; page < 200; page++) {
+      const res = await this.ghApiGraphql<{
+        data?: {
+          node?: {
+            items?: {
+              nodes?: Array<{ id?: string; content?: { number?: number } }>
+              pageInfo?: { hasNextPage: boolean; endCursor: string | null }
+            }
+          }
+        }
+        errors?: Array<{ message: string }>
+      }>(query, { projectId, after: after ?? undefined })
+
+      if (res.errors?.length) {
+        console.error('GraphQL errors fetching project items:', res.errors)
+        return null
+      }
+
+      const items = res.data?.node?.items
+      const found = items?.nodes?.find((i) => i.content?.number === issueNumber)
+      if (found?.id) return found.id
+
+      const pageInfo = items?.pageInfo
+      if (!pageInfo?.hasNextPage || !pageInfo.endCursor) break
+      after = pageInfo.endCursor
+    }
+
+    return null
+  }
+
+  private async findProjectV2ItemIdByDraftNodeId(projectId: string, draftNodeId: string): Promise<string | null> {
+    const query = `
+      query($projectId: ID!, $after: String) {
+        node(id: $projectId) {
+          ... on ProjectV2 {
+            items(first: 100, after: $after) {
+              nodes {
+                id
+                content {
+                  __typename
+                  ... on DraftIssue { id }
+                }
+              }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        }
+      }
+    `
+
+    let after: string | null = null
+    for (let page = 0; page < 200; page++) {
+      const res = await this.ghApiGraphql<{
+        data?: {
+          node?: {
+            items?: {
+              nodes?: Array<{ id?: string; content?: { __typename?: string; id?: string } }>
+              pageInfo?: { hasNextPage: boolean; endCursor: string | null }
+            }
+          }
+        }
+        errors?: Array<{ message: string }>
+      }>(query, { projectId, after: after ?? undefined })
+
+      if (res.errors?.length) {
+        console.error('GraphQL errors fetching project items:', res.errors)
+        return null
+      }
+
+      const items = res.data?.node?.items
+      const found = items?.nodes?.find(
+        (i) => i.content?.__typename === 'DraftIssue' && i.content?.id === draftNodeId
+      )
+      if (found?.id) return found.id
+
+      const pageInfo = items?.pageInfo
+      if (!pageInfo?.hasNextPage || !pageInfo.endCursor) break
+      after = pageInfo.endCursor
+    }
+
+    return null
   }
 
   /**
@@ -1182,7 +1343,8 @@ export class GithubAdapter {
 
   async createIssue(
     title: string,
-    body?: string
+    body?: string,
+    labels?: string[]
   ): Promise<{ number: number; url: string; card: Card } | null> {
     try {
       const args = [
@@ -1196,6 +1358,13 @@ export class GithubAdapter {
 
       if (body) {
         args.push('--body', body)
+      }
+
+      // Add labels if provided
+      if (labels && labels.length > 0) {
+        for (const label of labels) {
+          args.push('--label', label)
+        }
       }
 
       // gh issue create doesn't support --json, so we parse the output URL

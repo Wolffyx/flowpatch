@@ -16,6 +16,7 @@ import { Switch } from './ui/switch'
 import { Badge } from './ui/badge'
 import { cn } from '../lib/utils'
 import { formatRelativeTime } from '../lib/utils'
+import { acceleratorToDisplay, detectPlatform } from '@shared/accelerator'
 import type { Project, Job, Card } from '../../../shared/types'
 import { SettingsDialog, type WorkerToolPreference } from './SettingsDialog'
 
@@ -27,6 +28,7 @@ interface TopBarProps {
   onSync: () => void
   onToggleWorker: (enabled: boolean) => void
   onOpenCommandPalette: () => void
+  commandPaletteShortcut?: string
   onSetWorkerToolPreference: (toolPreference: WorkerToolPreference) => Promise<void>
   onSetWorkerRollbackOnCancel: (rollbackOnCancel: boolean) => Promise<void>
   onSetShowPullRequestsSection: (showPullRequestsSection: boolean) => Promise<void>
@@ -41,11 +43,16 @@ export function TopBar({
   onSync,
   onToggleWorker,
   onOpenCommandPalette,
+  commandPaletteShortcut,
   onSetWorkerToolPreference,
   onSetWorkerRollbackOnCancel,
   onSetShowPullRequestsSection,
   onOpenWorkerLogs
 }: TopBarProps): React.JSX.Element {
+  const platform = detectPlatform()
+  const commandPaletteLabel = commandPaletteShortcut
+    ? acceleratorToDisplay(commandPaletteShortcut, platform)
+    : 'Ctrl+K'
   const [settingsOpen, setSettingsOpen] = useState(false)
   const runningJobs = jobs.filter((j) => j.state === 'running')
 
@@ -124,7 +131,7 @@ export function TopBar({
         <div className="text-muted-foreground">Select a project to get started</div>
         <Button variant="outline" size="sm" onClick={onOpenCommandPalette}>
           <Command className="mr-2 h-4 w-4" />
-          <span className="text-xs text-muted-foreground">Ctrl+K</span>
+          <span className="text-xs text-muted-foreground">{commandPaletteLabel}</span>
         </Button>
       </div>
     )
@@ -227,7 +234,7 @@ export function TopBar({
 
           <Button variant="outline" size="sm" onClick={onOpenCommandPalette}>
             <Command className="mr-2 h-4 w-4" />
-            <span className="text-xs text-muted-foreground">Ctrl+K</span>
+            <span className="text-xs text-muted-foreground">{commandPaletteLabel}</span>
           </Button>
         </div>
       </div>

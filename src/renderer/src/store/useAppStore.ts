@@ -44,7 +44,7 @@ export interface AppStore {
   createRepo: (payload: CreateRepoPayload) => Promise<void>
   selectRemote: (remoteName: string, remoteUrl: string, repoKey: string) => Promise<void>
   cancelRemoteSelection: () => void
-  moveCard: (cardId: string, status: CardStatus) => Promise<void>
+  moveCard: (cardId: string, status: CardStatus) => void
   createTestCard: (title: string) => Promise<void>
   createCard: (data: {
     title: string
@@ -213,17 +213,24 @@ export function useAppStore(): AppStore {
     setPendingRemoteSelection(null)
   }, [])
 
-  const moveCard = useCallback(
-    async (cardId: string, status: CardStatus) => {
-      try {
-        await window.electron.ipcRenderer.invoke('moveCard', { cardId, status })
-        await loadState()
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to move card')
-      }
-    },
-    [loadState]
-  )
+  const moveCard = useCallback((cardId: string, status: CardStatus) => {
+    // Optimistic update - update local state immediately for instant UI feedback
+    setProjects((prevProjects) =>
+      prevProjects.map((projectData) => ({
+        ...projectData,
+        cards: projectData.cards.map((card) =>
+          card.id === cardId
+            ? { ...card, status, updated_local_at: new Date().toISOString() }
+            : card
+        )
+      }))
+    )
+
+    // Fire-and-forget IPC call - don't block UI, backend syncs asynchronously
+    window.electron.ipcRenderer.invoke('moveCard', { cardId, status }).catch((err) => {
+      setError(err instanceof Error ? err.message : 'Failed to sync card move')
+    })
+  }, [])
 
   const createTestCard = useCallback(
     async (title: string) => {

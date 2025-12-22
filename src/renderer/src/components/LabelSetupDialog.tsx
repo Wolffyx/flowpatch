@@ -145,117 +145,119 @@ export function LabelSetupDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[720px]">
-        <DialogHeader>
+      <DialogContent className="max-w-[95vw] sm:max-w-[720px] max-h-[90vh] flex flex-col">
+        <DialogHeader className="shrink-0">
           <DialogTitle>Set up issue labels</DialogTitle>
           <DialogDescription>
             Patchwork uses issue labels to map remote issues into Kanban columns and to push status changes back.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-4 py-2">
-          <div className="rounded-lg border p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-sm font-medium">Create missing labels</div>
-                <div className="text-xs text-muted-foreground">
-                  If the chosen labels don&apos;t exist yet, Patchwork will create them in your repo.
+        <ScrollArea className="flex-1 min-h-0 pr-4 -mr-4">
+          <div className="grid gap-4 py-2">
+            <div className="rounded-lg border p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium">Create missing labels</div>
+                  <div className="text-xs text-muted-foreground">
+                    If the chosen labels don&apos;t exist yet, Patchwork will create them in your repo.
+                  </div>
+                </div>
+                <Switch checked={createMissingLabels} onCheckedChange={setCreateMissingLabels} className="shrink-0" />
+              </div>
+            </div>
+
+            <div className="grid gap-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-medium">Existing labels</div>
+                <div className="text-xs text-muted-foreground">{isLoading ? 'Loading…' : `${labels.length} found`}</div>
+              </div>
+              <div className="max-h-20 overflow-auto rounded-md border p-2">
+                <div className="flex flex-wrap gap-2">
+                  {labelNames.length === 0 ? (
+                    <div className="text-xs text-muted-foreground">No labels found.</div>
+                  ) : (
+                    labelNames.map((name) => (
+                      <Badge key={name} variant="secondary">
+                        {name}
+                      </Badge>
+                    ))
+                  )}
                 </div>
               </div>
-              <Switch checked={createMissingLabels} onCheckedChange={setCreateMissingLabels} />
             </div>
-          </div>
 
-          <div className="grid gap-2">
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-sm font-medium">Existing labels</div>
-              <div className="text-xs text-muted-foreground">{isLoading ? 'Loading…' : `${labels.length} found`}</div>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => setMapping(readInitialMapping({ ...project, policy_json: JSON.stringify(DEFAULT_POLICY) }))}>
+                Use Patchwork defaults
+              </Button>
+              <Button type="button" size="sm" onClick={() => apply({ forceDefaults: true, forceCreateMissing: true })}>
+                Create defaults and apply
+              </Button>
             </div>
-            <ScrollArea className="h-20 rounded-md border p-2">
-              <div className="flex flex-wrap gap-2">
-                {labelNames.length === 0 ? (
-                  <div className="text-xs text-muted-foreground">No labels found.</div>
-                ) : (
-                  labelNames.map((name) => (
-                    <Badge key={name} variant="secondary">
-                      {name}
-                    </Badge>
-                  ))
-                )}
+
+            <div className="grid gap-3 rounded-lg border p-3">
+              <div className="text-sm font-medium">Label mapping</div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid gap-2">
+                  <label className="text-xs font-medium text-muted-foreground">Ready eligibility label</label>
+                  <Input
+                    value={readyLabel}
+                    onChange={(e) => setMapping((prev) => ({ ...prev, readyLabel: e.target.value }))}
+                    list="repo-label-options"
+                    placeholder="ready"
+                  />
+                </div>
+
+                {KANBAN_COLUMNS.map((col) => {
+                  const key =
+                    col.id === 'in_progress'
+                      ? 'inProgress'
+                      : col.id === 'in_review'
+                        ? 'inReview'
+                        : col.id
+                  const value =
+                    key === 'draft'
+                      ? statusLabels.draft
+                      : key === 'ready'
+                        ? statusLabels.ready
+                        : key === 'inProgress'
+                          ? statusLabels.inProgress
+                          : key === 'inReview'
+                            ? statusLabels.inReview
+                            : key === 'testing'
+                              ? statusLabels.testing
+                              : statusLabels.done
+
+                  return (
+                    <div key={col.id} className="grid gap-2">
+                      <label className="text-xs font-medium text-muted-foreground">{col.label} label</label>
+                      <Input
+                        value={value}
+                        onChange={(e) =>
+                          setMapping((prev) => ({
+                            ...prev,
+                            statusLabels: { ...prev.statusLabels, [key]: e.target.value }
+                          }))
+                        }
+                        list="repo-label-options"
+                        placeholder={value}
+                      />
+                    </div>
+                  )
+                })}
               </div>
-            </ScrollArea>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" onClick={() => setMapping(readInitialMapping({ ...project, policy_json: JSON.stringify(DEFAULT_POLICY) }))}>
-              Use Patchwork defaults
-            </Button>
-            <Button type="button" onClick={() => apply({ forceDefaults: true, forceCreateMissing: true })}>
-              Create defaults and apply
-            </Button>
-          </div>
-
-          <div className="grid gap-3 rounded-lg border p-3">
-            <div className="text-sm font-medium">Label mapping</div>
-            <div className="grid gap-3">
-              <div className="grid gap-2">
-                <label className="text-xs font-medium text-muted-foreground">Ready eligibility label</label>
-                <Input
-                  value={readyLabel}
-                  onChange={(e) => setMapping((prev) => ({ ...prev, readyLabel: e.target.value }))}
-                  list="repo-label-options"
-                  placeholder="ready"
-                />
-              </div>
-
-              {KANBAN_COLUMNS.map((col) => {
-                const key =
-                  col.id === 'in_progress'
-                    ? 'inProgress'
-                    : col.id === 'in_review'
-                      ? 'inReview'
-                      : col.id
-                const value =
-                  key === 'draft'
-                    ? statusLabels.draft
-                    : key === 'ready'
-                      ? statusLabels.ready
-                      : key === 'inProgress'
-                        ? statusLabels.inProgress
-                        : key === 'inReview'
-                          ? statusLabels.inReview
-                          : key === 'testing'
-                            ? statusLabels.testing
-                            : statusLabels.done
-
-                return (
-                  <div key={col.id} className="grid gap-2">
-                    <label className="text-xs font-medium text-muted-foreground">{col.label} label</label>
-                    <Input
-                      value={value}
-                      onChange={(e) =>
-                        setMapping((prev) => ({
-                          ...prev,
-                          statusLabels: { ...prev.statusLabels, [key]: e.target.value }
-                        }))
-                      }
-                      list="repo-label-options"
-                      placeholder={value}
-                    />
-                  </div>
-                )
-              })}
             </div>
+
+            <datalist id="repo-label-options">
+              {labelNames.map((name) => (
+                <option key={name} value={name} />
+              ))}
+            </datalist>
           </div>
+        </ScrollArea>
 
-          <datalist id="repo-label-options">
-            {labelNames.map((name) => (
-              <option key={name} value={name} />
-            ))}
-          </datalist>
-        </div>
-
-        <DialogFooter>
+        <DialogFooter className="shrink-0 pt-4">
           <Button type="button" variant="outline" onClick={dismiss}>
             Skip
           </Button>

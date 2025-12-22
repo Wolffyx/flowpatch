@@ -46,7 +46,7 @@ export function KanbanColumn({
         <div className="flex items-center gap-2">
           <div className={cn('h-3 w-3 rounded-full', color)} />
           <h3 className="font-medium">{label}</h3>
-          <span className="text-xs text-muted-foreground bg-secondary px-1.5 py-0.5 rounded-full">
+          <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded-full">
             {cards.length}
           </span>
         </div>

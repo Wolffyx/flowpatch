@@ -24,9 +24,15 @@ import {
   releaseWorktreeLock,
   renewWorktreeLock,
   countActiveWorktrees,
-  cryptoRandomId
+  cryptoRandomId,
+  updateSubtaskStatus,
+  getNextPendingSubtask,
+  createWorkerProgress,
+  updateWorkerProgress,
+  getWorkerProgress
 } from '../db'
-import type { CardStatus, JobState, Project, Card, PolicyConfig, WorkerLogMessage, Worktree } from '../../shared/types'
+import { TaskDecomposer } from '../services/task-decomposer'
+import type { CardStatus, JobState, Project, Card, PolicyConfig, WorkerLogMessage, Worktree, Subtask, WorkerProgress } from '../../shared/types'
 import { slugify, generateWorktreeBranchName } from '../../shared/types'
 import { broadcastToRenderers } from '../ipc/broadcast'
 import { GitWorktreeManager, WorktreeConfig } from '../services/git-worktree-manager'
@@ -74,6 +80,11 @@ export class WorkerPipeline {
   private worktreeRecord: Worktree | null = null
   private worktreePath: string | null = null
   private workerId: string = cryptoRandomId()
+
+  // Decomposition and iterative AI state
+  private subtasks: Subtask[] = []
+  private progress: WorkerProgress | null = null
+  private taskDecomposer: TaskDecomposer | null = null
 
   constructor(projectId: string, cardId: string) {
     this.projectId = projectId
@@ -245,6 +256,11 @@ export class WorkerPipeline {
       )
     }
 
+    // Initialize task decomposer if enabled
+    if (this.policy.worker?.decomposition?.enabled) {
+      this.taskDecomposer = new TaskDecomposer(this.policy, this.adapter)
+    }
+
     // Initialize worktree manager if worktrees are enabled
     if (this.policy.worker?.worktree?.enabled) {
       this.worktreeManager = new GitWorktreeManager(this.project.local_path)
@@ -356,6 +372,15 @@ export class WorkerPipeline {
       this.ensureNotCanceled()
       this.ensureCardStatusAllowed(['in_progress'])
 
+      // Phase 4.5: Task Decomposition (if enabled)
+      if (this.taskDecomposer && this.card) {
+        this.setPhase('decomposition')
+        await this.runDecomposition()
+      }
+
+      this.ensureNotCanceled()
+      this.ensureCardStatusAllowed(['in_progress'])
+
       // Phase 5: Generate plan
       this.setPhase('plan')
       this.log('Generating implementation plan')
@@ -374,9 +399,19 @@ export class WorkerPipeline {
       createEvent(this.projectId, 'worker_plan', this.cardId, { plan })
 
       // Phase 6: Run AI tool (Claude Code or Codex)
+      // Supports both single-shot and iterative modes
       this.setPhase('ai')
-      this.log('Running AI implementation')
-      const aiSuccess = await this.runAI(plan)
+      const sessionMode = this.policy.worker?.session?.sessionMode ?? 'single'
+      let aiSuccess: boolean
+
+      if (sessionMode === 'iterative') {
+        this.log('Running AI implementation (iterative mode)')
+        aiSuccess = await this.runIterativeAI(plan)
+      } else {
+        this.log('Running AI implementation')
+        aiSuccess = await this.runAI(plan)
+      }
+
       this.ensureNotCanceled()
       this.ensureCardStatusAllowed(['in_progress'])
       if (!aiSuccess) {
@@ -707,10 +742,19 @@ export class WorkerPipeline {
       }, 500)
 
       const buffers = { stdout: '', stderr: '' }
+      const tail = { stdout: [] as string[], stderr: [] as string[] }
+      const pushTail = (stream: 'stdout' | 'stderr', line: string): void => {
+        if (!line) return
+        tail[stream].push(line)
+        if (tail[stream].length > 40) tail[stream].shift()
+      }
 
       const flushLine = (line: string, stream: 'stdout' | 'stderr'): void => {
         const trimmed = line.trimEnd()
-        if (trimmed) this.log(trimmed, { source, stream })
+        if (trimmed) {
+          pushTail(stream, trimmed)
+          this.log(trimmed, { source, stream })
+        }
       }
 
       const onChunk = (stream: 'stdout' | 'stderr', chunk: Buffer): void => {
@@ -745,7 +789,9 @@ export class WorkerPipeline {
           return
         }
         if (code && code !== 0) {
-          reject(new Error(`${command} exited with code ${code}`))
+          const stderrTail = tail.stderr.length ? `\n\n--- stderr (tail) ---\n${tail.stderr.join('\n')}` : ''
+          const stdoutTail = tail.stdout.length ? `\n\n--- stdout (tail) ---\n${tail.stdout.join('\n')}` : ''
+          reject(new Error(`${command} exited with code ${code}${stderrTail}${stdoutTail}`))
           return
         }
         resolve()
@@ -1166,7 +1212,16 @@ Forbidden paths: ${(this.policy.worker?.forbidPaths || []).join(', ')}
       const prompt = this.buildAIPrompt(plan)
 
       if (tool === 'claude') {
-        await this.runClaudeCode(prompt, timeoutMs)
+        try {
+          await this.runClaudeCode(prompt, timeoutMs)
+        } catch (error) {
+          if (hasCodex && this.isClaudeRetryableLimitError(error)) {
+            this.log('Claude failed due to rate/usage limit; falling back to Codex...')
+            await this.runCodex(prompt, timeoutMs)
+          } else {
+            throw error
+          }
+        }
       } else if (tool === 'codex') {
         await this.runCodex(prompt, timeoutMs)
       }
@@ -1196,6 +1251,29 @@ Please implement the changes manually following the plan above.
       writeFileSync(planPath, fullPlan)
       return false
     }
+  }
+
+  private isClaudeRetryableLimitError(error: unknown): boolean {
+    const msg = error instanceof Error ? error.message : String(error)
+    const s = msg.toLowerCase()
+    return (
+      s.includes('rate limit') ||
+      s.includes('ratelimit') ||
+      s.includes('rate_limit') ||
+      s.includes("you've hit your limit") ||
+      s.includes("you\u2019ve hit your limit") ||
+      s.includes('limit reached') ||
+      s.includes('quota') ||
+      s.includes('insufficient_quota') ||
+      s.includes('too many requests') ||
+      s.includes('http 429') ||
+      s.includes('status 429') ||
+      s.includes(' usage limit') ||
+      s.includes('usage limit') ||
+      s.includes('overloaded') ||
+      s.includes('exceeded') ||
+      s.includes('429')
+    )
   }
 
   private buildAIPrompt(plan: string): string {
@@ -1455,6 +1533,354 @@ _Automated by Patchwork_
       )
     }
   }
+
+  /**
+   * Run task decomposition to break complex tasks into subtasks.
+   * This phase checks if the task should be decomposed and creates subtasks
+   * either locally or as remote issues (GitHub/GitLab).
+   */
+  private async runDecomposition(): Promise<void> {
+    if (!this.taskDecomposer || !this.card) return
+
+    // Check if we already have subtasks
+    if (this.taskDecomposer.hasExistingSubtasks(this.cardId)) {
+      this.subtasks = this.taskDecomposer.getExistingSubtasks(this.cardId)
+      this.log(`Found ${this.subtasks.length} existing subtasks`)
+      return
+    }
+
+    this.log('Analyzing task for decomposition...')
+
+    try {
+      const workingDir = this.getWorkingDir()
+      const analysis = await this.taskDecomposer.analyzeCard(this.card, workingDir)
+
+      if (!analysis.shouldDecompose) {
+        this.log('Task does not need decomposition')
+        return
+      }
+
+      this.log(`Decomposing into ${analysis.subtasks.length} subtasks`)
+      if (analysis.reasoning) {
+        this.log(`Reasoning: ${analysis.reasoning}`)
+      }
+
+      // Create subtasks in DB and optionally as remote issues
+      const result = await this.taskDecomposer.createSubtasks(this.card, analysis.subtasks)
+      this.subtasks = result.subtasks
+
+      // Log decomposition event
+      createEvent(this.projectId, 'task_decomposed', this.cardId, {
+        subtaskCount: this.subtasks.length,
+        remoteIssuesCreated: result.remoteIssuesCreated,
+        reasoning: analysis.reasoning
+      })
+
+      this.log(`Created ${this.subtasks.length} subtasks (${result.remoteIssuesCreated} remote issues)`)
+    } catch (error) {
+      this.log(`Decomposition failed: ${error instanceof Error ? error.message : String(error)}`)
+      // Non-fatal - continue with the main task
+    }
+  }
+
+  /**
+   * Run AI implementation in iterative mode.
+   * Each iteration works on a portion of the task, commits progress,
+   * and continues until the task is complete or max iterations reached.
+   */
+  private async runIterativeAI(plan: string): Promise<boolean> {
+    if (!this.project || !this.card) return false
+
+    const sessionConfig = this.policy.worker?.session
+    const maxIterations = sessionConfig?.maxIterations ?? 5
+    const progressCheckpoint = sessionConfig?.progressCheckpoint ?? true
+    const contextCarryover = sessionConfig?.contextCarryover ?? 'summary'
+
+    // Initialize or resume progress tracking
+    let existingProgress = getWorkerProgress(this.cardId)
+    if (!existingProgress) {
+      existingProgress = createWorkerProgress({
+        cardId: this.cardId,
+        jobId: this.jobId ?? undefined,
+        totalIterations: maxIterations
+      })
+    }
+    this.progress = existingProgress
+
+    const startIteration = this.progress.iteration
+    this.log(`Starting iterative AI from iteration ${startIteration}/${maxIterations}`)
+
+    let contextSummary = this.progress.context_summary ?? ''
+    let allSuccess = true
+
+    for (let i = startIteration; i <= maxIterations; i++) {
+      this.ensureNotCanceled()
+
+      // Build iteration-specific prompt
+      const iterationPrompt = this.buildIterationPrompt(plan, i, maxIterations, contextSummary)
+
+      this.log(`Running iteration ${i}/${maxIterations}`)
+
+      try {
+        // Run AI for this iteration
+        const success = await this.runAI(iterationPrompt)
+
+        if (!success) {
+          this.log(`Iteration ${i} failed`)
+          allSuccess = false
+          // Update progress but don't break - let the partial work be saved
+        }
+
+        // Checkpoint progress if enabled
+        if (progressCheckpoint) {
+          await this.checkpointProgress(i, contextCarryover)
+        }
+
+        // Check if we've completed all subtasks or the main task
+        if (await this.isIterationComplete()) {
+          this.log(`Task completed after iteration ${i}`)
+          break
+        }
+
+        // Update context summary for next iteration
+        if (contextCarryover !== 'none') {
+          contextSummary = await this.generateContextSummary(contextCarryover)
+        }
+
+        // Update progress in DB
+        if (this.progress) {
+          updateWorkerProgress(this.progress.id, {
+            iteration: i + 1,
+            contextSummary
+          })
+        }
+      } catch (error) {
+        if (error instanceof WorkerCanceledError) {
+          throw error
+        }
+        this.log(`Iteration ${i} error: ${error instanceof Error ? error.message : String(error)}`)
+        allSuccess = false
+        break
+      }
+    }
+
+    return allSuccess
+  }
+
+  /**
+   * Build a prompt for a specific iteration of the iterative AI mode.
+   */
+  private buildIterationPrompt(
+    plan: string,
+    iteration: number,
+    maxIterations: number,
+    contextSummary: string
+  ): string {
+    const basePrompt = this.buildAIPrompt(plan)
+
+    // Add iteration context
+    let iterationContext = `\n\n## Iteration Context
+This is iteration ${iteration} of ${maxIterations}.
+`
+
+    // Add previous context if available
+    if (contextSummary) {
+      iterationContext += `\n### Previous Progress
+${contextSummary}
+
+Continue from where you left off. Focus on the next logical step.
+`
+    }
+
+    // Add subtask focus if we have subtasks
+    if (this.subtasks.length > 0) {
+      const pendingSubtasks = this.subtasks.filter(s => s.status === 'pending')
+      const currentSubtask = pendingSubtasks[0]
+
+      if (currentSubtask) {
+        iterationContext += `\n### Current Subtask
+Focus on this subtask: ${currentSubtask.title}
+${currentSubtask.description || ''}
+
+Remaining subtasks: ${pendingSubtasks.length}
+`
+      }
+    }
+
+    iterationContext += `\n### Iteration Guidelines
+- Focus on making incremental progress
+- Commit meaningful chunks of work
+- Leave the codebase in a working state
+- If you complete the current subtask, move to the next one
+`
+
+    return basePrompt + iterationContext
+  }
+
+  /**
+   * Checkpoint progress between iterations.
+   * Creates a WIP commit with current changes.
+   */
+  private async checkpointProgress(
+    iteration: number,
+    contextCarryover: 'full' | 'summary' | 'none'
+  ): Promise<void> {
+    const workingDir = this.getWorkingDir()
+
+    try {
+      // Check if there are changes to commit
+      const { stdout } = await execFileAsync('git', ['status', '--porcelain'], {
+        cwd: workingDir
+      })
+
+      if (!stdout.trim()) {
+        this.log(`Iteration ${iteration}: No changes to checkpoint`)
+        return
+      }
+
+      // Stage and commit changes
+      await execFileAsync('git', ['add', '-A'], {
+        cwd: workingDir,
+        env: this.gitEnv()
+      })
+
+      const commitMsg = `[WIP] Iteration ${iteration}: Progress checkpoint
+
+Automated checkpoint by Patchwork worker.
+Card: #${this.card?.remote_number_or_iid} ${this.card?.title}`
+
+      await execFileAsync('git', ['commit', '-m', commitMsg], {
+        cwd: workingDir,
+        env: this.gitEnv()
+      })
+
+      this.log(`Iteration ${iteration}: Progress checkpointed`)
+
+      // Update subtask status if we completed one
+      await this.updateSubtaskProgress()
+
+      // Track modified files
+      if (this.progress && contextCarryover !== 'none') {
+        const modifiedFiles = await this.getModifiedFilesSinceBase()
+        updateWorkerProgress(this.progress.id, {
+          iteration,
+          filesModified: modifiedFiles
+        })
+      }
+    } catch (error) {
+      this.log(`Checkpoint warning: ${error instanceof Error ? error.message : String(error)}`)
+      // Non-fatal - continue
+    }
+  }
+
+  /**
+   * Check if the current iteration has completed the task.
+   */
+  private async isIterationComplete(): Promise<boolean> {
+    // If we have subtasks, check if all are completed
+    if (this.subtasks.length > 0) {
+      const allCompleted = this.subtasks.every(s => s.status === 'completed')
+      if (allCompleted) return true
+    }
+
+    // Check for completion markers in the codebase
+    // This is a simple heuristic - could be enhanced
+    return false
+  }
+
+  /**
+   * Generate a context summary for the next iteration.
+   */
+  private async generateContextSummary(
+    mode: 'full' | 'summary' | 'none'
+  ): Promise<string> {
+    if (mode === 'none') return ''
+
+    const workingDir = this.getWorkingDir()
+
+    try {
+      // Get the diff of changes made
+      const { stdout: diffStat } = await execFileAsync(
+        'git',
+        ['diff', '--stat', this.baseHeadSha ?? 'HEAD~1'],
+        { cwd: workingDir }
+      )
+
+      // Get list of modified files
+      const { stdout: modifiedFiles } = await execFileAsync(
+        'git',
+        ['diff', '--name-only', this.baseHeadSha ?? 'HEAD~1'],
+        { cwd: workingDir }
+      )
+
+      let summary = `Files modified:\n${modifiedFiles.trim()}\n\nChange summary:\n${diffStat.trim()}`
+
+      // For summary mode, keep it brief
+      if (mode === 'summary') {
+        const lines = summary.split('\n')
+        if (lines.length > 20) {
+          summary = lines.slice(0, 20).join('\n') + '\n... (truncated)'
+        }
+      }
+
+      return summary
+    } catch {
+      return ''
+    }
+  }
+
+  /**
+   * Update subtask status based on completed work.
+   */
+  private async updateSubtaskProgress(): Promise<void> {
+    if (this.subtasks.length === 0) return
+
+    // Find the current in-progress subtask
+    const inProgress = this.subtasks.find(s => s.status === 'in_progress')
+    if (inProgress) {
+      // Mark as completed
+      updateSubtaskStatus(inProgress.id, 'completed')
+      // Refresh local cache
+      const updated = this.taskDecomposer?.getExistingSubtasks(this.cardId)
+      if (updated) this.subtasks = updated
+    }
+
+    // Start the next pending subtask
+    const nextPending = getNextPendingSubtask(this.cardId)
+    if (nextPending) {
+      updateSubtaskStatus(nextPending.id, 'in_progress')
+      const updated = this.taskDecomposer?.getExistingSubtasks(this.cardId)
+      if (updated) this.subtasks = updated
+    }
+
+    // Update progress
+    if (this.progress) {
+      const completed = this.subtasks.filter(s => s.status === 'completed').length
+      updateWorkerProgress(this.progress.id, {
+        subtasksCompleted: completed,
+        subtaskIndex: this.subtasks.findIndex(s => s.status === 'in_progress')
+      })
+    }
+  }
+
+  /**
+   * Get list of files modified since the base commit.
+   */
+  private async getModifiedFilesSinceBase(): Promise<string[]> {
+    const workingDir = this.getWorkingDir()
+
+    try {
+      const { stdout } = await execFileAsync(
+        'git',
+        ['diff', '--name-only', this.baseHeadSha ?? 'HEAD~1'],
+        { cwd: workingDir }
+      )
+
+      return stdout.trim().split('\n').filter(f => f.trim())
+    } catch {
+      return []
+    }
+  }
 }
 
 export async function runWorker(
@@ -1476,7 +1902,24 @@ export async function runWorker(
   broadcastToRenderers('stateUpdated')
 
   const pipeline = new WorkerPipeline(job.project_id, job.card_id)
-  const result = await pipeline.run(jobId)
+  let result: WorkerResult
+  try {
+    result = await pipeline.run(jobId)
+  } catch (error) {
+    const finalState = getJob(jobId)?.state
+    const message = error instanceof Error ? error.message : String(error)
+    const canceled = error instanceof WorkerCanceledError || finalState === 'canceled'
+
+    result = {
+      success: false,
+      phase: canceled ? 'canceled' : 'error',
+      error: message
+    }
+
+    updateJobState(jobId, canceled ? 'canceled' : 'failed', result, message)
+    broadcastToRenderers('stateUpdated')
+    return result
+  }
 
   // Update job state
   const finalState = getJob(jobId)?.state

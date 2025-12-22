@@ -1,28 +1,25 @@
 import {
   getProject,
-  getNextReadyCard,
-  hasActiveWorkerJob,
-  createJob,
-  createEvent,
   listProjects
 } from '../db'
-import { runWorker } from './pipeline'
+import {
+  startWorkerPool,
+  stopWorkerPool,
+  stopAllWorkerPools,
+  isWorkerPoolRunning,
+  getWorkerPoolStatus,
+  getPoolConfigFromPolicy
+} from './pool'
 import { logAction } from '../../shared/utils'
-import { broadcastToRenderers } from '../ipc/broadcast'
-
-// Store for active worker loops per project
-const activeLoops = new Map<string, NodeJS.Timeout>()
-
-// Default polling interval (how often to check for Ready cards)
-const DEFAULT_POLL_INTERVAL_MS = 30_000 // 30 seconds
+import type { PolicyConfig } from '../../shared/types'
 
 /**
  * Starts the worker loop for a project.
- * The loop will poll for Ready cards and process them automatically.
+ * Uses worker pool for parallel processing based on policy configuration.
  */
 export function startWorkerLoop(projectId: string): void {
   // Don't start if already running
-  if (activeLoops.has(projectId)) {
+  if (isWorkerPoolRunning(projectId)) {
     logAction('workerLoop:alreadyRunning', { projectId })
     return
   }
@@ -38,48 +35,49 @@ export function startWorkerLoop(projectId: string): void {
     return
   }
 
-  logAction('workerLoop:starting', { projectId, projectName: project.name })
+  // Parse policy for pool configuration
+  let policy: PolicyConfig | null = null
+  if (project.policy_json) {
+    try {
+      policy = JSON.parse(project.policy_json)
+    } catch {
+      // Use defaults
+    }
+  }
 
-  // Run immediately once, then set up interval
-  processNextCard(projectId)
+  const poolConfig = getPoolConfigFromPolicy(policy)
 
-  const interval = setInterval(() => {
-    processNextCard(projectId)
-  }, DEFAULT_POLL_INTERVAL_MS)
+  logAction('workerLoop:starting', {
+    projectId,
+    projectName: project.name,
+    maxWorkers: poolConfig.maxWorkers
+  })
 
-  activeLoops.set(projectId, interval)
-  logAction('workerLoop:started', { projectId })
+  // Start worker pool
+  startWorkerPool(projectId, poolConfig)
 }
 
 /**
  * Stops the worker loop for a project.
  */
 export function stopWorkerLoop(projectId: string): void {
-  const interval = activeLoops.get(projectId)
-  if (interval) {
-    clearInterval(interval)
-    activeLoops.delete(projectId)
-    logAction('workerLoop:stopped', { projectId })
-  }
+  stopWorkerPool(projectId)
+  logAction('workerLoop:stopped', { projectId })
 }
 
 /**
  * Checks if a worker loop is running for a project.
  */
 export function isWorkerLoopRunning(projectId: string): boolean {
-  return activeLoops.has(projectId)
+  return isWorkerPoolRunning(projectId)
 }
 
 /**
  * Stops all active worker loops.
  * Call this on app shutdown.
  */
-export function stopAllWorkerLoops(): void {
-  for (const [projectId, interval] of activeLoops) {
-    clearInterval(interval)
-    logAction('workerLoop:stopped', { projectId })
-  }
-  activeLoops.clear()
+export async function stopAllWorkerLoops(): Promise<void> {
+  await stopAllWorkerPools()
   logAction('workerLoop:allStopped')
 }
 
@@ -92,7 +90,7 @@ export function startEnabledWorkerLoops(): void {
 
   logAction('workerLoop:startingEnabled:allProjects', {
     totalCount: projects.length,
-    projects: projects.map(p => ({
+    projects: projects.map((p) => ({
       id: p.id,
       name: p.name,
       worker_enabled: p.worker_enabled,
@@ -106,7 +104,7 @@ export function startEnabledWorkerLoops(): void {
 
   logAction('workerLoop:startingEnabled', {
     count: enabledProjects.length,
-    enabledProjectNames: enabledProjects.map(p => p.name)
+    enabledProjectNames: enabledProjects.map((p) => p.name)
   })
 
   for (const project of enabledProjects) {
@@ -115,83 +113,24 @@ export function startEnabledWorkerLoops(): void {
 }
 
 /**
- * Process the next Ready card for a project.
- * This is the main worker loop iteration.
- */
-async function processNextCard(projectId: string): Promise<void> {
-  try {
-    // Check if there's already an active worker job
-    if (hasActiveWorkerJob(projectId)) {
-      logAction('workerLoop:jobInProgress', { projectId })
-      return
-    }
-
-    // Check if worker is still enabled
-    const project = getProject(projectId)
-    if (!project || Number(project.worker_enabled) !== 1) {
-      logAction('workerLoop:workerDisabled', { projectId, worker_enabled: project?.worker_enabled })
-      stopWorkerLoop(projectId)
-      return
-    }
-
-    // Get retry cooldown from policy (could be made configurable)
-    const retryCooldownMinutes = 30
-
-    // Find next eligible Ready card
-    const card = getNextReadyCard(projectId, retryCooldownMinutes)
-    if (!card) {
-      // No Ready cards to process - this is normal, just wait
-      return
-    }
-
-    logAction('workerLoop:foundCard', {
-      projectId,
-      cardId: card.id,
-      cardTitle: card.title,
-      issueNumber: card.remote_number_or_iid
-    })
-
-    // Create and execute worker job
-    const job = createJob(projectId, 'worker_run', card.id)
-    createEvent(projectId, 'worker_run', card.id, {
-      jobId: job.id,
-      trigger: 'auto'
-    })
-    broadcastToRenderers('stateUpdated')
-
-    logAction('workerLoop:startingJob', {
-      projectId,
-      jobId: job.id,
-      cardId: card.id
-    })
-
-    // Execute the worker pipeline
-    const result = await runWorker(job.id)
-    broadcastToRenderers('stateUpdated')
-
-    logAction('workerLoop:jobComplete', {
-      projectId,
-      jobId: job.id,
-      success: result.success,
-      phase: result.phase,
-      prUrl: result.prUrl,
-      error: result.error
-    })
-  } catch (error) {
-    logAction('workerLoop:error', {
-      projectId,
-      error: error instanceof Error ? error.message : String(error)
-    })
-  }
-}
-
-/**
  * Gets the status of worker loops for all projects.
  */
-export function getWorkerLoopStatus(): { projectId: string; running: boolean }[] {
+export function getWorkerLoopStatus(): {
+  projectId: string
+  running: boolean
+  activeWorkers?: number
+  maxWorkers?: number
+  idleSlots?: number
+}[] {
   const projects = listProjects()
-  return projects.map((p) => ({
-    projectId: p.id,
-    running: activeLoops.has(p.id)
-  }))
+  return projects.map((p) => {
+    const poolStatus = getWorkerPoolStatus(p.id)
+    return {
+      projectId: p.id,
+      running: poolStatus?.running ?? false,
+      activeWorkers: poolStatus?.activeWorkers,
+      maxWorkers: poolStatus?.maxWorkers,
+      idleSlots: poolStatus?.idleSlots
+    }
+  })
 }

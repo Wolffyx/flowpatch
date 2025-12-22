@@ -11,7 +11,8 @@ import {
   setSyncCursor,
   updateJobState,
   getJob,
-  createEvent
+  createEvent,
+  ensureCardLink
 } from '../db'
 import type { Project, Card, CardStatus, PolicyConfig } from '../../shared/types'
 
@@ -146,6 +147,11 @@ export class SyncEngine {
         if (updated) cardsUpdated++
       }
 
+      // After cards are present locally, link issues to their related PRs (GitHub only)
+      if (this.adapter instanceof GithubAdapter) {
+        await this.syncGithubIssuePrLinks()
+      }
+
       // Update project sync time
       updateProjectSyncTime(this.projectId)
 
@@ -228,6 +234,44 @@ export class SyncEngine {
     })
 
     return true
+  }
+
+  private async syncGithubIssuePrLinks(): Promise<void> {
+    if (!this.adapter || !(this.adapter instanceof GithubAdapter) || !this.project?.remote_repo_key) {
+      return
+    }
+
+    try {
+      const localCards = listCards(this.projectId)
+      const issueCardIdByNumber = new Map<number, string>()
+
+      for (const card of localCards) {
+        if (card.type !== 'issue') continue
+        const n = card.remote_number_or_iid ? Number.parseInt(card.remote_number_or_iid, 10) : NaN
+        if (Number.isNaN(n)) continue
+        issueCardIdByNumber.set(n, card.id)
+      }
+
+      if (issueCardIdByNumber.size === 0) return
+
+      const links = await this.adapter.listPRIssueLinks()
+      for (const link of links) {
+        for (const issueNumber of link.issueNumbers) {
+          const issueCardId = issueCardIdByNumber.get(issueNumber)
+          if (!issueCardId) continue
+          ensureCardLink(
+            issueCardId,
+            'pr',
+            link.prUrl,
+            this.project.remote_repo_key,
+            String(link.prNumber)
+          )
+        }
+      }
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error)
+      console.warn(`[SyncEngine] syncGithubIssuePrLinks failed project=${this.projectId}: ${errorMsg}`)
+    }
   }
 
   async pushStatusChange(cardId: string, newStatus: CardStatus): Promise<boolean> {
