@@ -5,6 +5,7 @@ out
 .eslintcache
 *.log*
 /.idea/
+.idea
 .automaker
 build
 
