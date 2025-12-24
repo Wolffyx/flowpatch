@@ -147,7 +147,9 @@ export function SettingsDialog({
     // Load API keys
     const loadApiKeys = async () => {
       try {
-        const anthropic = await window.electron.ipcRenderer.invoke('getApiKey', { key: 'anthropic' })
+        const anthropic = await window.electron.ipcRenderer.invoke('getApiKey', {
+          key: 'anthropic'
+        })
         const openai = await window.electron.ipcRenderer.invoke('getApiKey', { key: 'openai' })
         setAnthropicApiKey(anthropic || '')
         setOpenaiApiKey(openai || '')
@@ -161,7 +163,9 @@ export function SettingsDialog({
   const loadShortcuts = useCallback(async (): Promise<void> => {
     setShortcutsLoading(true)
     try {
-      const data = (await window.electron.ipcRenderer.invoke('shortcuts:getAll')) as ShortcutBinding[]
+      const data = (await window.electron.ipcRenderer.invoke(
+        'shortcuts:getAll'
+      )) as ShortcutBinding[]
       setShortcuts(data)
     } catch {
       setShortcuts([])
@@ -236,7 +240,9 @@ export function SettingsDialog({
       try {
         await onSetWorkerRollbackOnCancel(enabled)
         toast.success('Cancel behavior updated', {
-          description: enabled ? 'Changes will be rolled back on cancel' : 'Changes will be kept on cancel'
+          description: enabled
+            ? 'Changes will be rolled back on cancel'
+            : 'Changes will be kept on cancel'
         })
       } catch (err) {
         setRollbackOnCancel(previousValue) // Rollback
@@ -255,7 +261,9 @@ export function SettingsDialog({
       try {
         await onSetShowPullRequestsSection(enabled)
         toast.success('Board layout updated', {
-          description: enabled ? 'Pull requests section is now visible' : 'Pull requests section is now hidden'
+          description: enabled
+            ? 'Pull requests section is now visible'
+            : 'Pull requests section is now hidden'
         })
       } catch (err) {
         setShowPullRequestsSection(previousValue) // Rollback
@@ -270,7 +278,10 @@ export function SettingsDialog({
   const handleSaveAnthropicKey = useCallback(async () => {
     setSavingAnthropicKey(true)
     try {
-      await window.electron.ipcRenderer.invoke('setApiKey', { key: 'anthropic', value: anthropicApiKey })
+      await window.electron.ipcRenderer.invoke('setApiKey', {
+        key: 'anthropic',
+        value: anthropicApiKey
+      })
       toast.success('Anthropic API key saved')
     } catch (err) {
       toast.error('Failed to save Anthropic API key', {
@@ -327,7 +338,9 @@ export function SettingsDialog({
 
   const handleReopenGithubProjectPrompt = useCallback(async () => {
     try {
-      await window.electron.ipcRenderer.invoke('resetGithubProjectPrompt', { projectId: project.id })
+      await window.electron.ipcRenderer.invoke('resetGithubProjectPrompt', {
+        projectId: project.id
+      })
       toast.success('GitHub Project prompt reopened')
       onOpenChange(false)
     } catch (err) {
@@ -447,10 +460,7 @@ export function SettingsDialog({
                     local changes.
                   </div>
                 </div>
-                <Switch
-                  checked={rollbackOnCancel}
-                  onCheckedChange={handleRollbackOnCancelChange}
-                />
+                <Switch checked={rollbackOnCancel} onCheckedChange={handleRollbackOnCancelChange} />
               </div>
             </div>
 
@@ -507,7 +517,9 @@ export function SettingsDialog({
           <div className="grid gap-6">
             <div className="grid gap-2">
               <h3 className="text-sm font-medium">Tool Preference</h3>
-              <p className="text-xs text-muted-foreground">Select which AI tool the worker should use.</p>
+              <p className="text-xs text-muted-foreground">
+                Select which AI tool the worker should use.
+              </p>
               <div className="grid gap-2">
                 {toolOptions.map((opt) => (
                   <button
@@ -516,7 +528,9 @@ export function SettingsDialog({
                     onClick={() => handleToolPreferenceChange(opt.id)}
                     className={cn(
                       'flex items-center gap-3 rounded-lg border p-3 text-left transition-colors',
-                      toolPreference === opt.id ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'
+                      toolPreference === opt.id
+                        ? 'border-primary bg-primary/5'
+                        : 'hover:bg-muted/50'
                     )}
                   >
                     <div
@@ -755,7 +769,12 @@ export function SettingsDialog({
             >
               Cancel
             </Button>
-            <Button type="button" variant="destructive" onClick={handleUnlink} disabled={isUnlinking}>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={handleUnlink}
+              disabled={isUnlinking}
+            >
               {isUnlinking ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />

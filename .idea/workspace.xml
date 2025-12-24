@@ -5,27 +5,79 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="2a70596c-d075-4df5-985f-47d56f5e40d3" name="Changes" comment="Added check to for cli on startup">
+      <change beforePath="$PROJECT_DIR$/.claude/settings.local.json" beforeDir="false" afterPath="$PROJECT_DIR$/.claude/settings.local.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/electron.vite.config.ts" beforeDir="false" afterPath="$PROJECT_DIR$/electron.vite.config.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.tmp/electron-chrome-tabs" beforeDir="false" afterPath="$PROJECT_DIR$/.tmp/electron-chrome-tabs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/HANDOFF.md" beforeDir="false" afterPath="$PROJECT_DIR$/HANDOFF.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/PLAN-WORKTREE.md" beforeDir="false" afterPath="$PROJECT_DIR$/PLAN-WORKTREE.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Plan.md" beforeDir="false" afterPath="$PROJECT_DIR$/Plan.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/activityStore.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/activityStore.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/adapters/github.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/adapters/github.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/adapters/gitlab.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/adapters/gitlab.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/db.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/db.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/index.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/index.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/ipc/broadcast.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/ipc/broadcast.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/ipc/projectHandlers.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/ipc/projectHandlers.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/ipc/shellHandlers.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/ipc/shellHandlers.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/logStore.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/logStore.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/projectView.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/projectView.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/services/git-worktree-manager.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/services/git-worktree-manager.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/services/project-initializer.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/services/project-initializer.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/services/task-decomposer.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/services/task-decomposer.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/services/worktree-cleanup-scheduler.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/services/worktree-cleanup-scheduler.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/services/worktree-reconciler.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/services/worktree-reconciler.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/settingsStore.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/settingsStore.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/shortcuts.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/shortcuts.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/sync/engine.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/sync/engine.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/tabManager.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/tabManager.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/worker/loop.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/worker/loop.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/worker/pipeline.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/worker/pipeline.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/worker/pool.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/worker/pool.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/preload/project.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/preload/project.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/preload/shell.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/preload/shell.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/index.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/project/App.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/project/App.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/shell/App.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/shell/App.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/shell/components/LogsPanel.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/shell/components/LogsPanel.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/shell/components/SettingsModal.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/shell/components/SettingsModal.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/shell/components/ShellTopBar.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/shell/components/ShellTopBar.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/shell/components/TabBar.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/shell/components/TabBar.tsx" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/renderer/src/App.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/App.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/assets/base.css" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/assets/base.css" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/renderer/src/assets/main.css" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/assets/main.css" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/AddCardDialog.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/AddCardDialog.tsx" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/renderer/src/components/CardDrawer.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/CardDrawer.tsx" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/renderer/src/components/CommandPalette.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/CommandPalette.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/GithubProjectPromptDialog.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/GithubProjectPromptDialog.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/KanbanBoard.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/KanbanBoard.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/KanbanCard.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/KanbanCard.tsx" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/renderer/src/components/KanbanColumn.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/KanbanColumn.tsx" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/renderer/src/components/LabelSetupDialog.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/LabelSetupDialog.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/PullRequestCard.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/PullRequestCard.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/PullRequestsSection.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/PullRequestsSection.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/RepoStartDialog.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/RepoStartDialog.tsx" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/renderer/src/components/SettingsDialog.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/SettingsDialog.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/ShortcutsEditor.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/ShortcutsEditor.tsx" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/renderer/src/components/TopBar.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/TopBar.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/WorkerLogDialog.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/WorkerLogDialog.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/ui/badge.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/ui/badge.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/ui/button.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/ui/button.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/ui/card.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/ui/card.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/ui/dialog.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/ui/dialog.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/ui/input.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/ui/input.tsx" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/renderer/src/components/ui/scroll-area.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/ui/scroll-area.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/renderer/src/context/ThemeContext.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/context/ThemeContext.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/ui/sonner.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/ui/sonner.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/ui/switch.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/ui/switch.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/components/ui/textarea.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/components/ui/textarea.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/lib/linkedPullRequests.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/lib/linkedPullRequests.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/renderer/src/lib/useShortcuts.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/lib/useShortcuts.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/renderer/src/store/useAppStore.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/renderer/src/store/useAppStore.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/shared/accelerator.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/shared/accelerator.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/shared/shortcuts.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/shared/shortcuts.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/shared/types.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/shared/types.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/shared/utils.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/shared/utils.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tsconfig.node.tsbuildinfo" beforeDir="false" afterPath="$PROJECT_DIR$/tsconfig.node.tsbuildinfo" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -64,6 +116,7 @@
     &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
     &quot;com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1&quot;: &quot;true&quot;,
     &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
     &quot;junie.onboarding.icon.badge.shown&quot;: &quot;true&quot;,
     &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
     &quot;last_opened_file_path&quot;: &quot;D:/Projects/Typescript/React/Patchwork&quot;,
@@ -138,6 +191,8 @@
       <workItem from="1766230292122" duration="10738000" />
       <workItem from="1766329940126" duration="5024000" />
       <workItem from="1766389033598" duration="22311000" />
+      <workItem from="1766478318648" duration="17066000" />
+      <workItem from="1766563250359" duration="1633000" />
     </task>
     <task id="LOCAL-00001" summary="Added more organization and improved worker">
       <option name="closed" value="true" />
@@ -180,7 +235,7 @@
       <breakpoints>
         <line-breakpoint enabled="true" type="javascript">
           <url>file://$PROJECT_DIR$/src/renderer/src/components/ui/dialog.tsx</url>
-          <line>9</line>
+          <line>7</line>
           <option name="timeStamp" value="1" />
         </line-breakpoint>
       </breakpoints>

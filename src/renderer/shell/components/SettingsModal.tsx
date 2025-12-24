@@ -132,7 +132,9 @@ export function SettingsModal({
 
       // Load API keys
       try {
-        const anthropic = await window.electron.ipcRenderer.invoke('getApiKey', { key: 'anthropic' })
+        const anthropic = await window.electron.ipcRenderer.invoke('getApiKey', {
+          key: 'anthropic'
+        })
         const openai = await window.electron.ipcRenderer.invoke('getApiKey', { key: 'openai' })
         setAnthropicApiKey(anthropic || '')
         setOpenaiApiKey(openai || '')
@@ -192,8 +194,7 @@ export function SettingsModal({
     try {
       await window.shellAPI.setThemePreference(theme)
       setThemePreference(theme)
-      const resolved =
-        theme === 'system' ? await window.shellAPI.getSystemTheme() : theme
+      const resolved = theme === 'system' ? await window.shellAPI.getSystemTheme() : theme
       document.documentElement.classList.toggle('dark', resolved === 'dark')
       toast.success('Theme updated', {
         description: `Switched to ${theme} theme`
@@ -251,7 +252,9 @@ export function SettingsModal({
           policy: { worker: { rollbackOnCancel: enabled } }
         })
         toast.success('Cancel behavior updated', {
-          description: enabled ? 'Changes will be rolled back on cancel' : 'Changes will be kept on cancel'
+          description: enabled
+            ? 'Changes will be rolled back on cancel'
+            : 'Changes will be kept on cancel'
         })
       } catch (err) {
         setRollbackOnCancel(previousValue)
@@ -275,7 +278,9 @@ export function SettingsModal({
           policy: { ui: { showPullRequestsSection: enabled } }
         })
         toast.success('Board layout updated', {
-          description: enabled ? 'Pull requests section is now visible' : 'Pull requests section is now hidden'
+          description: enabled
+            ? 'Pull requests section is now visible'
+            : 'Pull requests section is now hidden'
         })
       } catch (err) {
         setShowPullRequestsSection(previousValue)
@@ -334,7 +339,9 @@ export function SettingsModal({
     }
     try {
       console.log('[SettingsModal] Calling resetLabelWizard...')
-      const result = await window.electron.ipcRenderer.invoke('resetLabelWizard', { projectId: project.id })
+      const result = await window.electron.ipcRenderer.invoke('resetLabelWizard', {
+        projectId: project.id
+      })
       console.log('[SettingsModal] resetLabelWizard result:', result)
       toast.success('Label setup reopened')
       onOpenChange(false)
@@ -453,9 +460,7 @@ export function SettingsModal({
                   onClick={() => handleThemeChange(opt.id)}
                   className={cn(
                     'flex items-center gap-3 rounded-lg border p-3 text-left transition-colors',
-                    themePreference === opt.id
-                      ? 'border-primary bg-primary/5'
-                      : 'hover:bg-muted/50'
+                    themePreference === opt.id ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'
                   )}
                 >
                   <div
@@ -490,9 +495,9 @@ export function SettingsModal({
                     <div className="flex-1">
                       <div className="font-medium text-sm">Rollback changes on cancel</div>
                       <div className="text-xs text-muted-foreground">
-                        If you move a running card back to Draft (or forward to In Review/Testing/Done),
-                        the worker is canceled. Enable this to attempt to roll back the worker&apos;s
-                        local changes.
+                        If you move a running card back to Draft (or forward to In
+                        Review/Testing/Done), the worker is canceled. Enable this to attempt to roll
+                        back the worker&apos;s local changes.
                       </div>
                     </div>
                     <Switch
@@ -599,8 +604,8 @@ export function SettingsModal({
                   ))}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Stored in this project&apos;s policy (database). The worker still falls back if the
-                  selected CLI isn&apos;t installed.
+                  Stored in this project&apos;s policy (database). The worker still falls back if
+                  the selected CLI isn&apos;t installed.
                 </p>
               </div>
             )}
@@ -696,8 +701,8 @@ export function SettingsModal({
                   <h3 className="text-sm font-medium text-destructive">Unlink Project</h3>
                 </div>
                 <p className="text-xs text-muted-foreground mb-4">
-                  Remove this project from Patchwork. Your files and repository will not be deleted —
-                  only the project entry in Patchwork will be removed.
+                  Remove this project from Patchwork. Your files and repository will not be deleted
+                  — only the project entry in Patchwork will be removed.
                 </p>
                 <Button
                   variant="outline"

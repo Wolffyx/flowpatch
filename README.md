@@ -8,6 +8,10 @@ An Electron application with React and TypeScript
 
 ## Project Setup
 
+## AI Drafting
+
+When adding a card in the Draft column, use `Draft with AI` to chat with Claude Code or Codex (plan mode) and insert the generated text into the card/issue description.
+
 ### Install
 
 ```bash

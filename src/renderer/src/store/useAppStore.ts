@@ -1,27 +1,35 @@
-import { useState, useCallback, useEffect } from 'react'
+/**
+ * App Store Hook
+ *
+ * Composes domain-specific hooks into a single unified store.
+ * This is the main entry point for components to access app state.
+ *
+ * For new code, consider using the domain-specific hooks directly:
+ * - useProjects: Project list and selection
+ * - useCards: Card operations
+ * - useWorker: Worker state and logs
+ * - useSync: Sync operations
+ * - useUISettings: UI preferences
+ */
+
+import { useProjects, type ProjectData } from './useProjects'
+import { useCards } from './useCards'
+import { useWorker } from './useWorker'
+import { useSync } from './useSync'
+import { useUISettings } from './useUISettings'
 import type {
-  Project,
   Card,
   CardLink,
-  Event,
-  Job,
   CardStatus,
-  RemoteInfo,
-  AppState,
-  PolicyConfig,
-  WorkerLogMessage,
-  CreateRepoPayload
+  CreateRepoPayload,
+  RemoteInfo
 } from '../../../shared/types'
 
-export interface ProjectData {
-  project: Project
-  cards: Card[]
-  cardLinks: CardLink[]
-  events: Event[]
-  jobs: Job[]
-}
+// Re-export ProjectData for backward compatibility
+export type { ProjectData } from './useProjects'
 
 export interface AppStore {
+  // State
   projects: ProjectData[]
   selectedProjectId: string | null
   selectedCardId: string | null
@@ -32,7 +40,7 @@ export interface AppStore {
 
   // Remote selection dialog state
   pendingRemoteSelection: {
-    project: Project
+    project: { id: string; name: string; local_path: string }
     remotes: RemoteInfo[]
   } | null
 
@@ -51,6 +59,7 @@ export interface AppStore {
     body: string
     createType: 'local' | 'github_issue'
   }) => Promise<void>
+  createCardsBatch: (items: Array<{ title: string; body: string }>) => Promise<void>
   syncProject: () => Promise<void>
   toggleWorker: (enabled: boolean) => Promise<void>
   setWorkerToolPreference: (toolPreference: 'auto' | 'claude' | 'codex') => Promise<void>
@@ -65,444 +74,94 @@ export interface AppStore {
   getSelectedCard: () => Card | null
 }
 
+/**
+ * Main app store hook that composes domain-specific hooks.
+ */
 export function useAppStore(): AppStore {
-  const [projects, setProjects] = useState<ProjectData[]>([])
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
-  const [selectedCardId, setSelectedCardId] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [workerLogsByJobId, setWorkerLogsByJobId] = useState<Record<string, string[]>>({})
-  const [cardLinksByCardId, setCardLinksByCardId] = useState<Record<string, CardLink[]>>({})
-  const [pendingRemoteSelection, setPendingRemoteSelection] = useState<{
-    project: Project
-    remotes: RemoteInfo[]
-  } | null>(null)
+  // Use domain-specific hooks
+  const projectsHook = useProjects()
 
-  const loadState = useCallback(async () => {
-    setIsLoading(true)
-    setError(null)
-    try {
-      const result = (await window.electron.ipcRenderer.invoke('getState')) as AppState
-      setProjects(result.projects)
+  const cardsHook = useCards({
+    selectedProjectId: projectsHook.selectedProjectId,
+    projects: projectsHook.projects,
+    setProjects: projectsHook.setProjects,
+    setError: projectsHook.setError,
+    loadState: projectsHook.loadState
+  })
 
-      // Build card links lookup map for O(1) access
-      const linkMap: Record<string, CardLink[]> = {}
-      for (const project of result.projects) {
-        const links = project.cardLinks ?? []
-        for (const link of links) {
-          if (!linkMap[link.card_id]) linkMap[link.card_id] = []
-          linkMap[link.card_id].push(link)
-        }
-      }
-      setCardLinksByCardId(linkMap)
+  const workerHook = useWorker({
+    selectedProjectId: projectsHook.selectedProjectId,
+    projects: projectsHook.projects,
+    setError: projectsHook.setError,
+    loadState: projectsHook.loadState
+  })
 
-      // Auto-select first project if none selected
-      if (!selectedProjectId && result.projects.length > 0) {
-        setSelectedProjectId(result.projects[0].project.id)
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load state')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [selectedProjectId])
+  const syncHook = useSync({
+    selectedProjectId: projectsHook.selectedProjectId,
+    setIsLoading: projectsHook.setIsLoading,
+    setError: projectsHook.setError,
+    loadState: projectsHook.loadState
+  })
 
-  const selectProject = useCallback((id: string | null) => {
-    setSelectedProjectId(id)
-    setSelectedCardId(null)
-  }, [])
+  const uiSettingsHook = useUISettings({
+    selectedProjectId: projectsHook.selectedProjectId,
+    projects: projectsHook.projects,
+    setError: projectsHook.setError,
+    loadState: projectsHook.loadState
+  })
 
-  const selectCard = useCallback((id: string | null) => {
-    setSelectedCardId(id)
-  }, [])
-
-  const openRepo = useCallback(async () => {
-    setIsLoading(true)
-    setError(null)
-    try {
-      const result = await window.electron.ipcRenderer.invoke('openRepo')
-      if (result.canceled) {
-        return
-      }
-      if (result.error) {
-        setError(result.error)
-        return
-      }
-      if (result.needSelection && result.remotes) {
-        setPendingRemoteSelection({
-          project: result.project,
-          remotes: result.remotes
-        })
-      } else {
-        await loadState()
-        if (result.project) {
-          setSelectedProjectId(result.project.id)
-        }
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to open repo')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [loadState])
-
-  const createRepo = useCallback(
-    async (payload: CreateRepoPayload) => {
-      setIsLoading(true)
-      setError(null)
-      try {
-        const result = await window.electron.ipcRenderer.invoke('createRepo', payload)
-        if (result.canceled) {
-          return
-        }
-        if (result.error) {
-          setError(result.error)
-          return
-        }
-        if (result.needSelection && result.remotes) {
-          setPendingRemoteSelection({
-            project: result.project,
-            remotes: result.remotes
-          })
-        } else {
-          await loadState()
-          if (result.project) {
-            setSelectedProjectId(result.project.id)
-          }
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to create repo')
-      } finally {
-        setIsLoading(false)
-      }
-    },
-    [loadState]
-  )
-
-  const selectRemote = useCallback(
-    async (remoteName: string, remoteUrl: string, repoKey: string) => {
-      if (!pendingRemoteSelection) return
-      setIsLoading(true)
-      setError(null)
-      try {
-        const result = await window.electron.ipcRenderer.invoke('selectRemote', {
-          projectId: pendingRemoteSelection.project.id,
-          remoteName,
-          remoteUrl,
-          repoKey
-        })
-        if (result.error) {
-          setError(result.error)
-          return
-        }
-        setPendingRemoteSelection(null)
-        await loadState()
-        if (result.project) {
-          setSelectedProjectId(result.project.id)
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to select remote')
-      } finally {
-        setIsLoading(false)
-      }
-    },
-    [pendingRemoteSelection, loadState]
-  )
-
-  const cancelRemoteSelection = useCallback(() => {
-    setPendingRemoteSelection(null)
-  }, [])
-
-  const moveCard = useCallback((cardId: string, status: CardStatus) => {
-    // Optimistic update - update local state immediately for instant UI feedback
-    setProjects((prevProjects) =>
-      prevProjects.map((projectData) => ({
-        ...projectData,
-        cards: projectData.cards.map((card) =>
-          card.id === cardId
-            ? { ...card, status, updated_local_at: new Date().toISOString() }
-            : card
-        )
-      }))
-    )
-
-    // Fire-and-forget IPC call - don't block UI, backend syncs asynchronously
-    window.electron.ipcRenderer.invoke('moveCard', { cardId, status }).catch((err) => {
-      setError(err instanceof Error ? err.message : 'Failed to sync card move')
-    })
-  }, [])
-
-  const createTestCard = useCallback(
-    async (title: string) => {
-      if (!selectedProjectId) return
-      try {
-        await window.electron.ipcRenderer.invoke('createTestCard', {
-          projectId: selectedProjectId,
-          title
-        })
-        await loadState()
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to create card')
-      }
-    },
-    [selectedProjectId, loadState]
-  )
-
-  const createCard = useCallback(
-    async (data: { title: string; body: string; createType: 'local' | 'github_issue' }) => {
-      if (!selectedProjectId) {
-        throw new Error('No project selected')
-      }
-      const result = await window.electron.ipcRenderer.invoke('createCard', {
-        projectId: selectedProjectId,
-        title: data.title,
-        body: data.body || undefined,
-        createType: data.createType
-      })
-      if (result.error) {
-        throw new Error(result.error)
-      }
-      await loadState()
-    },
-    [selectedProjectId, loadState]
-  )
-
-  const syncProject = useCallback(async () => {
-    if (!selectedProjectId) return
-    setIsLoading(true)
-    try {
-      await window.electron.ipcRenderer.invoke('syncProject', { projectId: selectedProjectId })
-      await loadState()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to sync project')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [selectedProjectId, loadState])
-
-  const toggleWorker = useCallback(
-    async (enabled: boolean) => {
-      if (!selectedProjectId) return
-      try {
-        await window.electron.ipcRenderer.invoke('toggleWorker', {
-          projectId: selectedProjectId,
-          enabled
-        })
-        await loadState()
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to toggle worker')
-      }
-    },
-    [selectedProjectId, loadState]
-  )
-
-  const setWorkerToolPreference = useCallback(
-    async (toolPreference: 'auto' | 'claude' | 'codex') => {
-      if (!selectedProjectId) return
-      try {
-        const currentProject = projects.find((p) => p.project.id === selectedProjectId)?.project
-        let policy: PolicyConfig | null = null
-        if (currentProject?.policy_json) {
-          try {
-            policy = JSON.parse(currentProject.policy_json) as PolicyConfig
-          } catch {
-            policy = null
-          }
-        }
-
-        const existingPreference = policy?.worker?.toolPreference ?? 'auto'
-        if (existingPreference === toolPreference) return
-
-        const result = await window.electron.ipcRenderer.invoke('setWorkerToolPreference', {
-          projectId: selectedProjectId,
-          toolPreference
-        })
-        if (result?.error) {
-          setError(result.error)
-          return
-        }
-        await loadState()
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to update worker settings')
-      }
-    },
-    [selectedProjectId, projects, loadState]
-  )
-
-  const setWorkerRollbackOnCancel = useCallback(
-    async (rollbackOnCancel: boolean) => {
-      if (!selectedProjectId) return
-      try {
-        const currentProject = projects.find((p) => p.project.id === selectedProjectId)?.project
-        let policy: PolicyConfig | null = null
-        if (currentProject?.policy_json) {
-          try {
-            policy = JSON.parse(currentProject.policy_json) as PolicyConfig
-          } catch {
-            policy = null
-          }
-        }
-
-        const existingValue = policy?.worker?.rollbackOnCancel ?? false
-        if (existingValue === rollbackOnCancel) return
-
-        const result = await window.electron.ipcRenderer.invoke('setWorkerRollbackOnCancel', {
-          projectId: selectedProjectId,
-          rollbackOnCancel
-        })
-        if (result?.error) {
-          setError(result.error)
-          return
-        }
-        await loadState()
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to update worker settings')
-      }
-    },
-    [selectedProjectId, projects, loadState]
-  )
-
-  const setShowPullRequestsSection = useCallback(
-    async (showPullRequestsSection: boolean) => {
-      if (!selectedProjectId) return
-      try {
-        const currentProject = projects.find((p) => p.project.id === selectedProjectId)?.project
-        let policy: PolicyConfig | null = null
-        if (currentProject?.policy_json) {
-          try {
-            policy = JSON.parse(currentProject.policy_json) as PolicyConfig
-          } catch {
-            policy = null
-          }
-        }
-
-        const existingValue = policy?.ui?.showPullRequestsSection ?? false
-        if (existingValue === showPullRequestsSection) return
-
-        const result = await window.electron.ipcRenderer.invoke('setShowPullRequestsSection', {
-          projectId: selectedProjectId,
-          showPullRequestsSection
-        })
-        if (result?.error) {
-          setError(result.error)
-          return
-        }
-        await loadState()
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to update board settings')
-      }
-    },
-    [selectedProjectId, projects, loadState]
-  )
-
-  const runWorker = useCallback(
-    async (cardId?: string) => {
-      if (!selectedProjectId) return
-      try {
-        await window.electron.ipcRenderer.invoke('runWorker', {
-          projectId: selectedProjectId,
-          cardId
-        })
-        await loadState()
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to run worker')
-      }
-    },
-    [selectedProjectId, loadState]
-  )
-
-  const deleteProject = useCallback(
-    async (id: string) => {
-      try {
-        await window.electron.ipcRenderer.invoke('deleteProject', { projectId: id })
-        if (selectedProjectId === id) {
-          setSelectedProjectId(null)
-        }
-        await loadState()
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to delete project')
-      }
-    },
-    [selectedProjectId, loadState]
-  )
-
-  const getSelectedProject = useCallback((): ProjectData | null => {
-    if (!selectedProjectId) return null
-    return projects.find((p) => p.project.id === selectedProjectId) || null
-  }, [projects, selectedProjectId])
-
-  const getSelectedCard = useCallback((): Card | null => {
-    if (!selectedCardId || !selectedProjectId) return null
-    const project = projects.find((p) => p.project.id === selectedProjectId)
-    if (!project) return null
-    return project.cards.find((c) => c.id === selectedCardId) || null
-  }, [projects, selectedProjectId, selectedCardId])
-
-  const clearWorkerLogs = useCallback((jobId: string) => {
-    setWorkerLogsByJobId((prev) => {
-      if (!(jobId in prev)) return prev
-      const next = { ...prev }
-      delete next[jobId]
-      return next
-    })
-  }, [])
-
-  // Listen for updates from main process
-  useEffect(() => {
-    const handleStateUpdate = (): void => {
-      loadState()
-    }
-
-    const handleWorkerLog = (_event: unknown, payload: WorkerLogMessage): void => {
-      if (!payload?.jobId || !payload?.line) return
-      setWorkerLogsByJobId((prev) => {
-        const existing = prev[payload.jobId] ?? []
-        const nextLines = [...existing, payload.line].slice(-1000)
-        return { ...prev, [payload.jobId]: nextLines }
-      })
-    }
-
-    window.electron.ipcRenderer.on('stateUpdated', handleStateUpdate)
-    window.electron.ipcRenderer.on('workerLog', handleWorkerLog)
-    return () => {
-      window.electron.ipcRenderer.removeAllListeners('stateUpdated')
-      window.electron.ipcRenderer.removeAllListeners('workerLog')
-    }
-  }, [loadState])
-
-  // Load state on mount
-  useEffect(() => {
-    loadState()
-  }, [loadState])
+  // Clear selected card when project changes
+  const selectProject = (id: string | null): void => {
+    projectsHook.selectProject(id)
+    cardsHook.selectCard(null)
+  }
 
   return {
-    projects,
-    selectedProjectId,
-    selectedCardId,
-    isLoading,
-    error,
-    workerLogsByJobId,
-    cardLinksByCardId,
-    pendingRemoteSelection,
-    loadState,
+    // State from projects hook
+    projects: projectsHook.projects,
+    selectedProjectId: projectsHook.selectedProjectId,
+    isLoading: projectsHook.isLoading,
+    error: projectsHook.error,
+    cardLinksByCardId: projectsHook.cardLinksByCardId,
+    pendingRemoteSelection: projectsHook.pendingRemoteSelection,
+
+    // State from cards hook
+    selectedCardId: cardsHook.selectedCardId,
+
+    // State from worker hook
+    workerLogsByJobId: workerHook.workerLogsByJobId,
+
+    // Actions from projects hook
+    loadState: projectsHook.loadState,
     selectProject,
-    selectCard,
-    openRepo,
-    createRepo,
-    selectRemote,
-    cancelRemoteSelection,
-    moveCard,
-    createTestCard,
-    createCard,
-    syncProject,
-    toggleWorker,
-    setWorkerToolPreference,
-    setWorkerRollbackOnCancel,
-    setShowPullRequestsSection,
-    runWorker,
-    deleteProject,
-    clearWorkerLogs,
-    getSelectedProject,
-    getSelectedCard
+    openRepo: projectsHook.openRepo,
+    createRepo: projectsHook.createRepo,
+    selectRemote: projectsHook.selectRemote,
+    cancelRemoteSelection: projectsHook.cancelRemoteSelection,
+    deleteProject: projectsHook.deleteProject,
+
+    // Actions from cards hook
+    selectCard: cardsHook.selectCard,
+    moveCard: cardsHook.moveCard,
+    createTestCard: cardsHook.createTestCard,
+    createCard: cardsHook.createCard,
+    createCardsBatch: cardsHook.createCardsBatch,
+
+    // Actions from worker hook
+    toggleWorker: workerHook.toggleWorker,
+    setWorkerToolPreference: workerHook.setWorkerToolPreference,
+    setWorkerRollbackOnCancel: workerHook.setWorkerRollbackOnCancel,
+    runWorker: workerHook.runWorker,
+    clearWorkerLogs: workerHook.clearWorkerLogs,
+
+    // Actions from sync hook
+    syncProject: syncHook.syncProject,
+
+    // Actions from UI settings hook
+    setShowPullRequestsSection: uiSettingsHook.setShowPullRequestsSection,
+
+    // Getters
+    getSelectedProject: projectsHook.getSelectedProject,
+    getSelectedCard: cardsHook.getSelectedCard
   }
 }

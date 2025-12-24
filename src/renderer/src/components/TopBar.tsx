@@ -148,7 +148,9 @@ export function TopBar({
             </p>
           </div>
 
-          <Badge variant={syncStatus.variant as 'default' | 'secondary' | 'destructive' | 'outline'}>
+          <Badge
+            variant={syncStatus.variant as 'default' | 'secondary' | 'destructive' | 'outline'}
+          >
             {syncStatus.icon}
             <span className="ml-1">{syncStatus.text}</span>
           </Badge>
@@ -177,13 +179,7 @@ export function TopBar({
             )}
             {Number(project.worker_enabled) === 1 && (
               <Badge
-                variant={
-                  activeWorkerJob
-                    ? 'secondary'
-                    : hasWorkerError
-                      ? 'destructive'
-                      : 'default'
-                }
+                variant={activeWorkerJob ? 'secondary' : hasWorkerError ? 'destructive' : 'default'}
                 className="ml-1"
               >
                 {activeWorkerJob ? (
@@ -213,11 +209,7 @@ export function TopBar({
             )}
           </div>
 
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setSettingsOpen(true)}
-          >
+          <Button variant="outline" size="sm" onClick={() => setSettingsOpen(true)}>
             <Settings className="mr-2 h-4 w-4" />
             Settings
           </Button>

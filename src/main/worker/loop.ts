@@ -1,7 +1,4 @@
-import {
-  getProject,
-  listProjects
-} from '../db'
+import { getProject, listProjects } from '../db'
 import {
   startWorkerPool,
   stopWorkerPool,

@@ -48,11 +48,7 @@ export function ShellTopBar({
       </div>
 
       <div className="flex items-center gap-2">
-        <Button
-          variant={logsOpen ? 'secondary' : 'ghost'}
-          size="sm"
-          onClick={onToggleLogs}
-        >
+        <Button variant={logsOpen ? 'secondary' : 'ghost'} size="sm" onClick={onToggleLogs}>
           <Terminal className="mr-2 h-4 w-4" />
           Logs
         </Button>

@@ -131,9 +131,7 @@ export function TabBar({
               )}
 
               {/* Tab title */}
-              <span className="truncate text-sm flex-1">
-                {tab.projectName}
-              </span>
+              <span className="truncate text-sm flex-1">{tab.projectName}</span>
 
               {/* Close button */}
               <button
@@ -149,9 +147,7 @@ export function TabBar({
               </button>
 
               {/* Active tab bottom border cover */}
-              {isActive && (
-                <div className="absolute bottom-0 left-0 right-0 h-px bg-background" />
-              )}
+              {isActive && <div className="absolute bottom-0 left-0 right-0 h-px bg-background" />}
             </div>
           )
         })}

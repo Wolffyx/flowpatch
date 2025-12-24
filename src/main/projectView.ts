@@ -37,6 +37,14 @@ let projectView: WebContentsView | null = null
 let currentState: ProjectViewState | null = null
 let mainWindowRef: BrowserWindow | null = null
 
+function sendProjectOpened(view: WebContentsView, state: ProjectViewState): void {
+  view.webContents.send('projectOpened', {
+    projectId: state.projectId,
+    projectKey: state.projectKey,
+    projectPath: state.projectPath
+  })
+}
+
 // Default layout bounds
 const DEFAULT_BOUNDS: ViewBounds = {
   headerHeight: 48,
@@ -72,6 +80,14 @@ function createView(): WebContentsView {
     const { shell } = require('electron')
     shell.openExternal(url)
     return { action: 'deny' }
+  })
+
+  // If the renderer reloads (e.g., Vite full reload during HMR), it loses the
+  // initial project context. Re-send the currently-open project after each load.
+  view.webContents.on('did-finish-load', () => {
+    if (currentState) {
+      sendProjectOpened(view, currentState)
+    }
   })
 
   return view
@@ -171,13 +187,6 @@ export async function openProjectView(
 
   // Load content
   await loadProjectRenderer(projectView)
-
-  // Send project info to the renderer
-  projectView.webContents.send('projectOpened', {
-    projectId: state.projectId,
-    projectKey: state.projectKey,
-    projectPath: state.projectPath
-  })
 }
 
 /**
@@ -205,15 +214,6 @@ export async function reloadProjectView(): Promise<void> {
   if (!projectView) return
 
   await projectView.webContents.reload()
-
-  // Re-send project info after reload
-  if (currentState) {
-    projectView.webContents.send('projectOpened', {
-      projectId: currentState.projectId,
-      projectKey: currentState.projectKey,
-      projectPath: currentState.projectPath
-    })
-  }
 }
 
 /**

@@ -9,7 +9,14 @@
  */
 
 import { ipcMain, BrowserWindow } from 'electron'
-import { listProjects, getProject, upsertProject } from '../db'
+import {
+  listProjects,
+  getProject,
+  upsertProject,
+  listRecentJobs,
+  createJob,
+  updateJobState
+} from '../db'
 import {
   initTabManager,
   createTab,
@@ -29,15 +36,13 @@ import {
 import {
   getDefault,
   getResolved,
+  getResolvedBool,
   patchDefaults,
   patchProjectOverrides,
   getAllResolvedSettings,
   SETTINGS_SCHEMA
 } from '../settingsStore'
-import {
-  getGlobalActivity,
-  getProjectActivity
-} from '../activityStore'
+import { getGlobalActivity, getProjectActivity } from '../activityStore'
 import {
   getAllLogs,
   getProjectLogs,
@@ -46,15 +51,23 @@ import {
   clearAllLogs,
   clearProjectLogs
 } from '../logStore'
+import { closeProjectView, getCurrentProjectState } from '../projectView'
 import {
-  closeProjectView,
-  getCurrentProjectState
-} from '../projectView'
-import { detectProjectIdentity, detectProviderFromRemote } from '../projectIdentity'
+  detectProjectIdentity,
+  detectProviderFromRemote,
+  getDefaultRemote,
+  normalizeProjectPath
+} from '../projectIdentity'
 import { logAction } from '@shared/utils'
 import { registerProjectHandlers } from './projectHandlers'
 import { broadcastToRenderers } from './broadcast'
 import { getAllShortcuts, setShortcuts } from '../shortcuts'
+import {
+  ensurePatchworkWorkspace,
+  getPatchworkWorkspaceStatus
+} from '../services/patchwork-workspace'
+import { buildIndex } from '../services/patchwork-indexer'
+import { registerProject, setActiveProject } from '../services/patchwork-index-scheduler'
 
 function cryptoId(): string {
   const buf = Buffer.alloc(16)
@@ -80,7 +93,11 @@ export function registerShellHandlers(mainWindow: BrowserWindow): void {
   registerProjectHandlers()
 
   // Restore any tabs from the previous session.
-  void restoreTabs()
+  void restoreTabs().then(() => {
+    const active = getActiveTabId()
+    const tab = active ? getAllTabs().find((t) => t.id === active) : null
+    setActiveProject(tab?.projectId ?? null)
+  })
 
   // -------------------------------------------------------------------------
   // Tab Management
@@ -98,12 +115,7 @@ export function registerShellHandlers(mainWindow: BrowserWindow): void {
         }
 
         const identity = await detectProjectIdentity(projectPath)
-        const tab = await createTab(
-          projectId,
-          identity.projectKey,
-          projectPath,
-          project.name
-        )
+        const tab = await createTab(projectId, identity.projectKey, projectPath, project.name)
 
         return {
           id: tab.id,
@@ -124,11 +136,16 @@ export function registerShellHandlers(mainWindow: BrowserWindow): void {
   ipcMain.handle('tabs:close', async (_event, { tabId }: { tabId: string }) => {
     logAction('tabs:close', { tabId })
     await closeTab(tabId)
+    const active = getActiveTabId()
+    const tab = active ? getAllTabs().find((t) => t.id === active) : null
+    setActiveProject(tab?.projectId ?? null)
   })
 
   ipcMain.handle('tabs:activate', async (_event, { tabId }: { tabId: string }) => {
     logAction('tabs:activate', { tabId })
     await activateTab(tabId)
+    const tab = getAllTabs().find((t) => t.id === tabId)
+    setActiveProject(tab?.projectId ?? null)
   })
 
   ipcMain.handle('tabs:getAll', () => {
@@ -174,6 +191,7 @@ export function registerShellHandlers(mainWindow: BrowserWindow): void {
   ipcMain.handle('tabs:deactivateAll', () => {
     logAction('tabs:deactivateAll')
     deactivateAllTabs()
+    setActiveProject(null)
   })
 
   // -------------------------------------------------------------------------
@@ -193,11 +211,12 @@ export function registerShellHandlers(mainWindow: BrowserWindow): void {
 
       // Find or create project in database (by local path)
       const projects = listProjects()
-      let project = projects.find((p) => p.local_path === projectRoot)
+      const normalizedRoot = normalizeProjectPath(projectRoot)
+      let project = projects.find((p) => normalizeProjectPath(p.local_path) === normalizedRoot)
 
       if (!project) {
         const name = projectRoot.split(/[\\/]/).pop() || projectRoot
-        const selectedRemote = identity.remotes.length === 1 ? identity.remotes[0] : null
+        const selectedRemote = getDefaultRemote(identity.remotes)
 
         project = upsertProject({
           id: cryptoId(),
@@ -233,12 +252,90 @@ export function registerShellHandlers(mainWindow: BrowserWindow): void {
         }
       }
 
+      // Shell UI doesn't currently provide remote selection; default it to keep GitHub features usable.
+      if (!project.remote_repo_key) {
+        const selectedRemote = getDefaultRemote(identity.remotes)
+        if (selectedRemote) {
+          project = upsertProject({
+            id: project.id,
+            name: project.name,
+            local_path: project.local_path,
+            selected_remote_name: selectedRemote.name.split(':')[0],
+            remote_repo_key: selectedRemote.repoKey,
+            provider_hint: detectProviderFromRemote(selectedRemote.url),
+            policy_json: project.policy_json
+          })
+        }
+      }
+
+      // Auto-indexing is user-togglable and off by default.
+      const autoIndexingEnabled = getResolvedBool(project.id, 'index.autoIndexingEnabled')
+      if (autoIndexingEnabled) {
+        registerProject(project.id, project.local_path)
+        setActiveProject(project.id)
+      }
+
+      // Ensure .patchwork workspace exists (non-blocking) and index once on open.
+      void (async () => {
+        const ensureJob = createJob(project.id, 'workspace_ensure')
+        broadcastToRenderers('stateUpdated')
+        try {
+          updateJobState(ensureJob.id, 'running')
+          broadcastToRenderers('stateUpdated')
+
+          const status = await getPatchworkWorkspaceStatus(project.local_path)
+          if (!status.writable) {
+            updateJobState(
+              ensureJob.id,
+              'blocked',
+              { summary: 'Repo not writable' },
+              'Repo not writable'
+            )
+            broadcastToRenderers('stateUpdated')
+            return
+          }
+
+          const ensured = ensurePatchworkWorkspace(project.local_path)
+          updateJobState(ensureJob.id, 'succeeded', {
+            summary: ensured.createdPaths.length
+              ? 'Workspace created/updated'
+              : 'Workspace already present',
+            artifacts: ensured
+          })
+          broadcastToRenderers('stateUpdated')
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : 'Workspace ensure failed'
+          updateJobState(ensureJob.id, 'failed', { summary: msg }, msg)
+          broadcastToRenderers('stateUpdated')
+          return
+        }
+
+        if (!autoIndexingEnabled) return
+
+        const indexJob = createJob(project.id, 'index_build')
+        broadcastToRenderers('stateUpdated')
+        try {
+          updateJobState(indexJob.id, 'running', { summary: 'Indexing…' })
+          broadcastToRenderers('stateUpdated')
+          const { meta } = await buildIndex(project.local_path)
+          updateJobState(indexJob.id, 'succeeded', {
+            summary: `Indexed ${meta.totalFiles} files`,
+            artifacts: meta
+          })
+          broadcastToRenderers('stateUpdated')
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : 'Index build failed'
+          updateJobState(indexJob.id, 'failed', { summary: msg }, msg)
+          broadcastToRenderers('stateUpdated')
+        }
+      })()
+
       currentProjectId = project.id
 
       return {
         project,
         remotes: identity.remotes,
-        needSelection: identity.remotes.length > 1
+        needSelection: false
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to open project'
@@ -321,7 +418,10 @@ export function registerShellHandlers(mainWindow: BrowserWindow): void {
 
   ipcMain.handle(
     'settings:setProjectOverride',
-    (_event, { projectKey, patch }: { projectKey: string; patch: Record<string, string | null> }) => {
+    (
+      _event,
+      { projectKey, patch }: { projectKey: string; patch: Record<string, string | null> }
+    ) => {
       patchProjectOverrides(projectKey, patch)
     }
   )
@@ -392,6 +492,14 @@ export function registerShellHandlers(mainWindow: BrowserWindow): void {
     } else {
       clearAllLogs()
     }
+  })
+
+  // -------------------------------------------------------------------------
+  // Jobs (Activity feed)
+  // -------------------------------------------------------------------------
+
+  ipcMain.handle('jobs:getRecent', (_event, { limit }: { limit?: number }) => {
+    return listRecentJobs(limit ?? 200)
   })
 
   // -------------------------------------------------------------------------

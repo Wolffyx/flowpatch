@@ -126,11 +126,7 @@ export class WorkerPool {
 
       // Get ready cards (up to number of idle slots)
       const retryCooldownMinutes = 30
-      const readyCards = getNextReadyCards(
-        this.projectId,
-        idleSlots.length,
-        retryCooldownMinutes
-      )
+      const readyCards = getNextReadyCards(this.projectId, idleSlots.length, retryCooldownMinutes)
 
       if (readyCards.length === 0) {
         return // No cards to process

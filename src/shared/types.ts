@@ -12,9 +12,59 @@ export type CardType = 'issue' | 'pr' | 'draft' | 'mr' | 'local'
 
 export type SyncState = 'ok' | 'pending' | 'error'
 
-export type JobState = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled'
+export type JobState = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled' | 'blocked'
 
-export type JobType = 'sync_poll' | 'sync_push' | 'worker_run' | 'webhook_ingest'
+export type JobType =
+  | 'sync_poll'
+  | 'sync_push'
+  | 'worker_run'
+  | 'webhook_ingest'
+  | 'workspace_ensure'
+  | 'index_build'
+  | 'index_refresh'
+  | 'index_watch_start'
+  | 'index_watch_stop'
+  | 'docs_refresh'
+  | 'config_validate'
+  | 'context_preview'
+  | 'repair'
+  | 'migrate'
+
+export interface JobProgress {
+  percent?: number
+  stage?: string
+  detail?: string
+}
+
+export interface JobResultEnvelope {
+  summary?: string
+  progress?: JobProgress
+  artifacts?: unknown
+}
+
+export type PatchworkIndexState = 'missing' | 'ready' | 'stale' | 'building' | 'blocked'
+
+export interface PatchworkIndexStatus {
+  state: PatchworkIndexState
+  headSha: string | null
+  lastIndexedSha: string | null
+  lastIndexedAt: string | null
+  warnings?: string[]
+}
+
+export interface PatchworkWorkspaceStatus {
+  repoRoot: string
+  exists: boolean
+  writable: boolean
+  gitignoreHasStateIgnore: boolean
+  hasConfig: boolean
+  hasDocs: boolean
+  hasScripts: boolean
+  hasState: boolean
+  index: PatchworkIndexStatus
+  watchEnabled: boolean
+  autoIndexingEnabled: boolean
+}
 
 export type EventType =
   | 'status_changed'
@@ -38,7 +88,13 @@ export type WorkerSlotStatus = 'idle' | 'running' | 'cleanup'
 export type WorkerState = 'idle' | 'processing' | 'waiting' | 'error'
 
 // Worktree status for tracking lifecycle
-export type WorktreeStatus = 'creating' | 'ready' | 'running' | 'cleanup_pending' | 'cleaned' | 'error'
+export type WorktreeStatus =
+  | 'creating'
+  | 'ready'
+  | 'running'
+  | 'cleanup_pending'
+  | 'cleaned'
+  | 'error'
 
 // Worktree root location options
 export type WorktreeRoot = 'repo' | 'sibling' | 'custom'
@@ -486,6 +542,7 @@ export interface ApplyLabelConfigPayload {
 export interface RepoOnboardingState {
   shouldShowLabelWizard: boolean
   shouldPromptGithubProject: boolean
+  shouldShowStarterCardsWizard: boolean
 }
 
 export interface AppState {
@@ -617,3 +674,6 @@ export const DEFAULT_POLICY: PolicyConfig = {
     }
   }
 }
+
+// Re-export IPC types for convenient importing
+export * from './types/ipc'

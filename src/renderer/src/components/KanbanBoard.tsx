@@ -21,6 +21,7 @@ interface KanbanBoardProps {
   onSelectCard: (id: string | null) => void
   onMoveCard: (cardId: string, status: CardStatus) => void
   onAddCard: () => void
+  onGenerateCards: () => void
 }
 
 export function KanbanBoard({
@@ -29,7 +30,8 @@ export function KanbanBoard({
   selectedCardId,
   onSelectCard,
   onMoveCard,
-  onAddCard
+  onAddCard,
+  onGenerateCards
 }: KanbanBoardProps): React.JSX.Element {
   const [activeCard, setActiveCard] = useState<Card | null>(null)
 
@@ -111,6 +113,7 @@ export function KanbanBoard({
               selectedCardId={selectedCardId}
               onSelectCard={onSelectCard}
               onAddCard={column.id === 'draft' ? onAddCard : undefined}
+              onGenerateCards={column.id === 'draft' ? onGenerateCards : undefined}
             />
           ))}
         </div>

@@ -16,6 +16,10 @@ import { RepoStartDialog } from './components/RepoStartDialog'
 import { LabelSetupDialog } from './components/LabelSetupDialog'
 import { GithubProjectPromptDialog } from './components/GithubProjectPromptDialog'
 import { StartupCheckDialog } from './components/StartupCheckDialog'
+import {
+  StarterCardsWizardDialog,
+  type StarterCardsWizardMode
+} from './components/StarterCardsWizardDialog'
 import { matchAccelerator } from '@shared/accelerator'
 import { useShortcuts } from './lib/useShortcuts'
 import {
@@ -43,11 +47,16 @@ function App(): React.JSX.Element {
   const [labelSetupOpen, setLabelSetupOpen] = useState(false)
   const [githubProjectPromptOpen, setGithubProjectPromptOpen] = useState(false)
   const [startupCheckOpen, setStartupCheckOpen] = useState(false)
+  const [starterCardsWizardOpen, setStarterCardsWizardOpen] = useState(false)
+  const [starterCardsWizardMode, setStarterCardsWizardMode] =
+    useState<StarterCardsWizardMode>('manual')
 
   const selectedProject = store.getSelectedProject()
   const selectedCard = store.getSelectedCard()
   const { byId: shortcutById } = useShortcuts()
-  const showPullRequestsSection = selectedProject ? readShowPullRequestsSection(selectedProject.project) : false
+  const showPullRequestsSection = selectedProject
+    ? readShowPullRequestsSection(selectedProject.project)
+    : false
 
   const linkedPrIndex = useMemo(
     () => buildLinkedPullRequestIndex(selectedProject?.cardLinks),
@@ -55,7 +64,9 @@ function App(): React.JSX.Element {
   )
 
   const pullRequestCards = selectedProject
-    ? selectedProject.cards.filter((c) => (c.type === 'pr' || c.type === 'mr') && !isLinkedPullRequestCard(c, linkedPrIndex))
+    ? selectedProject.cards.filter(
+        (c) => (c.type === 'pr' || c.type === 'mr') && !isLinkedPullRequestCard(c, linkedPrIndex)
+      )
     : []
 
   const boardCards = selectedProject
@@ -68,7 +79,8 @@ function App(): React.JSX.Element {
     : []
 
   const workerJobs = (selectedProject?.jobs || []).filter((j) => j.type === 'worker_run')
-  const activeWorkerJob = workerJobs.find((j) => j.state === 'running' || j.state === 'queued') || null
+  const activeWorkerJob =
+    workerJobs.find((j) => j.state === 'running' || j.state === 'queued') || null
   const latestWorkerJob =
     workerJobs.length === 0
       ? null
@@ -78,10 +90,9 @@ function App(): React.JSX.Element {
           return jobTime > latestTime ? job : latest
         })
   const jobForLogs = activeWorkerJob || latestWorkerJob
-  const cardForLogs =
-    jobForLogs?.card_id
-      ? selectedProject?.cards.find((c) => c.id === jobForLogs.card_id) || null
-      : null
+  const cardForLogs = jobForLogs?.card_id
+    ? selectedProject?.cards.find((c) => c.id === jobForLogs.card_id) || null
+    : null
 
   // Determine remote provider for the selected project
   const remoteProvider: Provider | null = selectedProject?.project.remote_repo_key
@@ -104,20 +115,34 @@ function App(): React.JSX.Element {
   // Repo onboarding dialogs (labels + optional GitHub Project creation)
   useEffect(() => {
     const project = selectedProject?.project
-    if (!project?.id || !project.remote_repo_key) return
+    if (!project?.id) return
     let canceled = false
 
     window.electron.ipcRenderer
       .invoke('getRepoOnboardingState', { projectId: project.id })
-      .then((state: { shouldShowLabelWizard?: boolean; shouldPromptGithubProject?: boolean }) => {
+      .then(
+        (state: {
+          shouldShowLabelWizard?: boolean
+          shouldPromptGithubProject?: boolean
+          shouldShowStarterCardsWizard?: boolean
+        }) => {
         if (canceled) return
         if (state?.shouldShowLabelWizard) {
           setGithubProjectPromptOpen(false)
+          setStarterCardsWizardOpen(false)
           setLabelSetupOpen(true)
           return
         }
         if (state?.shouldPromptGithubProject && !labelSetupOpen) {
+          setStarterCardsWizardOpen(false)
           setGithubProjectPromptOpen(true)
+          return
+        }
+        if (state?.shouldShowStarterCardsWizard && !labelSetupOpen && !githubProjectPromptOpen) {
+          if (!starterCardsWizardOpen) {
+            setStarterCardsWizardMode('onboarding')
+            setStarterCardsWizardOpen(true)
+          }
         }
       })
       .catch(() => {
@@ -128,7 +153,9 @@ function App(): React.JSX.Element {
       canceled = true
     }
   }, [
+    githubProjectPromptOpen,
     labelSetupOpen,
+    starterCardsWizardOpen,
     selectedProject?.project.id,
     selectedProject?.project.remote_repo_key,
     selectedProject?.project.policy_json,
@@ -152,6 +179,25 @@ function App(): React.JSX.Element {
     return () => {
       canceled = true
     }
+  }, [])
+
+  const handleAddCard = useCallback((): void => {
+    void (async () => {
+      try {
+        const project = selectedProject?.project
+        if (project && !project.remote_repo_key) {
+          await window.electron.ipcRenderer.invoke('ensureProjectRemote', { projectId: project.id })
+          await store.loadState()
+        }
+      } catch {
+      }
+      setAddCardDialogOpen(true)
+    })()
+  }, [selectedProject?.project, store])
+
+  const handleGenerateCards = useCallback((): void => {
+    setStarterCardsWizardMode('manual')
+    setStarterCardsWizardOpen(true)
   }, [])
 
   // Global keyboard shortcuts
@@ -210,18 +256,14 @@ function App(): React.JSX.Element {
 
       if (selectedProject && matchAccelerator(shortcutAddCard, e)) {
         e.preventDefault()
-        setAddCardDialogOpen(true)
+        handleAddCard()
         return
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [commandPaletteOpen, selectedProject, shortcutById, store])
-
-  const handleAddCard = useCallback(() => {
-    setAddCardDialogOpen(true)
-  }, [])
+  }, [commandPaletteOpen, handleAddCard, selectedProject, shortcutById, store])
 
   const handleCreateCard = useCallback(
     async (data: { title: string; body: string; createType: CreateCardType }) => {
@@ -286,6 +328,7 @@ function App(): React.JSX.Element {
                   onSelectCard={store.selectCard}
                   onMoveCard={handleMoveCard}
                   onAddCard={handleAddCard}
+                  onGenerateCards={handleGenerateCards}
                 />
               </div>
 
@@ -336,6 +379,7 @@ function App(): React.JSX.Element {
         onSync={store.syncProject}
         onRunWorker={() => store.runWorker()}
         onAddCard={handleAddCard}
+        onGenerateCards={handleGenerateCards}
         shortcuts={shortcutById}
       />
 
@@ -343,9 +387,18 @@ function App(): React.JSX.Element {
       <AddCardDialog
         open={addCardDialogOpen}
         onOpenChange={setAddCardDialogOpen}
+        projectId={selectedProject?.project.id || store.selectedProjectId || ''}
         hasRemote={!!selectedProject?.project.remote_repo_key}
         remoteProvider={remoteProvider}
         onCreateCard={handleCreateCard}
+      />
+
+      <StarterCardsWizardDialog
+        open={starterCardsWizardOpen}
+        onOpenChange={setStarterCardsWizardOpen}
+        projectId={selectedProject?.project.id || store.selectedProjectId || ''}
+        mode={starterCardsWizardMode}
+        onCreateCards={store.createCardsBatch}
       />
 
       <WorkerLogDialog
@@ -353,7 +406,7 @@ function App(): React.JSX.Element {
         onOpenChange={setWorkerLogsOpen}
         job={jobForLogs}
         card={cardForLogs}
-        liveLogs={jobForLogs ? store.workerLogsByJobId[jobForLogs.id] ?? [] : []}
+        liveLogs={jobForLogs ? (store.workerLogsByJobId[jobForLogs.id] ?? []) : []}
         onClearLogs={store.clearWorkerLogs}
       />
 

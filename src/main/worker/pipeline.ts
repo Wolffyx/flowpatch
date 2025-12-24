@@ -9,7 +9,8 @@ import {
   getCard,
   updateCardStatus,
   createEvent,
-  createCardLink,
+  ensureCardLink,
+  listCardLinks,
   updateJobState,
   updateJobResult,
   getJob,
@@ -32,10 +33,22 @@ import {
   getWorkerProgress
 } from '../db'
 import { TaskDecomposer } from '../services/task-decomposer'
-import type { CardStatus, JobState, Project, Card, PolicyConfig, WorkerLogMessage, Worktree, Subtask, WorkerProgress } from '../../shared/types'
+import type {
+  CardStatus,
+  JobState,
+  Project,
+  Card,
+  PolicyConfig,
+  WorkerLogMessage,
+  Worktree,
+  Subtask,
+  WorkerProgress
+} from '../../shared/types'
 import { slugify, generateWorktreeBranchName } from '../../shared/types'
 import { broadcastToRenderers } from '../ipc/broadcast'
 import { GitWorktreeManager, WorktreeConfig } from '../services/git-worktree-manager'
+import { buildContextBundle, buildPromptContext } from '../services/patchwork-context'
+import { writeCheckpoint, readCheckpoint, ensureRunDir } from '../services/patchwork-runs'
 
 const execFileAsync = promisify(execFile)
 
@@ -168,14 +181,32 @@ export class WorkerPipeline {
   private setPhase(phase: string): void {
     this.phase = phase
     this.persistPartialResult(true)
+    this.persistRunCheckpoint()
   }
 
-  private log(
-    message: string,
-    meta?: { source?: string; stream?: 'stdout' | 'stderr' }
-  ): void {
+  private persistRunCheckpoint(iteration?: number): void {
+    if (!this.jobId || !this.project) return
+    const repoRoot = this.project.local_path
+    try {
+      writeCheckpoint(repoRoot, {
+        jobId: this.jobId,
+        cardId: this.cardId,
+        projectId: this.projectId,
+        phase: this.phase,
+        iteration,
+        updatedAt: new Date().toISOString(),
+        lastContextPath: this.progress?.progress_file_path ?? undefined
+      })
+    } catch {
+      // ignore checkpoint failures
+    }
+  }
+
+  private log(message: string, meta?: { source?: string; stream?: 'stdout' | 'stderr' }): void {
     const ts = new Date().toISOString()
-    const sourcePrefix = meta?.source ? `[${meta.source}${meta.stream ? `:${meta.stream}` : ''}] ` : ''
+    const sourcePrefix = meta?.source
+      ? `[${meta.source}${meta.stream ? `:${meta.stream}` : ''}] `
+      : ''
     const fullMessage = `${sourcePrefix}${message}`
     const line = `[${ts}] ${fullMessage}`
     this.logs.push(line)
@@ -226,6 +257,18 @@ export class WorkerPipeline {
       return false
     }
 
+    // If we're resuming an existing job, load any prior checkpoint to reduce rework.
+    if (this.jobId && this.project) {
+      try {
+        const cp = readCheckpoint(this.project.local_path, this.jobId)
+        if (cp?.phase) {
+          this.phase = cp.phase
+        }
+      } catch {
+        // ignore
+      }
+    }
+
     if (!this.project.remote_repo_key) {
       this.log('No remote configured')
       return false
@@ -267,14 +310,18 @@ export class WorkerPipeline {
 
       // Check git version supports worktrees
       if (!this.worktreeManager.checkWorktreeSupport()) {
-        this.log('Git version does not support worktrees (requires 2.17+), falling back to stash mode')
+        this.log(
+          'Git version does not support worktrees (requires 2.17+), falling back to stash mode'
+        )
         this.useWorktree = false
       } else {
         // Check max concurrent limit
         const maxConcurrent = this.policy.worker.worktree.maxConcurrent ?? 1
         const activeCount = countActiveWorktrees(this.projectId)
         if (activeCount >= maxConcurrent) {
-          this.log(`Max concurrent worktrees reached (${activeCount}/${maxConcurrent}), falling back to stash mode`)
+          this.log(
+            `Max concurrent worktrees reached (${activeCount}/${maxConcurrent}), falling back to stash mode`
+          )
           this.useWorktree = false
         } else {
           this.useWorktree = true
@@ -327,11 +374,14 @@ export class WorkerPipeline {
         }
         // Start worktree lock renewal
         if (this.worktreeRecord) {
-          this.worktreeLockInterval = setInterval(() => {
-            if (this.worktreeRecord) {
-              renewWorktreeLock(this.worktreeRecord.id, this.workerId, 10)
-            }
-          }, 5 * 60 * 1000) // Renew every 5 minutes
+          this.worktreeLockInterval = setInterval(
+            () => {
+              if (this.worktreeRecord) {
+                renewWorktreeLock(this.worktreeRecord.id, this.workerId, 10)
+              }
+            },
+            5 * 60 * 1000
+          ) // Renew every 5 minutes
         }
       } else {
         this.log('Checking working tree')
@@ -462,7 +512,7 @@ export class WorkerPipeline {
       // Phase 10: Move to In Review
       this.setPhase('in_review')
       this.log('Moving card to In Review')
-      await this.moveToInReview(prResult.url)
+      await this.moveToInReview(prResult.url, !prResult.existing)
 
       this.setPhase('done')
       return {
@@ -522,7 +572,8 @@ export class WorkerPipeline {
 
     try {
       const config = this.getWorktreeConfig()
-      const baseBranch = this.policy.worker?.worktree?.baseBranch ?? this.worktreeManager.getDefaultBranch()
+      const baseBranch =
+        this.policy.worker?.worktree?.baseBranch ?? this.worktreeManager.getDefaultBranch()
       this.baseBranch = baseBranch
 
       // Generate branch name using worktree naming convention
@@ -789,8 +840,12 @@ export class WorkerPipeline {
           return
         }
         if (code && code !== 0) {
-          const stderrTail = tail.stderr.length ? `\n\n--- stderr (tail) ---\n${tail.stderr.join('\n')}` : ''
-          const stdoutTail = tail.stdout.length ? `\n\n--- stdout (tail) ---\n${tail.stdout.join('\n')}` : ''
+          const stderrTail = tail.stderr.length
+            ? `\n\n--- stderr (tail) ---\n${tail.stderr.join('\n')}`
+            : ''
+          const stdoutTail = tail.stdout.length
+            ? `\n\n--- stdout (tail) ---\n${tail.stdout.join('\n')}`
+            : ''
           reject(new Error(`${command} exited with code ${code}${stderrTail}${stdoutTail}`))
           return
         }
@@ -861,9 +916,7 @@ export class WorkerPipeline {
         cwd: this.project!.local_path
       })
 
-      const line = stdout
-        .split(/\r\n|\n|\r/)
-        .find((l) => l.includes('patchwork-worker-autostash'))
+      const line = stdout.split(/\r\n|\n|\r/).find((l) => l.includes('patchwork-worker-autostash'))
       if (!line) return
 
       const m = line.match(/^(stash@\{\d+\}):/)
@@ -989,8 +1042,19 @@ export class WorkerPipeline {
         await execFileAsync('git', ['checkout', branchName], {
           cwd: this.project!.local_path
         })
+        await this.updateBranchFromOrigin(branchName)
         this.workerBranch = branchName
         return
+      }
+
+      // Refresh remote refs for this branch name (best-effort) so the remote existence check is accurate.
+      try {
+        await execFileAsync('git', ['fetch', 'origin', branchName], {
+          cwd: this.project!.local_path,
+          env: this.gitEnv()
+        })
+      } catch {
+        // ignore
       }
 
       // If remote branch exists, create a local tracking branch and continue there.
@@ -1010,6 +1074,7 @@ export class WorkerPipeline {
           ['checkout', '--track', '-b', branchName, `origin/${branchName}`],
           { cwd: this.project!.local_path }
         )
+        await this.updateBranchFromOrigin(branchName)
         this.workerBranch = branchName
         return
       }
@@ -1038,6 +1103,46 @@ export class WorkerPipeline {
       this.workerBranch = branchName
     } catch (error) {
       this.log(`Branch creation warning: ${error}`)
+      throw error
+    }
+  }
+
+  private async updateBranchFromOrigin(branchName: string): Promise<void> {
+    // Avoid disruptive pulls if the working tree is dirty (shouldn't happen, but be safe).
+    try {
+      const { stdout } = await execFileAsync('git', ['status', '--porcelain'], {
+        cwd: this.project!.local_path,
+        env: this.gitEnv()
+      })
+      if (stdout.trim()) {
+        this.log('Skipping branch update: working tree not clean')
+        return
+      }
+    } catch {
+      // ignore
+    }
+
+    // Fetch remote ref for the branch (best-effort).
+    try {
+      await execFileAsync('git', ['fetch', 'origin', branchName], {
+        cwd: this.project!.local_path,
+        env: this.gitEnv()
+      })
+    } catch {
+      // ignore
+    }
+
+    // If the remote branch exists, pull/rebase so we don't get non-fast-forward on push.
+    if (!(await this.remoteBranchExists(branchName))) return
+
+    try {
+      await execFileAsync('git', ['pull', '--rebase', 'origin', branchName], {
+        cwd: this.project!.local_path,
+        env: this.gitEnv()
+      })
+      this.log(`Updated branch from origin/${branchName}`)
+    } catch (error) {
+      this.log(`Branch update warning: ${error}`)
       throw error
     }
   }
@@ -1071,11 +1176,9 @@ export class WorkerPipeline {
 
     // Try to read default from origin/HEAD.
     try {
-      const { stdout } = await execFileAsync(
-        'git',
-        ['symbolic-ref', 'refs/remotes/origin/HEAD'],
-        { cwd: this.project!.local_path }
-      )
+      const { stdout } = await execFileAsync('git', ['symbolic-ref', 'refs/remotes/origin/HEAD'], {
+        cwd: this.project!.local_path
+      })
       const ref = stdout.trim()
       if (ref) return ref.replace(/^refs\/remotes\/origin\//, '')
     } catch {
@@ -1209,7 +1312,7 @@ Forbidden paths: ${(this.policy.worker?.forbidPaths || []).join(', ')}
       this.log(`Running ${tool} with ${maxMinutes} minute timeout`)
 
       // Build the prompt for the AI tool
-      const prompt = this.buildAIPrompt(plan)
+      const prompt = await this.buildAIPrompt(plan)
 
       if (tool === 'claude') {
         try {
@@ -1261,7 +1364,7 @@ Please implement the changes manually following the plan above.
       s.includes('ratelimit') ||
       s.includes('rate_limit') ||
       s.includes("you've hit your limit") ||
-      s.includes("you\u2019ve hit your limit") ||
+      s.includes('you\u2019ve hit your limit') ||
       s.includes('limit reached') ||
       s.includes('quota') ||
       s.includes('insufficient_quota') ||
@@ -1276,10 +1379,37 @@ Please implement the changes manually following the plan above.
     )
   }
 
-  private buildAIPrompt(plan: string): string {
+  private async buildAIPrompt(plan: string): Promise<string> {
     const allowedCommands = this.policy.worker?.allowedCommands || []
     const forbidPaths = this.policy.worker?.forbidPaths || []
     const workingDir = this.getWorkingDir()
+    const repoRoot = this.project!.local_path
+
+    let repoContext = 'Project memory unavailable.'
+    try {
+      const bundle = await buildContextBundle(
+        repoRoot,
+        `${this.card!.title}\n${this.card!.body || ''}`
+      )
+
+      // Persist per-run context for audit and crash recovery.
+      if (this.jobId) {
+        try {
+          const runDir = ensureRunDir(repoRoot, this.jobId)
+          const runContextPath = join(runDir, 'last_context.json')
+          writeFileSync(runContextPath, JSON.stringify(bundle, null, 2), { encoding: 'utf-8' })
+          if (this.progress) {
+            updateWorkerProgress(this.progress.id, { progressFilePath: runContextPath })
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      repoContext = buildPromptContext(repoRoot, bundle)
+    } catch {
+      // ignore
+    }
 
     return `# Task: Implement the following issue
 
@@ -1296,12 +1426,16 @@ ${plan}
 - Only use these commands: ${allowedCommands.join(', ') || 'none specified'}
 - Do NOT modify these paths: ${forbidPaths.join(', ') || 'none'}
 - Working directory: ${workingDir}
+- Repo root: ${repoRoot}
 - After implementation, run the verification commands if they exist
 
 ## Verification Commands
 ${this.policy.worker?.lintCommand ? `- Lint: ${this.policy.worker.lintCommand}` : ''}
 ${this.policy.worker?.testCommand ? `- Test: ${this.policy.worker.testCommand}` : ''}
 ${this.policy.worker?.buildCommand ? `- Build: ${this.policy.worker.buildCommand}` : ''}
+
+## Project Memory (from .patchwork)
+${repoContext}
 
 Please implement the changes now.`
   }
@@ -1420,10 +1554,9 @@ Please implement the changes now.`
 
   private async commitAndPush(branchName: string): Promise<void> {
     const commitMsg =
-      this.policy.worker?.commitMessage?.replace(
-        '{issue}',
-        this.card?.remote_number_or_iid || ''
-      ).replace('{title}', this.card?.title || '') ||
+      this.policy.worker?.commitMessage
+        ?.replace('{issue}', this.card?.remote_number_or_iid || '')
+        .replace('{title}', this.card?.title || '') ||
       `#${this.card?.remote_number_or_iid} ${this.card?.title}`
 
     const workingDir = this.getWorkingDir()
@@ -1449,6 +1582,13 @@ Please implement the changes now.`
         })
       }
 
+      // If the branch already exists upstream, rebase onto the latest remote before pushing to avoid non-fast-forward.
+      try {
+        await this.updateBranchFromOrigin(branchName)
+      } catch {
+        // If we can't update cleanly, let push surface the issue with a clear error.
+      }
+
       // Push
       await execFileAsync('git', ['push', '-u', 'origin', branchName], {
         cwd: workingDir,
@@ -1456,7 +1596,10 @@ Please implement the changes now.`
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      if (message.includes('could not read Username') || message.includes('Authentication failed')) {
+      if (
+        message.includes('could not read Username') ||
+        message.includes('Authentication failed')
+      ) {
         this.log(
           'Git push failed: missing credentials. Configure a credential helper or ensure the remote URL includes an auth token.'
         )
@@ -1470,12 +1613,22 @@ Please implement the changes now.`
     branchName: string,
     plan: string,
     checksPass: boolean
-  ): Promise<{ number: number; url: string } | null> {
+  ): Promise<{ number: number; url: string; existing?: boolean } | null> {
     if (!this.adapter || !this.card) return null
 
-    const title = checksPass
-      ? this.card.title
-      : `[WIP] ${this.card.title}`
+    const linkedType = this.adapter instanceof GithubAdapter ? 'pr' : 'mr'
+    const existingLink = listCardLinks(this.cardId).find((link) => link.linked_type === linkedType)
+    if (existingLink?.linked_url) {
+      const url = existingLink.linked_url
+      const numberMatch =
+        linkedType === 'pr'
+          ? url.match(/\/pull\/(\d+)/)
+          : url.match(/\/merge_requests\/(\d+)/)
+      const number = numberMatch ? parseInt(numberMatch[1], 10) : 0
+      return { number, url, existing: true }
+    }
+
+    const title = checksPass ? this.card.title : `[WIP] ${this.card.title}`
 
     const body = `
 ## Summary
@@ -1494,25 +1647,27 @@ _Automated by Patchwork_
 `.trim()
 
     if (this.adapter instanceof GithubAdapter) {
-      return this.adapter.createPR(title, body, branchName)
+      const result = await this.adapter.createPR(title, body, branchName)
+      return result ? { ...result, existing: false } : null
     } else if (this.adapter instanceof GitlabAdapter) {
       const result = await this.adapter.createMR(title, body, branchName)
-      return result ? { number: result.iid, url: result.url } : null
+      return result ? { number: result.iid, url: result.url, existing: false } : null
     }
 
     return null
   }
 
-  private async moveToInReview(prUrl: string): Promise<void> {
+  private async moveToInReview(prUrl: string, created = true): Promise<void> {
     updateCardStatus(this.cardId, 'in_review')
 
     // Create card link
     const linkedType = this.adapter instanceof GithubAdapter ? 'pr' : 'mr'
-    createCardLink(this.cardId, linkedType, prUrl)
+    ensureCardLink(this.cardId, linkedType, prUrl)
 
     createEvent(this.projectId, 'pr_created', this.cardId, {
       prUrl,
-      status: 'in_review'
+      status: 'in_review',
+      existing: !created
     })
 
     // Update remote labels
@@ -1527,10 +1682,12 @@ _Automated by Patchwork_
       )
 
       // Comment on issue with PR link
-      await this.adapter.commentOnIssue(
-        issueNumber,
-        `PR created: ${prUrl}\n\n_Automated by Patchwork_`
-      )
+      if (created) {
+        await this.adapter.commentOnIssue(
+          issueNumber,
+          `PR created: ${prUrl}\n\n_Automated by Patchwork_`
+        )
+      }
     }
   }
 
@@ -1576,7 +1733,9 @@ _Automated by Patchwork_
         reasoning: analysis.reasoning
       })
 
-      this.log(`Created ${this.subtasks.length} subtasks (${result.remoteIssuesCreated} remote issues)`)
+      this.log(
+        `Created ${this.subtasks.length} subtasks (${result.remoteIssuesCreated} remote issues)`
+      )
     } catch (error) {
       this.log(`Decomposition failed: ${error instanceof Error ? error.message : String(error)}`)
       // Non-fatal - continue with the main task
@@ -1617,7 +1776,12 @@ _Automated by Patchwork_
       this.ensureNotCanceled()
 
       // Build iteration-specific prompt
-      const iterationPrompt = this.buildIterationPrompt(plan, i, maxIterations, contextSummary)
+      const iterationPrompt = await this.buildIterationPrompt(
+        plan,
+        i,
+        maxIterations,
+        contextSummary
+      )
 
       this.log(`Running iteration ${i}/${maxIterations}`)
 
@@ -1653,6 +1817,7 @@ _Automated by Patchwork_
             iteration: i + 1,
             contextSummary
           })
+          this.persistRunCheckpoint(i)
         }
       } catch (error) {
         if (error instanceof WorkerCanceledError) {
@@ -1670,13 +1835,13 @@ _Automated by Patchwork_
   /**
    * Build a prompt for a specific iteration of the iterative AI mode.
    */
-  private buildIterationPrompt(
+  private async buildIterationPrompt(
     plan: string,
     iteration: number,
     maxIterations: number,
     contextSummary: string
-  ): string {
-    const basePrompt = this.buildAIPrompt(plan)
+  ): Promise<string> {
+    const basePrompt = await this.buildAIPrompt(plan)
 
     // Add iteration context
     let iterationContext = `\n\n## Iteration Context
@@ -1694,7 +1859,7 @@ Continue from where you left off. Focus on the next logical step.
 
     // Add subtask focus if we have subtasks
     if (this.subtasks.length > 0) {
-      const pendingSubtasks = this.subtasks.filter(s => s.status === 'pending')
+      const pendingSubtasks = this.subtasks.filter((s) => s.status === 'pending')
       const currentSubtask = pendingSubtasks[0]
 
       if (currentSubtask) {
@@ -1779,7 +1944,7 @@ Card: #${this.card?.remote_number_or_iid} ${this.card?.title}`
   private async isIterationComplete(): Promise<boolean> {
     // If we have subtasks, check if all are completed
     if (this.subtasks.length > 0) {
-      const allCompleted = this.subtasks.every(s => s.status === 'completed')
+      const allCompleted = this.subtasks.every((s) => s.status === 'completed')
       if (allCompleted) return true
     }
 
@@ -1791,9 +1956,7 @@ Card: #${this.card?.remote_number_or_iid} ${this.card?.title}`
   /**
    * Generate a context summary for the next iteration.
    */
-  private async generateContextSummary(
-    mode: 'full' | 'summary' | 'none'
-  ): Promise<string> {
+  private async generateContextSummary(mode: 'full' | 'summary' | 'none'): Promise<string> {
     if (mode === 'none') return ''
 
     const workingDir = this.getWorkingDir()
@@ -1836,7 +1999,7 @@ Card: #${this.card?.remote_number_or_iid} ${this.card?.title}`
     if (this.subtasks.length === 0) return
 
     // Find the current in-progress subtask
-    const inProgress = this.subtasks.find(s => s.status === 'in_progress')
+    const inProgress = this.subtasks.find((s) => s.status === 'in_progress')
     if (inProgress) {
       // Mark as completed
       updateSubtaskStatus(inProgress.id, 'completed')
@@ -1855,10 +2018,10 @@ Card: #${this.card?.remote_number_or_iid} ${this.card?.title}`
 
     // Update progress
     if (this.progress) {
-      const completed = this.subtasks.filter(s => s.status === 'completed').length
+      const completed = this.subtasks.filter((s) => s.status === 'completed').length
       updateWorkerProgress(this.progress.id, {
         subtasksCompleted: completed,
-        subtaskIndex: this.subtasks.findIndex(s => s.status === 'in_progress')
+        subtaskIndex: this.subtasks.findIndex((s) => s.status === 'in_progress')
       })
     }
   }
@@ -1876,16 +2039,17 @@ Card: #${this.card?.remote_number_or_iid} ${this.card?.title}`
         { cwd: workingDir }
       )
 
-      return stdout.trim().split('\n').filter(f => f.trim())
+      return stdout
+        .trim()
+        .split('\n')
+        .filter((f) => f.trim())
     } catch {
       return []
     }
   }
 }
 
-export async function runWorker(
-  jobId: string
-): Promise<WorkerResult> {
+export async function runWorker(jobId: string): Promise<WorkerResult> {
   const job = getJob(jobId)
   if (!job) {
     return { success: false, phase: 'init', error: 'Job not found' }

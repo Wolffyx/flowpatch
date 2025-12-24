@@ -251,9 +251,7 @@ export function exportLogs(
   if (format === 'json') {
     writeFileSync(filepath, JSON.stringify(logs, null, 2), 'utf-8')
   } else {
-    const lines = logs.map(
-      (e) => `[${e.ts}] [${e.source}:${e.stream}] ${e.line}`
-    )
+    const lines = logs.map((e) => `[${e.ts}] [${e.source}:${e.stream}] ${e.line}`)
     writeFileSync(filepath, lines.join('\n'), 'utf-8')
   }
 

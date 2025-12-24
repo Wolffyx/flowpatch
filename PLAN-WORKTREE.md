@@ -41,7 +41,7 @@ export function generateWorktreeBranchName(
   numberOrId: string | number,
   title: string,
   prefix: string = 'patchwork/'
-): string;
+): string
 ```
 
 ### 1.3 Update DEFAULT_POLICY
@@ -122,24 +122,24 @@ Add migration logic in `ensureSchema()` to handle existing databases.
 ### 3.1 Create `src/main/services/git-worktree-manager.ts`
 
 ```typescript
-import { execSync, spawn } from 'child_process';
-import path from 'path';
-import fs from 'fs';
+import { execSync, spawn } from 'child_process'
+import path from 'path'
+import fs from 'fs'
 
 export interface WorktreeInfo {
-  worktreePath: string;
-  branchName: string;
-  headSha: string;
-  bare: boolean;
-  detached: boolean;
-  locked: boolean;
-  prunable: boolean;
+  worktreePath: string
+  branchName: string
+  headSha: string
+  bare: boolean
+  detached: boolean
+  locked: boolean
+  prunable: boolean
 }
 
 export interface EnsureWorktreeResult {
-  worktreePath: string;
-  branchName: string;
-  created: boolean;  // true if newly created, false if reused existing
+  worktreePath: string
+  branchName: string
+  created: boolean // true if newly created, false if reused existing
 }
 
 export class GitWorktreeManager {
@@ -148,7 +148,7 @@ export class GitWorktreeManager {
   /**
    * List all worktrees using `git worktree list --porcelain`
    */
-  list(): WorktreeInfo[];
+  list(): WorktreeInfo[]
 
   /**
    * Ensure a worktree exists for the given branch.
@@ -161,10 +161,10 @@ export class GitWorktreeManager {
     branchName: string,
     baseBranch: string,
     options?: {
-      fetchFirst?: boolean;
-      force?: boolean;
+      fetchFirst?: boolean
+      force?: boolean
     }
-  ): Promise<EnsureWorktreeResult>;
+  ): Promise<EnsureWorktreeResult>
 
   /**
    * Remove a worktree safely.
@@ -173,34 +173,34 @@ export class GitWorktreeManager {
   async removeWorktree(
     worktreePath: string,
     options?: {
-      force?: boolean;  // Use --force for dirty worktrees
+      force?: boolean // Use --force for dirty worktrees
     }
-  ): Promise<void>;
+  ): Promise<void>
 
   /**
    * Prune stale worktree entries
    */
-  prune(): void;
+  prune(): void
 
   /**
    * Check if a worktree is dirty (has uncommitted changes)
    */
-  isDirty(worktreePath: string): boolean;
+  isDirty(worktreePath: string): boolean
 
   /**
    * Get the default branch (main/master/develop)
    */
-  getDefaultBranch(): string;
+  getDefaultBranch(): string
 
   /**
    * Fetch from remote
    */
-  fetch(remote?: string): void;
+  fetch(remote?: string): void
 
   /**
    * Validate that a path is a safe worktree location
    */
-  isValidWorktreePath(worktreePath: string, allowedRoots: string[]): boolean;
+  isValidWorktreePath(worktreePath: string, allowedRoots: string[]): boolean
 }
 ```
 
@@ -394,55 +394,58 @@ private async handleCancel(): Promise<void> {
 
 ```typescript
 export class WorktreeReconciler {
-  constructor(private projectId: string, private repoPath: string) {}
+  constructor(
+    private projectId: string,
+    private repoPath: string
+  ) {}
 
   /**
    * Reconcile DB state with actual git worktrees on disk
    */
   async reconcile(): Promise<ReconciliationResult> {
-    const manager = new GitWorktreeManager(this.repoPath);
-    const dbWorktrees = db.listWorktrees(this.projectId);
-    const gitWorktrees = manager.list();
+    const manager = new GitWorktreeManager(this.repoPath)
+    const dbWorktrees = db.listWorktrees(this.projectId)
+    const gitWorktrees = manager.list()
 
     const results: ReconciliationResult = {
-      orphaned: [],      // In DB but not on disk
-      untracked: [],     // On disk but not in DB
-      locked: [],        // Expired locks
-      cleaned: []        // Successfully cleaned up
-    };
+      orphaned: [], // In DB but not on disk
+      untracked: [], // On disk but not in DB
+      locked: [], // Expired locks
+      cleaned: [] // Successfully cleaned up
+    }
 
     // 1. Find DB records without matching worktree on disk
     for (const dbWt of dbWorktrees) {
-      if (!gitWorktrees.find(g => g.worktreePath === dbWt.worktree_path)) {
-        results.orphaned.push(dbWt);
-        db.updateWorktreeStatus(dbWt.id, 'error', 'Worktree missing from disk');
+      if (!gitWorktrees.find((g) => g.worktreePath === dbWt.worktree_path)) {
+        results.orphaned.push(dbWt)
+        db.updateWorktreeStatus(dbWt.id, 'error', 'Worktree missing from disk')
       }
     }
 
     // 2. Find expired locks
-    const expired = db.getExpiredLocks();
+    const expired = db.getExpiredLocks()
     for (const wt of expired) {
-      results.locked.push(wt);
-      db.releaseWorktreeLock(wt.id);
-      db.updateWorktreeStatus(wt.id, 'cleanup_pending', 'Lock expired (possible crash)');
+      results.locked.push(wt)
+      db.releaseWorktreeLock(wt.id)
+      db.updateWorktreeStatus(wt.id, 'cleanup_pending', 'Lock expired (possible crash)')
     }
 
     // 3. Process cleanup_pending worktrees
-    const pending = db.listWorktreesByStatus(this.projectId, 'cleanup_pending');
+    const pending = db.listWorktreesByStatus(this.projectId, 'cleanup_pending')
     for (const wt of pending) {
       try {
-        await manager.removeWorktree(wt.worktree_path, { force: true });
-        db.updateWorktreeStatus(wt.id, 'cleaned');
-        results.cleaned.push(wt);
+        await manager.removeWorktree(wt.worktree_path, { force: true })
+        db.updateWorktreeStatus(wt.id, 'cleaned')
+        results.cleaned.push(wt)
       } catch (err) {
-        db.updateWorktreeStatus(wt.id, 'error', String(err));
+        db.updateWorktreeStatus(wt.id, 'error', String(err))
       }
     }
 
     // 4. Prune stale git worktree entries
-    manager.prune();
+    manager.prune()
 
-    return results;
+    return results
   }
 }
 ```
@@ -456,16 +459,16 @@ async function onAppReady() {
   // ... existing init
 
   // Reconcile worktrees for all projects
-  const projects = db.listProjects();
+  const projects = db.listProjects()
   for (const project of projects) {
     if (project.local_path) {
-      const reconciler = new WorktreeReconciler(project.id, project.local_path);
-      await reconciler.reconcile();
+      const reconciler = new WorktreeReconciler(project.id, project.local_path)
+      await reconciler.reconcile()
     }
   }
 
   // Start worker loops
-  startEnabledWorkerLoops();
+  startEnabledWorkerLoops()
 }
 ```
 
@@ -477,38 +480,41 @@ async function onAppReady() {
 
 ```typescript
 export class WorktreeCleanupScheduler {
-  private intervalId: NodeJS.Timer | null = null;
+  private intervalId: NodeJS.Timer | null = null
 
   start(intervalMinutes: number = 5) {
-    this.intervalId = setInterval(() => {
-      this.processDelayedCleanups();
-    }, intervalMinutes * 60 * 1000);
+    this.intervalId = setInterval(
+      () => {
+        this.processDelayedCleanups()
+      },
+      intervalMinutes * 60 * 1000
+    )
   }
 
   stop() {
     if (this.intervalId) {
-      clearInterval(this.intervalId);
-      this.intervalId = null;
+      clearInterval(this.intervalId)
+      this.intervalId = null
     }
   }
 
   private async processDelayedCleanups() {
-    const projects = db.listProjects();
+    const projects = db.listProjects()
 
     for (const project of projects) {
-      const pending = db.listWorktreesByStatus(project.id, 'cleanup_pending');
-      const policy = parsePolicy(project.policy_json);
-      const delayMs = (policy.worktree?.cleanup?.delayMinutes ?? 30) * 60 * 1000;
+      const pending = db.listWorktreesByStatus(project.id, 'cleanup_pending')
+      const policy = parsePolicy(project.policy_json)
+      const delayMs = (policy.worktree?.cleanup?.delayMinutes ?? 30) * 60 * 1000
 
       for (const wt of pending) {
-        const age = Date.now() - new Date(wt.updated_at).getTime();
+        const age = Date.now() - new Date(wt.updated_at).getTime()
         if (age >= delayMs) {
-          const manager = new GitWorktreeManager(project.local_path);
+          const manager = new GitWorktreeManager(project.local_path)
           try {
-            await manager.removeWorktree(wt.worktree_path, { force: true });
-            db.updateWorktreeStatus(wt.id, 'cleaned');
+            await manager.removeWorktree(wt.worktree_path, { force: true })
+            db.updateWorktreeStatus(wt.id, 'cleaned')
           } catch (err) {
-            db.updateWorktreeStatus(wt.id, 'error', String(err));
+            db.updateWorktreeStatus(wt.id, 'error', String(err))
           }
         }
       }
@@ -550,6 +556,7 @@ Update `src/renderer/src/components/SettingsDialog.tsx`:
 ### 7.3 Project Overview
 
 Add worktree status indicator:
+
 - Count of active worktrees
 - "Clean Up All" button for stale worktrees
 
@@ -561,53 +568,53 @@ Add worktree status indicator:
 
 ```typescript
 ipcMain.handle('listWorktrees', async (_, projectId: string) => {
-  return db.listWorktrees(projectId);
-});
+  return db.listWorktrees(projectId)
+})
 
 ipcMain.handle('removeWorktree', async (_, worktreeId: string) => {
-  const wt = db.getWorktree(worktreeId);
-  if (!wt) throw new Error('Worktree not found');
+  const wt = db.getWorktree(worktreeId)
+  if (!wt) throw new Error('Worktree not found')
 
-  const project = db.getProject(wt.project_id);
-  const manager = new GitWorktreeManager(project.local_path);
+  const project = db.getProject(wt.project_id)
+  const manager = new GitWorktreeManager(project.local_path)
 
-  await manager.removeWorktree(wt.worktree_path, { force: true });
-  db.updateWorktreeStatus(worktreeId, 'cleaned');
-  notifyRenderer();
-});
+  await manager.removeWorktree(wt.worktree_path, { force: true })
+  db.updateWorktreeStatus(worktreeId, 'cleaned')
+  notifyRenderer()
+})
 
 ipcMain.handle('recreateWorktree', async (_, worktreeId: string) => {
   // Remove existing and trigger fresh creation
-  const wt = db.getWorktree(worktreeId);
-  if (!wt) throw new Error('Worktree not found');
+  const wt = db.getWorktree(worktreeId)
+  if (!wt) throw new Error('Worktree not found')
 
-  const project = db.getProject(wt.project_id);
-  const manager = new GitWorktreeManager(project.local_path);
+  const project = db.getProject(wt.project_id)
+  const manager = new GitWorktreeManager(project.local_path)
 
   // Force remove if exists
-  try { await manager.removeWorktree(wt.worktree_path, { force: true }); } catch {}
+  try {
+    await manager.removeWorktree(wt.worktree_path, { force: true })
+  } catch {}
 
   // Recreate
-  await manager.ensureWorktree(
-    wt.worktree_path,
-    wt.branch_name,
-    wt.base_ref,
-    { fetchFirst: true, force: true }
-  );
+  await manager.ensureWorktree(wt.worktree_path, wt.branch_name, wt.base_ref, {
+    fetchFirst: true,
+    force: true
+  })
 
-  db.updateWorktreeStatus(worktreeId, 'ready');
-  notifyRenderer();
-});
+  db.updateWorktreeStatus(worktreeId, 'ready')
+  notifyRenderer()
+})
 
 ipcMain.handle('openWorktreeFolder', async (_, worktreePath: string) => {
-  shell.openPath(worktreePath);
-});
+  shell.openPath(worktreePath)
+})
 
 ipcMain.handle('cleanupStaleWorktrees', async (_, projectId: string) => {
-  const project = db.getProject(projectId);
-  const reconciler = new WorktreeReconciler(projectId, project.local_path);
-  return reconciler.reconcile();
-});
+  const project = db.getProject(projectId)
+  const reconciler = new WorktreeReconciler(projectId, project.local_path)
+  return reconciler.reconcile()
+})
 ```
 
 ---
@@ -726,14 +733,14 @@ Create `tests/integration/worktree.test.ts`:
 
 ## Risks & Mitigations
 
-| Risk | Mitigation |
-|------|------------|
-| Git version too old | Check `git --version` on startup, disable worktrees if < 2.17 |
-| Disk space exhaustion | Monitor worktree count, warn at maxConcurrent |
-| Windows path length | Use `\\?\` prefix for long paths, limit branch names |
-| Orphaned worktrees on crash | Reconciliation on startup + scheduled cleanup |
-| Concurrent worktree collision | Unique branch names with card ID + DB uniqueness constraint |
-| npm install in worktree slow | Optional skipInstallIfCached for pnpm/yarn berry |
+| Risk                          | Mitigation                                                    |
+| ----------------------------- | ------------------------------------------------------------- |
+| Git version too old           | Check `git --version` on startup, disable worktrees if < 2.17 |
+| Disk space exhaustion         | Monitor worktree count, warn at maxConcurrent                 |
+| Windows path length           | Use `\\?\` prefix for long paths, limit branch names          |
+| Orphaned worktrees on crash   | Reconciliation on startup + scheduled cleanup                 |
+| Concurrent worktree collision | Unique branch names with card ID + DB uniqueness constraint   |
+| npm install in worktree slow  | Optional skipInstallIfCached for pnpm/yarn berry              |
 
 ---
 

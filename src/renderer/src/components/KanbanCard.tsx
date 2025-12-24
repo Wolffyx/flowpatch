@@ -22,7 +22,12 @@ interface KanbanCardProps {
   onClick: () => void
 }
 
-export function KanbanCard({ card, linkedPRs, isSelected, onClick }: KanbanCardProps): React.JSX.Element {
+export function KanbanCard({
+  card,
+  linkedPRs,
+  isSelected,
+  onClick
+}: KanbanCardProps): React.JSX.Element {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: card.id,
     data: { card }
@@ -93,8 +98,7 @@ export function KanbanCard({ card, linkedPRs, isSelected, onClick }: KanbanCardP
               className="text-xs py-0 px-1.5 gap-1 text-chart-2 border-chart-2/50"
               title={`${linkedPRs.length} linked PR${linkedPRs.length > 1 ? 's' : ''}`}
             >
-              <GitPullRequest className="h-3 w-3" />
-              #{linkedPRs[0].linked_number_or_iid}
+              <GitPullRequest className="h-3 w-3" />#{linkedPRs[0].linked_number_or_iid}
               {linkedPRs.length > 1 && <span>+{linkedPRs.length - 1}</span>}
             </Badge>
           )}

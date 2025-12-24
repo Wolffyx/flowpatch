@@ -27,7 +27,10 @@ export function parseAccelerator(accelerator: string): ParsedAccelerator | null 
   const raw = (accelerator || '').trim()
   if (!raw) return null
 
-  const parts = raw.split('+').map((p) => p.trim()).filter(Boolean)
+  const parts = raw
+    .split('+')
+    .map((p) => p.trim())
+    .filter(Boolean)
   if (parts.length === 0) return null
 
   const parsed: ParsedAccelerator = {

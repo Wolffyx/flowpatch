@@ -64,4 +64,3 @@ export const SHORTCUT_COMMANDS: readonly ShortcutCommand[] = [
 export function shortcutSettingKey(id: ShortcutCommandId): string {
   return `shortcuts.${id}`
 }
-

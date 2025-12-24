@@ -10,27 +10,26 @@ import {
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Textarea } from './ui/textarea'
-import { FileText, Github, Loader2, Check } from 'lucide-react'
+import { FileText, Github, Loader2, Check, Sparkles } from 'lucide-react'
 import { cn } from '../lib/utils'
 import type { Provider } from '../../../shared/types'
+import { AIDescriptionDialog } from './AIDescriptionDialog'
 
 export type CreateCardType = 'local' | 'github_issue'
 
 interface AddCardDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  projectId: string
   hasRemote: boolean
   remoteProvider: Provider | null
-  onCreateCard: (data: {
-    title: string
-    body: string
-    createType: CreateCardType
-  }) => Promise<void>
+  onCreateCard: (data: { title: string; body: string; createType: CreateCardType }) => Promise<void>
 }
 
 export function AddCardDialog({
   open,
   onOpenChange,
+  projectId,
   hasRemote,
   remoteProvider,
   onCreateCard
@@ -40,6 +39,7 @@ export function AddCardDialog({
   const [createType, setCreateType] = useState<CreateCardType>('local')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [aiOpen, setAiOpen] = useState(false)
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -81,6 +81,7 @@ export function AddCardDialog({
           setBody('')
           setCreateType('local')
           setError(null)
+          setAiOpen(false)
         }
         onOpenChange(newOpen)
       }
@@ -89,6 +90,11 @@ export function AddCardDialog({
   )
 
   const canCreateRemote = hasRemote && remoteProvider === 'github'
+  const aiButtonTitle = !title.trim()
+    ? 'Add a title first'
+    : !projectId
+      ? 'Select a project first'
+      : 'Draft description with AI'
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -120,9 +126,22 @@ export function AddCardDialog({
 
             {/* Body */}
             <div className="grid gap-2">
-              <label htmlFor="body" className="text-sm font-medium">
-                Description (optional)
-              </label>
+              <div className="flex items-center justify-between gap-2">
+                <label htmlFor="body" className="text-sm font-medium">
+                  Description (optional)
+                </label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAiOpen(true)}
+                  disabled={isSubmitting || !projectId || !title.trim()}
+                  title={aiButtonTitle}
+                >
+                  <Sparkles className="mr-2 h-4 w-4" />
+                  Draft with AI
+                </Button>
+              </div>
               <Textarea
                 id="body"
                 value={body}
@@ -144,9 +163,7 @@ export function AddCardDialog({
                   disabled={isSubmitting}
                   className={cn(
                     'flex items-center gap-3 rounded-lg border p-3 text-left transition-colors',
-                    createType === 'local'
-                      ? 'border-primary bg-primary/5'
-                      : 'hover:bg-muted/50'
+                    createType === 'local' ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'
                   )}
                 >
                   <div
@@ -242,6 +259,15 @@ export function AddCardDialog({
           </DialogFooter>
         </form>
       </DialogContent>
+
+      <AIDescriptionDialog
+        open={aiOpen}
+        onOpenChange={setAiOpen}
+        projectId={projectId}
+        title={title.trim()}
+        currentDescription={body}
+        onApplyDescription={setBody}
+      />
     </Dialog>
   )
 }

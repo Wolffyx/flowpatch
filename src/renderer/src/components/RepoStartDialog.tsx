@@ -120,7 +120,8 @@ export function RepoStartDialog({
         pushToRemote: remoteProvider === 'none' ? undefined : pushToRemote,
         githubOwner: remoteProvider === 'github' ? githubOwner.trim() || undefined : undefined,
         gitlabHost: remoteProvider === 'gitlab' ? gitlabHost.trim() || undefined : undefined,
-        gitlabNamespace: remoteProvider === 'gitlab' ? gitlabNamespace.trim() || undefined : undefined
+        gitlabNamespace:
+          remoteProvider === 'gitlab' ? gitlabNamespace.trim() || undefined : undefined
       }
 
       setIsSubmitting(true)
@@ -188,7 +189,9 @@ export function RepoStartDialog({
                 </div>
                 <div className="flex-1">
                   <div className="font-medium">Open Repository</div>
-                  <div className="text-xs text-muted-foreground">Use an existing local git repo</div>
+                  <div className="text-xs text-muted-foreground">
+                    Use an existing local git repo
+                  </div>
                 </div>
               </button>
 
@@ -333,7 +336,9 @@ export function RepoStartDialog({
                               : 'hover:bg-muted/50'
                           )}
                         >
-                          <span className="font-medium">{v === 'private' ? 'Private' : 'Public'}</span>
+                          <span className="font-medium">
+                            {v === 'private' ? 'Private' : 'Public'}
+                          </span>
                         </button>
                       ))}
                     </div>
@@ -477,4 +482,3 @@ export function RepoStartDialog({
     </Dialog>
   )
 }
-

@@ -28,6 +28,9 @@ export const APP_DEFAULTS: Record<string, string> = {
   'sync.autoSync': 'true',
   'sync.pollIntervalMinutes': '3',
 
+  // Indexing settings
+  'index.autoIndexingEnabled': 'false',
+
   // Worker settings
   'worker.enabled': 'true',
   'worker.toolPreference': 'auto',
@@ -220,6 +223,7 @@ export function patchProjectOverrides(projKey: string, patch: SettingsPatch): vo
 export const SETTINGS_SCHEMA: Record<string, 'string' | 'boolean' | 'number'> = {
   'sync.autoSync': 'boolean',
   'sync.pollIntervalMinutes': 'number',
+  'index.autoIndexingEnabled': 'boolean',
   'worker.enabled': 'boolean',
   'worker.toolPreference': 'string',
   'worker.maxMinutes': 'number',

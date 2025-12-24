@@ -1,9 +1,5 @@
 import { GitWorktreeManager, WorktreeConfig } from './git-worktree-manager'
-import {
-  listWorktreesByStatus,
-  updateWorktreeStatus,
-  listProjects,
-} from '../db'
+import { listWorktreesByStatus, updateWorktreeStatus, listProjects } from '../db'
 import type { PolicyConfig } from '../../shared/types'
 
 /**
@@ -128,7 +124,10 @@ export class WorktreeCleanupScheduler {
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err)
           updateWorktreeStatus(wt.id, 'error', errorMsg)
-          console.error(`[WorktreeCleanupScheduler] Failed to clean up worktree ${wt.worktree_path}:`, errorMsg)
+          console.error(
+            `[WorktreeCleanupScheduler] Failed to clean up worktree ${wt.worktree_path}:`,
+            errorMsg
+          )
         }
       }
     }

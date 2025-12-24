@@ -68,7 +68,11 @@ export class GitlabAdapter {
       const { stdout } = await execFileAsync('glab', ['label', 'list', '-F', 'json'], {
         cwd: this.repoPath
       })
-      const labels = JSON.parse(stdout) as Array<{ name: string; description?: string; color?: string }>
+      const labels = JSON.parse(stdout) as Array<{
+        name: string
+        description?: string
+        color?: string
+      }>
       return labels.map((l) => ({ name: l.name, description: l.description, color: l.color }))
     } catch {
       return []
@@ -95,15 +99,7 @@ export class GitlabAdapter {
     try {
       const { stdout } = await execFileAsync(
         'glab',
-        [
-          'issue',
-          'list',
-          '--all',
-          '-F',
-          'json',
-          '-P',
-          '100'
-        ],
+        ['issue', 'list', '--all', '-F', 'json', '-P', '100'],
         { cwd: this.repoPath }
       )
 
@@ -119,15 +115,7 @@ export class GitlabAdapter {
     try {
       const { stdout } = await execFileAsync(
         'glab',
-        [
-          'mr',
-          'list',
-          '--all',
-          '-F',
-          'json',
-          '-P',
-          '100'
-        ],
+        ['mr', 'list', '--all', '-F', 'json', '-P', '100'],
         { cwd: this.repoPath }
       )
 
@@ -139,7 +127,11 @@ export class GitlabAdapter {
     }
   }
 
-  async updateLabels(issueIid: number, labelsToAdd: string[], labelsToRemove: string[]): Promise<boolean> {
+  async updateLabels(
+    issueIid: number,
+    labelsToAdd: string[],
+    labelsToRemove: string[]
+  ): Promise<boolean> {
     try {
       if (labelsToAdd.length > 0) {
         await execFileAsync(
@@ -198,11 +190,9 @@ export class GitlabAdapter {
 
   async commentOnIssue(issueIid: number, comment: string): Promise<boolean> {
     try {
-      await execFileAsync(
-        'glab',
-        ['issue', 'note', String(issueIid), '--message', comment],
-        { cwd: this.repoPath }
-      )
+      await execFileAsync('glab', ['issue', 'note', String(issueIid), '--message', comment], {
+        cwd: this.repoPath
+      })
       return true
     } catch (error) {
       console.error('Failed to comment on issue:', error)
@@ -302,9 +292,7 @@ export class GitlabAdapter {
     const normalize = (s: string): string => s.toLowerCase().replace(/\s+/g, '')
     const normalized = (labels || []).map(normalize)
     const matches = (candidates: (string | undefined)[]): boolean =>
-      candidates
-        .filter(Boolean)
-        .some((c) => normalized.includes(normalize(String(c))))
+      candidates.filter(Boolean).some((c) => normalized.includes(normalize(String(c))))
 
     if (matches([statusLabels.done, 'done', 'indone'])) return 'done'
     if (matches([statusLabels.testing, 'testing', 'qa'])) return 'testing'

@@ -19,7 +19,11 @@ interface PullRequestCardProps {
   onClick: () => void
 }
 
-export function PullRequestCard({ card, isSelected, onClick }: PullRequestCardProps): React.JSX.Element {
+export function PullRequestCard({
+  card,
+  isSelected,
+  onClick
+}: PullRequestCardProps): React.JSX.Element {
   const getProviderIcon = (): React.ReactNode => {
     switch (card.provider) {
       case 'github':
@@ -109,4 +113,3 @@ export function PullRequestCard({ card, isSelected, onClick }: PullRequestCardPr
     </button>
   )
 }
-

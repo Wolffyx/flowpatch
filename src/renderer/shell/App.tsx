@@ -14,11 +14,12 @@ import { ShellToaster } from './components/ShellToaster'
 import { TabBar, type TabData } from './components/TabBar'
 import { LogsPanel } from './components/LogsPanel'
 import { SettingsModal } from './components/SettingsModal'
+import { ActivityDialog } from './components/ActivityDialog'
 import { RepoStartDialog } from '../src/components/RepoStartDialog'
-import { Settings, Terminal, Minus, Square, X, Home } from 'lucide-react'
+import { Settings, Terminal, Minus, Square, X, Home, ListChecks } from 'lucide-react'
 import { Button } from '../src/components/ui/button'
 import { Badge } from '../src/components/ui/badge'
-import type { Project, CreateRepoPayload } from '@shared/types'
+import type { Project, CreateRepoPayload, Job } from '@shared/types'
 
 // Declare the shell API type
 declare global {
@@ -65,6 +66,10 @@ declare global {
           lastUpdated: string
         }) => void
       ) => () => void
+
+      // Jobs (Activity feed)
+      getRecentJobs: (limit?: number) => Promise<Job[]>
+      onStateUpdated: (callback: () => void) => () => void
 
       // Logs
       getLogs: (projectKey?: string) => Promise<LogEntry[]>
@@ -150,6 +155,8 @@ export default function App(): React.JSX.Element {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [logsPanelOpen, setLogsPanelOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [activityOpen, setActivityOpen] = useState(false)
+  const [recentJobs, setRecentJobs] = useState<Job[]>([])
   const [repoDialogOpen, setRepoDialogOpen] = useState(false)
 
   // Get active tab info
@@ -157,7 +164,7 @@ export default function App(): React.JSX.Element {
 
   // Get the active project (for settings modal)
   const activeProject = activeTab
-    ? projects.find((p) => p.id === activeTab.projectId) ?? null
+    ? (projects.find((p) => p.id === activeTab.projectId) ?? null)
     : null
 
   // Show home when no tabs or explicitly requested
@@ -169,6 +176,7 @@ export default function App(): React.JSX.Element {
     loadTabs()
     loadActivity()
     loadLogs()
+    loadRecentJobs()
   }, [])
 
   // Subscribe to tab changes
@@ -206,6 +214,16 @@ export default function App(): React.JSX.Element {
     return unsubscribe
   }, [])
 
+  // Subscribe to global state updates (jobs/projects, etc.)
+  useEffect(() => {
+    const unsubscribe = window.shellAPI.onStateUpdated(() => {
+      loadProjects()
+      loadActivity()
+      loadRecentJobs()
+    })
+    return unsubscribe
+  }, [])
+
   // Notify main process when logs panel opens/closes
   useEffect(() => {
     // LogsPanel is 192px (h-48) when open
@@ -214,9 +232,9 @@ export default function App(): React.JSX.Element {
 
   // Notify main process when modal dialogs open/close
   useEffect(() => {
-    const anyModalOpen = settingsOpen || repoDialogOpen
+    const anyModalOpen = settingsOpen || repoDialogOpen || activityOpen
     window.shellAPI.setModalOpen(anyModalOpen)
-  }, [settingsOpen, repoDialogOpen])
+  }, [settingsOpen, repoDialogOpen, activityOpen])
 
   const loadProjects = async (): Promise<void> => {
     try {
@@ -262,6 +280,16 @@ export default function App(): React.JSX.Element {
       setLogs(logEntries.slice(-500))
     } catch (error) {
       console.error('Failed to load logs:', error)
+    }
+  }
+
+  const loadRecentJobs = async (): Promise<void> => {
+    try {
+      const jobs = await window.shellAPI.getRecentJobs(200)
+      setRecentJobs(jobs)
+    } catch (error) {
+      console.error('Failed to load recent jobs:', error)
+      setRecentJobs([])
     }
   }
 
@@ -430,6 +458,20 @@ export default function App(): React.JSX.Element {
             <Terminal className="h-4 w-4" />
           </Button>
 
+          {/* Activity */}
+          <Button
+            variant={activityOpen ? 'secondary' : 'ghost'}
+            size="sm"
+            className="h-7 px-2"
+            onClick={() => {
+              setActivityOpen(true)
+              loadRecentJobs()
+            }}
+            title="Activity"
+          >
+            <ListChecks className="h-4 w-4" />
+          </Button>
+
           {/* Settings */}
           <Button
             variant="ghost"
@@ -475,9 +517,7 @@ export default function App(): React.JSX.Element {
           <div className="absolute inset-0 z-10 bg-background flex flex-col items-center justify-center text-muted-foreground p-8 overflow-auto">
             <div className="text-center mb-8">
               <h1 className="text-2xl font-semibold text-foreground mb-2">Welcome to Patchwork</h1>
-              <p className="text-sm">
-                Select a project below or open/create a new one
-              </p>
+              <p className="text-sm">Select a project below or open/create a new one</p>
             </div>
 
             {/* Existing Projects List */}
@@ -503,9 +543,7 @@ export default function App(): React.JSX.Element {
               </div>
             )}
 
-            <Button onClick={() => setRepoDialogOpen(true)}>
-              Open / Create Project
-            </Button>
+            <Button onClick={() => setRepoDialogOpen(true)}>Open / Create Project</Button>
           </div>
         )}
 
@@ -525,12 +563,15 @@ export default function App(): React.JSX.Element {
         </div>
       )}
 
-      {/* Settings Modal */}
-      <SettingsModal
-        open={settingsOpen}
-        onOpenChange={setSettingsOpen}
-        project={activeProject}
+      <ActivityDialog
+        open={activityOpen}
+        onOpenChange={setActivityOpen}
+        jobs={recentJobs}
+        projectNameById={Object.fromEntries(projects.map((p) => [p.id, p.name]))}
       />
+
+      {/* Settings Modal */}
+      <SettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} project={activeProject} />
 
       {/* Repo Start Dialog (Open/Create) */}
       <RepoStartDialog

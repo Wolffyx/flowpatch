@@ -45,16 +45,17 @@ export interface ShellAPI {
   getDefaults: () => Promise<Record<string, string | null>>
   setDefaults: (patch: Record<string, string | null>) => Promise<void>
   getProjectSettings: (projectKey: string) => Promise<Record<string, string | null>>
-  setProjectOverride: (
-    projectKey: string,
-    patch: Record<string, string | null>
-  ) => Promise<void>
+  setProjectOverride: (projectKey: string, patch: Record<string, string | null>) => Promise<void>
   clearProjectOverrides: (projectKey: string, keys?: string[]) => Promise<void>
 
   // Activity
   getActivity: () => Promise<GlobalActivity>
   getProjectActivity: (projectId: string) => Promise<ProjectActivity>
   onActivityUpdate: (callback: (activity: ProjectActivity) => void) => () => void
+
+  // Jobs (Activity feed)
+  getRecentJobs: (limit?: number) => Promise<import('../shared/types').Job[]>
+  onStateUpdated: (callback: () => void) => () => void
 
   // Logs
   getLogs: (projectKey?: string) => Promise<LogEntry[]>
@@ -293,6 +294,22 @@ const shellAPI: ShellAPI = {
     ipcRenderer.on('activityUpdated', handler)
     return () => {
       ipcRenderer.removeListener('activityUpdated', handler)
+    }
+  },
+
+  // -------------------------------------------------------------------------
+  // Jobs
+  // -------------------------------------------------------------------------
+
+  getRecentJobs: (limit?: number) => {
+    return ipcRenderer.invoke('jobs:getRecent', { limit })
+  },
+
+  onStateUpdated: (callback: () => void) => {
+    const handler = () => callback()
+    ipcRenderer.on('stateUpdated', handler)
+    return () => {
+      ipcRenderer.removeListener('stateUpdated', handler)
     }
   },
 

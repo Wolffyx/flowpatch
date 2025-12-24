@@ -16,13 +16,20 @@ interface ShortcutsEditorProps {
   className?: string
 }
 
-export function ShortcutsEditor({ bindings, onPatch, className }: ShortcutsEditorProps): React.JSX.Element {
+export function ShortcutsEditor({
+  bindings,
+  onPatch,
+  className
+}: ShortcutsEditorProps): React.JSX.Element {
   const platform: Platform = useMemo(() => detectPlatform(), [])
   const [editingId, setEditingId] = useState<ShortcutCommandId | null>(null)
   const [savingId, setSavingId] = useState<ShortcutCommandId | null>(null)
   const [errorById, setErrorById] = useState<Record<string, string>>({})
 
-  const save = async (patch: Record<string, string | null>, idForError: ShortcutCommandId): Promise<void> => {
+  const save = async (
+    patch: Record<string, string | null>,
+    idForError: ShortcutCommandId
+  ): Promise<void> => {
     setSavingId(idForError)
     setErrorById((prev) => {
       const next = { ...prev }
@@ -87,7 +94,13 @@ export function ShortcutsEditor({ bindings, onPatch, className }: ShortcutsEdito
                         e.preventDefault()
                         e.stopPropagation()
 
-                        if (e.key === 'Escape' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+                        if (
+                          e.key === 'Escape' &&
+                          !e.ctrlKey &&
+                          !e.metaKey &&
+                          !e.altKey &&
+                          !e.shiftKey
+                        ) {
                           setEditingId(null)
                           return
                         }
@@ -136,4 +149,3 @@ export function ShortcutsEditor({ bindings, onPatch, className }: ShortcutsEdito
     </div>
   )
 }
-

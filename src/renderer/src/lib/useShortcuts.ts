@@ -15,7 +15,9 @@ export function useShortcuts(): ShortcutState {
   const reload = async (): Promise<void> => {
     setLoading(true)
     try {
-      const data = (await window.electron.ipcRenderer.invoke('shortcuts:getAll')) as ShortcutBinding[]
+      const data = (await window.electron.ipcRenderer.invoke(
+        'shortcuts:getAll'
+      )) as ShortcutBinding[]
       setBindings(data)
     } catch {
       setBindings([])
@@ -44,4 +46,3 @@ export function useShortcuts(): ShortcutState {
 
   return { bindings, byId, loading, reload }
 }
-

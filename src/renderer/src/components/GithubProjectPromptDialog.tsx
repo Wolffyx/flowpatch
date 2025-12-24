@@ -36,7 +36,9 @@ export function GithubProjectPromptDialog({
 
   const dismiss = useCallback(async () => {
     try {
-      await window.electron.ipcRenderer.invoke('dismissGithubProjectPrompt', { projectId: project.id })
+      await window.electron.ipcRenderer.invoke('dismissGithubProjectPrompt', {
+        projectId: project.id
+      })
     } catch {
       // ignore
     } finally {
@@ -78,7 +80,8 @@ export function GithubProjectPromptDialog({
         <DialogHeader>
           <DialogTitle>Create a GitHub Project?</DialogTitle>
           <DialogDescription>
-            Patchwork can create a GitHub Projects V2 board for this repository and sync status from its Status field.
+            Patchwork can create a GitHub Projects V2 board for this repository and sync status from
+            its Status field.
           </DialogDescription>
         </DialogHeader>
 
@@ -99,4 +102,3 @@ export function GithubProjectPromptDialog({
     </Dialog>
   )
 }
-

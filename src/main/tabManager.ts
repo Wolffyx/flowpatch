@@ -25,6 +25,7 @@ export interface Tab {
   projectName: string
   view: WebContentsView
   isLoading: boolean
+  didFinishLoadHandler?: () => void
 }
 
 export interface TabState {
@@ -82,7 +83,9 @@ function createProjectView(): WebContentsView {
       maybeView.setBackgroundColor(color)
       return
     }
-    const maybeWebContents = view.webContents as unknown as { setBackgroundColor?: (c: string) => void }
+    const maybeWebContents = view.webContents as unknown as {
+      setBackgroundColor?: (c: string) => void
+    }
     if (typeof maybeWebContents.setBackgroundColor === 'function') {
       maybeWebContents.setBackgroundColor(color)
     }
@@ -162,7 +165,8 @@ function updateTabBounds(tab: Tab): void {
   const isActive = tab.id === activeTabId
 
   // Calculate height accounting for logs panel
-  const availableHeight = contentBounds.height - TAB_BAR_HEIGHT - STATUS_BAR_HEIGHT - logsPanelHeight
+  const availableHeight =
+    contentBounds.height - TAB_BAR_HEIGHT - STATUS_BAR_HEIGHT - logsPanelHeight
 
   if (isActive && !isModalOpen) {
     // Active tab is visible (unless modal is open)
@@ -248,6 +252,17 @@ export async function createTab(
     isLoading: true
   }
 
+  // If the renderer reloads (e.g., Vite full reload during HMR), it loses the
+  // initial project context. Re-send the project's identity after each load.
+  tab.didFinishLoadHandler = () => {
+    view.webContents.send('projectOpened', {
+      projectId,
+      projectKey,
+      projectPath
+    })
+  }
+  view.webContents.on('did-finish-load', tab.didFinishLoadHandler)
+
   tabs.set(tabId, tab)
 
   // Add view to window
@@ -260,13 +275,6 @@ export async function createTab(
   await loadProjectRenderer(view)
 
   tab.isLoading = false
-
-  // Send project info
-  view.webContents.send('projectOpened', {
-    projectId,
-    projectKey,
-    projectPath
-  })
 
   // Activate this tab
   await activateTab(tabId)
@@ -286,6 +294,10 @@ export async function createTab(
 export async function closeTab(tabId: string): Promise<void> {
   const tab = tabs.get(tabId)
   if (!tab || !mainWindowRef) return
+
+  if (tab.didFinishLoadHandler) {
+    tab.view.webContents.removeListener('did-finish-load', tab.didFinishLoadHandler)
+  }
 
   // Notify renderer
   tab.view.webContents.send('projectClosing')
@@ -329,6 +341,9 @@ export async function activateTab(tabId: string): Promise<void> {
   }
 
   activeTabId = tabId
+  // Persist active project immediately so restart restores last-focused tab,
+  // even if the app quits without calling cleanupTabManager().
+  setAppSetting(ACTIVE_TAB_KEY, tab.projectId)
 
   // Show and position this tab
   updateTabBounds(tab)

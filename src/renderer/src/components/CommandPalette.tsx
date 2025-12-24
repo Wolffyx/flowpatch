@@ -1,11 +1,5 @@
 import { useMemo, useState, useEffect, useRef } from 'react'
-import {
-  FolderOpen,
-  RefreshCw,
-  Play,
-  Plus,
-  Search
-} from 'lucide-react'
+import { FolderOpen, RefreshCw, Play, Plus, Search, Sparkles } from 'lucide-react'
 import { Dialog, DialogContent } from './ui/dialog'
 import { Input } from './ui/input'
 import { cn } from '../lib/utils'
@@ -29,6 +23,7 @@ interface CommandPaletteProps {
   onSync: () => void
   onRunWorker: () => void
   onAddCard: () => void
+  onGenerateCards: () => void
   shortcuts?: Partial<Record<ShortcutCommandId, string>>
 }
 
@@ -40,6 +35,7 @@ export function CommandPalette({
   onSync,
   onRunWorker,
   onAddCard,
+  onGenerateCards,
   shortcuts
 }: CommandPaletteProps): React.JSX.Element {
   const [search, setSearch] = useState('')
@@ -104,6 +100,16 @@ export function CommandPalette({
             shortcutId: 'card.add' as ShortcutCommandId,
             action: () => {
               onAddCard()
+              onOpenChange(false)
+            }
+          },
+          {
+            id: 'generate-cards',
+            label: 'Generate Cards with AI',
+            description: 'Create multiple draft cards from an app description',
+            icon: <Sparkles className="h-4 w-4" />,
+            action: () => {
+              onGenerateCards()
               onOpenChange(false)
             }
           }

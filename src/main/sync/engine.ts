@@ -133,10 +133,7 @@ export class SyncEngine {
         ])
         remoteCards = [...issues, ...prs, ...drafts]
       } else if (this.adapter instanceof GitlabAdapter) {
-        const [issues, mrs] = await Promise.all([
-          this.adapter.listIssues(),
-          this.adapter.listMRs()
-        ])
+        const [issues, mrs] = await Promise.all([this.adapter.listIssues(), this.adapter.listMRs()])
         remoteCards = [...issues, ...mrs]
       }
 
@@ -237,7 +234,11 @@ export class SyncEngine {
   }
 
   private async syncGithubIssuePrLinks(): Promise<void> {
-    if (!this.adapter || !(this.adapter instanceof GithubAdapter) || !this.project?.remote_repo_key) {
+    if (
+      !this.adapter ||
+      !(this.adapter instanceof GithubAdapter) ||
+      !this.project?.remote_repo_key
+    ) {
       return
     }
 
@@ -270,7 +271,9 @@ export class SyncEngine {
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error)
-      console.warn(`[SyncEngine] syncGithubIssuePrLinks failed project=${this.projectId}: ${errorMsg}`)
+      console.warn(
+        `[SyncEngine] syncGithubIssuePrLinks failed project=${this.projectId}: ${errorMsg}`
+      )
     }
   }
 
@@ -295,14 +298,19 @@ export class SyncEngine {
         card.remote_node_id
       ) {
         try {
-          const success = await this.adapter.updateProjectDraftStatus(card.remote_node_id, newStatus)
+          const success = await this.adapter.updateProjectDraftStatus(
+            card.remote_node_id,
+            newStatus
+          )
           if (success) {
             updateCardSyncState(cardId, 'ok')
             createEvent(this.projectId, 'synced', cardId, {
               action: 'status_pushed',
               status: newStatus
             })
-            console.log(`[SyncEngine] pushStatusChange via Projects V2 (draft) success card=${cardId}`)
+            console.log(
+              `[SyncEngine] pushStatusChange via Projects V2 (draft) success card=${cardId}`
+            )
             return true
           }
           updateCardSyncState(cardId, 'error', 'Failed to update project draft status')
@@ -322,12 +330,17 @@ export class SyncEngine {
       let success = false
 
       // If GitHub Projects V2 is not explicitly disabled, try to update project status
-      if (this.adapter instanceof GithubAdapter && this.policy.sync?.githubProjectsV2?.enabled !== false) {
+      if (
+        this.adapter instanceof GithubAdapter &&
+        this.policy.sync?.githubProjectsV2?.enabled !== false
+      ) {
         success = await this.adapter.updateProjectStatus(issueNumber, newStatus)
         if (success) {
           console.log(`[SyncEngine] pushStatusChange via Projects V2 success card=${cardId}`)
         } else {
-          console.warn(`[SyncEngine] pushStatusChange via Projects V2 failed, falling back to labels`)
+          console.warn(
+            `[SyncEngine] pushStatusChange via Projects V2 failed, falling back to labels`
+          )
         }
       }
 
@@ -336,7 +349,11 @@ export class SyncEngine {
       const allStatusLabels = this.adapter.getAllStatusLabels()
       const labelsToRemove = allStatusLabels.filter((l) => l !== newLabel)
       const labelsToAdd = [newLabel]
-      const labelsUpdated = await this.adapter.updateLabels(issueNumber, labelsToAdd, labelsToRemove)
+      const labelsUpdated = await this.adapter.updateLabels(
+        issueNumber,
+        labelsToAdd,
+        labelsToRemove
+      )
       success = labelsUpdated
 
       if (success) {

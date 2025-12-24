@@ -30,6 +30,7 @@
 ## 0. Goals and non-goals
 
 ### Goals
+
 1. **Single unified Kanban** across GitHub + GitLab for a repo you open locally.
 2. **Repo-first workflow:** open a local repo checkout → app binds to a chosen git remote → sync tasks from that remote.
 3. **Two-way sync:** moving a card in the app updates GitHub/GitLab; remote changes show in-app.
@@ -38,6 +39,7 @@
 6. **Extensible architecture:** adapters for providers; easy to add more integrations later.
 
 ### Non-goals (v1)
+
 - Multi-user/team collaboration features (permissions, multi-assignee workflows)
 - Multi-device state sync (cloud)
 - Hosted webhook relay service (optional later)
@@ -48,13 +50,17 @@
 ## 1. Core concepts and terminology
 
 ### Project (in the app)
+
 A **Project** is a local configuration that is always linked to:
+
 - A **local folder** that is a git repo checkout
 - Exactly one **selected git remote** (e.g., `origin`, `upstream`) determining the canonical provider/repo
 - A **policy file** (optional but recommended) that governs sync + worker behavior
 
 ### Card
+
 A **Card** is a unified representation of remote items:
+
 - GitHub Issue
 - GitHub PR
 - GitHub Project v2 draft item (“draft issue”)
@@ -62,6 +68,7 @@ A **Card** is a unified representation of remote items:
 - GitLab Merge Request (MR)
 
 Each card has:
+
 - `provider` (`github` | `gitlab`)
 - `type` (`issue` | `pr` | `draft` | `mr`)
 - a **Kanban status**
@@ -70,7 +77,9 @@ Each card has:
 - a local event timeline (audit/log)
 
 ### Local worker
+
 A **local background worker** that:
+
 - continuously (or on-demand) picks eligible Ready cards
 - moves them to In progress everywhere
 - generates a plan before coding
@@ -85,6 +94,7 @@ A **local background worker** that:
 ## 2. Kanban workflow and mapping rules
 
 ### 2.1 Columns (fixed)
+
 - **Draft (Backlog)**
 - **Ready**
 - **In progress**
@@ -93,21 +103,26 @@ A **local background worker** that:
 - **Done**
 
 ### 2.2 “Ready” rule (your requirement)
+
 A card is considered **Ready** (eligible for automation) if:
+
 - it is in the app’s **Ready** column **OR**
 - the remote item has the **`ready` label** (configurable via policy)
 
 ### 2.3 Status representation on providers (mapping)
 
 #### GitHub Projects v2 (best fit when enabled)
+
 - Use the Project item **single-select “Status” field** with your 6 values.
 - Supports items that are issues, PRs, and **draft items**.
 - Updating Project fields uses the **GraphQL API** (often via `gh api graphql`).
 
 #### GitHub Issues / PRs without Projects
+
 - Mirror status using labels (e.g., `status::in-progress`) and use `ready` as the “pickup” label.
 
 #### GitLab (issues + MRs)
+
 - Boards and workflow are typically label-driven.
 - Use scoped labels such as:
   - `status::draft`
@@ -118,6 +133,7 @@ A card is considered **Ready** (eligible for automation) if:
   - `status::done`
 
 ### 2.4 Recommended label scheme
+
 - **Ready trigger label:** `ready`
 - **Status labels:** (one at a time)
   - `status::draft`
@@ -130,6 +146,7 @@ A card is considered **Ready** (eligible for automation) if:
 **Rule:** keep at most one `status::…` label at a time; the app enforces this during updates.
 
 ### 2.5 Source of truth rules (to avoid sync loops)
+
 - If a GitHub Project v2 is configured and an item belongs to it:
   - **Project Status field is canonical** for that item’s status.
 - Otherwise:
@@ -141,6 +158,7 @@ A card is considered **Ready** (eligible for automation) if:
 ## 3. User flows
 
 ### 3.1 Open repo as a project
+
 1. Click **Open Repo**
 2. Select a local folder
 3. App verifies it’s a git repo
@@ -151,6 +169,7 @@ A card is considered **Ready** (eligible for automation) if:
 7. Start sync and show the Kanban board
 
 ### 3.2 View and filter cards
+
 - Columns show cards by derived status
 - Filters:
   - label
@@ -161,12 +180,14 @@ A card is considered **Ready** (eligible for automation) if:
 - Search by title/body (optional: local indexed search)
 
 ### 3.3 Move cards (drag & drop)
+
 - Dragging between columns:
   - updates local DB immediately (optimistic UI)
   - pushes changes to remote asynchronously
 - Failures show a small error badge and a “Retry” action
 
 ### 3.4 Automation (worker)
+
 - Toggle: **Auto-run worker on Ready**
 - Per-card action: **Run worker now**
 - Worker:
@@ -182,19 +203,24 @@ A card is considered **Ready** (eligible for automation) if:
 ## 4. Repo binding via git remotes
 
 ### 4.1 Remote detection
+
 On open:
+
 - run `git remote -v`
 - parse remote URLs and normalize to a repo key:
   - GitHub: `github:owner/name`
   - GitLab: `gitlab:<host>/<group>/<repo>` (supports self-managed host)
 
 Remote URL formats supported:
+
 - HTTPS: `https://github.com/owner/repo.git`
 - SSH: `git@github.com:owner/repo.git`
 - GitLab self-managed: `git@my.gitlab.host:group/repo.git`
 
 ### 4.2 Remote selector (when ambiguous)
+
 If multiple remotes match:
+
 - list each remote with provider + repo:
   - `origin → GitHub: owner/repo`
   - `upstream → GitLab: host/group/repo`
@@ -202,6 +228,7 @@ If multiple remotes match:
 - store selection in `projects.selected_remote_name`
 
 ### 4.3 Repo-linked project rule
+
 **A Kanban project is always linked to the repo remote.**
 Cards come from that remote and PR/MR creation targets that remote.
 
@@ -210,70 +237,73 @@ Cards come from that remote and PR/MR creation targets that remote.
 ## 5. Policy file
 
 ### 5.1 File name and location
+
 - `.kanban-agent.yml` in the repo root (preferred)
 - optional override location via app settings per project
 
 ### 5.2 Example policy (v1)
+
 ```yaml
 version: 1
 
 repo:
-  provider: auto            # auto|github|gitlab
+  provider: auto # auto|github|gitlab
   gitlab:
-    host: "https://gitlab.com"
+    host: 'https://gitlab.com'
 
 sync:
   webhookPreferred: true
   pollingFallbackMinutes: 3
 
-  readyLabel: "ready"
+  readyLabel: 'ready'
   statusLabels:
-    draft: "status::draft"
-    ready: "status::ready"
-    inProgress: "status::in-progress"
-    inReview: "status::in-review"
-    testing: "status::testing"
-    done: "status::done"
+    draft: 'status::draft'
+    ready: 'status::ready'
+    inProgress: 'status::in-progress'
+    inReview: 'status::in-review'
+    testing: 'status::testing'
+    done: 'status::done'
 
   githubProjectsV2:
     enabled: false
-    projectId: ""                 # Projects v2 node id (optional)
-    statusFieldName: "Status"
+    projectId: '' # Projects v2 node id (optional)
+    statusFieldName: 'Status'
     statusValues:
-      draft: "Draft"
-      ready: "Ready"
-      inProgress: "In progress"
-      inReview: "In review"
-      testing: "Testing"
-      done: "Done"
+      draft: 'Draft'
+      ready: 'Ready'
+      inProgress: 'In progress'
+      inReview: 'In review'
+      testing: 'Testing'
+      done: 'Done'
 
 worker:
   enabled: true
-  toolPreference: "auto"          # auto|claude|codex
+  toolPreference: 'auto' # auto|claude|codex
   planFirst: true
 
   maxMinutes: 25
   allowNetwork: false
 
-  branchPattern: "kanban/{id}-{slug}"
-  commitMessage: "#{issue} {title}"
+  branchPattern: 'kanban/{id}-{slug}'
+  commitMessage: '#{issue} {title}'
 
   allowedCommands:
-    - "pnpm install"
-    - "pnpm lint"
-    - "pnpm test"
-    - "pnpm build"
+    - 'pnpm install'
+    - 'pnpm lint'
+    - 'pnpm test'
+    - 'pnpm build'
 
-  lintCommand: "pnpm lint"
-  testCommand: "pnpm test"
-  buildCommand: "pnpm build"
+  lintCommand: 'pnpm lint'
+  testCommand: 'pnpm test'
+  buildCommand: 'pnpm build'
 
   forbidPaths:
-    - ".github/workflows/"
-    - ".gitlab-ci.yml"
+    - '.github/workflows/'
+    - '.gitlab-ci.yml'
 ```
 
 ### 5.3 Policy resolution rules
+
 - If policy exists: use it; show validation errors in UI if invalid.
 - If missing: use defaults and offer “Create policy file”.
 - Policy affects:
@@ -288,6 +318,7 @@ worker:
 ## 6. System architecture
 
 ### 6.1 Process split
+
 - **Renderer (React + TS)**
   - Kanban UI, filters, card drawer, activity log
   - Drag/drop emits commands
@@ -298,7 +329,9 @@ worker:
   - long tasks: polling sync, webhook ingest processing, AI execution, git operations
 
 ### 6.2 IPC contract (examples)
+
 Renderer → Main:
+
 - `openRepo(path)`
 - `selectRemote(projectId, remoteName)`
 - `moveCard(cardId, status)`
@@ -307,6 +340,7 @@ Renderer → Main:
 - `runWorker(projectId, cardId?)`
 
 Main → Renderer:
+
 - `projectOpened(project)`
 - `cardsUpdated(projectId, cards[])`
 - `syncStatus(projectId, status)`
@@ -318,6 +352,7 @@ Main → Renderer:
 ## 7. Local data model (SQLite)
 
 ### 7.1 `projects`
+
 - `id` (uuid)
 - `name`
 - `local_path`
@@ -328,6 +363,7 @@ Main → Renderer:
 - `created_at`, `updated_at`
 
 ### 7.2 `cards`
+
 - `id` (uuid)
 - `project_id`
 - `provider` (`github|gitlab`)
@@ -351,6 +387,7 @@ Main → Renderer:
   - `last_error`
 
 ### 7.3 `card_links`
+
 - `id`
 - `card_id`
 - `linked_type` (`pr|mr`)
@@ -359,6 +396,7 @@ Main → Renderer:
 - `linked_number_or_iid`
 
 ### 7.4 `events` (timeline / audit log)
+
 - `id`
 - `project_id`
 - `card_id`
@@ -367,6 +405,7 @@ Main → Renderer:
 - `created_at`
 
 ### 7.5 `jobs`
+
 - `id`
 - `project_id`
 - `card_id` (nullable)
@@ -383,7 +422,9 @@ Main → Renderer:
 ## 8. Provider adapters (GitHub + GitLab)
 
 ### 8.1 Adapter responsibilities
+
 Each adapter implements:
+
 - Auth status checks
 - Listing issues/drafts/PRs/MRs for the repo (and/or project)
 - Updating labels (and Project fields if applicable)
@@ -392,12 +433,16 @@ Each adapter implements:
 - Fetching a single item to reconcile state
 
 ### 8.2 CLI-first approach
+
 For solo speed:
+
 - GitHub: use `gh` for issues and PRs, and `gh api graphql` for Projects v2
 - GitLab: use `glab` for issues and MRs; use `glab api` fallback if needed
 
 ### 8.3 GitHub Projects v2 support (optional)
+
 When enabled:
+
 - read project items (issues, PRs, draft items)
 - read and update the “Status” field
 - map field values to the Kanban statuses
@@ -407,34 +452,43 @@ When enabled:
 ## 9. Sync engine (webhook-first + polling fallback)
 
 ### 9.1 Polling loop (always available)
+
 Every `pollingFallbackMinutes`:
+
 1. list changed items since last cursor
 2. normalize → upsert into `cards`
 3. derive status + ready eligibility
 4. emit UI updates
 
 Store cursors in `projects` or a `sync_state` table:
+
 - last successful poll timestamp per provider (and per project if used)
 
 ### 9.2 Webhook ingest (preferred)
+
 Modes:
+
 1. **Local webhook server** embedded in Electron (listens on localhost)
    - requires tunneling/port forwarding to receive webhooks from GitHub/GitLab
 2. **Optional relay** (later)
    - a small hosted service forwards webhook payloads to the app
 
 Webhook handling:
+
 - validate signatures when possible
 - enqueue `webhook_ingest` job
 - job upserts changes and triggers targeted reconciliation poll
 
 ### 9.3 Reconciliation strategy
+
 Whenever:
+
 - webhook arrives, or
 - user moves a card, or
 - worker changes status
 
 …run a targeted reconcile:
+
 - fetch the affected item(s)
 - ensure remote and local converge
 - if mismatch, mark conflict
@@ -444,7 +498,9 @@ Whenever:
 ## 10. Status computation and conflict handling
 
 ### 10.1 Deriving local status from remote
+
 Precedence:
+
 1. If GitHub Projects v2 enabled and item is in project:
    - map Project Status field value to local status
 2. Else if status label exists (`status::…`):
@@ -455,16 +511,20 @@ Precedence:
    - status = Draft
 
 ### 10.2 Ready eligibility
+
 `ready_eligible = (status == ready) OR (labels include readyLabel)`
 
 ### 10.3 Conflicts (solo-friendly)
+
 If both local and remote changed since last sync:
+
 - show conflict badge on card
 - card drawer shows:
   - “Keep local” (push again)
   - “Keep remote” (overwrite local)
 
 Auto-resolution only when:
+
 - remote change is older than local status change
 - and remote didn’t change other fields (title/body/labels unrelated)
 
@@ -473,7 +533,9 @@ Auto-resolution only when:
 ## 11. Worker automation pipeline (Ready → In progress → PR/MR → In review)
 
 ### 11.1 Worker loop
+
 When enabled:
+
 1. find next eligible card (Ready rule)
 2. acquire a lock/lease
 3. move to In progress (local + remote)
@@ -486,18 +548,22 @@ When enabled:
 10. release lock
 
 ### 11.2 Picking algorithm (solo speed default)
+
 - oldest Ready first
 - skip locked or recently failed items unless manually retried
 - optionally: prefer items explicitly marked “auto” (future)
 
 ### 11.3 Leases and idempotency
+
 - each job has a lease timeout; worker renews while running
 - if worker crashes:
   - lease expires, job becomes retryable
   - card status shows “stale lock” warning
 
 ### 11.4 Plan-before-code (required)
+
 Plan output includes:
+
 - understanding of task (issue title/body)
 - approach
 - files to touch
@@ -506,16 +572,20 @@ Plan output includes:
 - risks/assumptions
 
 Plan is stored in:
+
 - `events` as `worker_plan`
 - optional issue comment (policy-controlled)
 
 ### 11.5 Repo preparation rules
+
 - verify clean working tree (policy-controlled: fail vs stash)
 - fetch latest
 - create branch with policy pattern
 
 ### 11.6 Tool selection: Claude Code vs Codex
+
 On worker start:
+
 - detect installed executables
 - if both exist: use `toolPreference`
 - if none exist:
@@ -523,22 +593,27 @@ On worker start:
   - mark status accordingly
 
 ### 11.7 Command restrictions & safety
+
 - only allow commands listed in policy
 - enforce max runtime
 - optional: deny network access (default off)
 
 ### 11.8 Verification
+
 Run configured commands:
+
 - `lintCommand`
 - `testCommand`
 - optional `buildCommand`
 
 If checks fail:
+
 - record logs in timeline
 - optional: open WIP PR (policy)
 - keep card In progress but mark red, or move to Draft with “failed” tag (your choice)
 
 ### 11.9 PR/MR creation
+
 - title defaults to issue title
 - body includes:
   - issue link
@@ -549,6 +624,7 @@ If checks fail:
 - comment back on issue with PR/MR link
 
 ### 11.10 Status transitions (required)
+
 - when worker starts: Ready → In progress (local + remote)
 - when PR/MR created: In progress → In review (local + remote)
 
@@ -557,10 +633,12 @@ If checks fail:
 ## 12. Linking rules (Issue ↔ PR/MR ↔ Draft)
 
 ### 12.1 Backlinks
+
 - PR/MR body references issue/draft
 - issue gets comment with PR/MR link
 
 ### 12.2 Local storage
+
 - store links in `card_links` and show in UI
 - if remote already has linked PR info, import it when possible
 
@@ -569,6 +647,7 @@ If checks fail:
 ## 13. UI plan (solo-dev speed optimized)
 
 ### 13.1 Main layout
+
 - Sidebar:
   - project list
   - “Open Repo…”
@@ -578,6 +657,7 @@ If checks fail:
   - Command palette (Ctrl+K)
 
 ### 13.2 Kanban board
+
 - fixed columns
 - drag/drop
 - card badges:
@@ -587,6 +667,7 @@ If checks fail:
   - PR/MR link badge
 
 ### 13.3 Card drawer (right panel)
+
 - title/body preview
 - remote links: “Open in GitHub/GitLab”
 - status controls
@@ -598,7 +679,9 @@ If checks fail:
 - logs view (collapsed by default)
 
 ### 13.4 Remote selection UX
+
 Only show remote selector when needed:
+
 - if there’s one clear remote, auto-bind
 - if ambiguous, prompt once and remember
 
@@ -607,6 +690,7 @@ Only show remote selector when needed:
 ## 14. Security and safety rails
 
 ### 14.1 Credentials
+
 - prefer CLI auth:
   - GitHub: `gh auth status`
   - GitLab: `glab auth status`
@@ -614,12 +698,14 @@ Only show remote selector when needed:
   - store in OS keychain (Electron safe storage)
 
 ### 14.2 Sandbox and guardrails
+
 - allowedCommands allowlist
 - forbidPaths
 - runtime limits
 - optional “dry run” mode (plan only + stub PR)
 
 ### 14.3 Privacy
+
 - minimize cached bodies (optional setting)
 - redact secrets in logs shown in UI (basic regex patterns)
 
@@ -641,6 +727,7 @@ Only show remote selector when needed:
 ## 16. Implementation roadmap
 
 ### Milestone A — Skeleton app
+
 - Electron + React scaffolding
 - SQLite setup + migrations
 - Projects list + Open Repo
@@ -650,6 +737,7 @@ Only show remote selector when needed:
 **Deliverable:** open a repo and manage local status quickly.
 
 ### Milestone B — Policy file + repo binding
+
 - load/validate `.kanban-agent.yml`
 - show policy status in UI
 - “Create policy file” wizard
@@ -657,6 +745,7 @@ Only show remote selector when needed:
 **Deliverable:** per-repo configuration works.
 
 ### Milestone C — Sync v1 (polling)
+
 - GitHub adapter (issues + PRs) via CLI
 - GitLab adapter (issues + MRs) via CLI
 - labels-based status mapping
@@ -666,6 +755,7 @@ Only show remote selector when needed:
 **Deliverable:** stable two-way sync via polling.
 
 ### Milestone D — Worker v1
+
 - job queue + leases
 - pick Ready cards
 - move In progress remote + local
@@ -677,6 +767,7 @@ Only show remote selector when needed:
 **Deliverable:** full Ready → PR/MR automation.
 
 ### Milestone E — Webhooks + reconciliation
+
 - local webhook server + job ingest
 - webhook UI status
 - targeted reconciliation after webhooks
@@ -685,6 +776,7 @@ Only show remote selector when needed:
 **Deliverable:** near real-time updates with fallback.
 
 ### Milestone F — GitHub Projects v2 integration
+
 - read project items including drafts
 - update Project status field
 - map project status to columns
@@ -693,6 +785,7 @@ Only show remote selector when needed:
 **Deliverable:** Projects-driven workflow supported.
 
 ### Milestone G — Solo speed polish
+
 - Ctrl+K palette
 - better logs and error actions
 - fast “run worker now”
@@ -703,10 +796,12 @@ Only show remote selector when needed:
 ## 17. Acceptance criteria checklist
 
 ### Repo binding
+
 - [ ] Opening a repo lists remotes and binds to chosen remote
 - [ ] Project remembers selected remote across restarts
 
 ### Sync (polling + webhook)
+
 - [ ] Issues appear as cards
 - [ ] Ready label makes cards eligible
 - [ ] Drag/drop updates remote labels (and project field when enabled)
@@ -714,6 +809,7 @@ Only show remote selector when needed:
 - [ ] Conflicts surface clearly and are resolvable
 
 ### Worker
+
 - [ ] Auto-picks Ready items
 - [ ] Moves items to In progress everywhere on start
 - [ ] Generates and stores a plan before coding

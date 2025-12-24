@@ -1,11 +1,30 @@
 import { useState, useEffect } from 'react'
-import { X, ExternalLink, Play, RefreshCw, Clock, AlertCircle, CheckCircle2, GitBranch, FolderOpen, Trash2, GitPullRequest } from 'lucide-react'
+import {
+  X,
+  ExternalLink,
+  Play,
+  RefreshCw,
+  Clock,
+  AlertCircle,
+  CheckCircle2,
+  GitBranch,
+  FolderOpen,
+  Trash2,
+  GitPullRequest
+} from 'lucide-react'
 import { Button } from './ui/button'
 import { Badge } from './ui/badge'
 import { ScrollArea } from './ui/scroll-area'
 import { cn } from '../lib/utils'
 import { formatRelativeTime, parseLabels, parseAssignees } from '../lib/utils'
-import { KANBAN_COLUMNS, type Card, type CardLink, type Event, type CardStatus, type Worktree } from '../../../shared/types'
+import {
+  KANBAN_COLUMNS,
+  type Card,
+  type CardLink,
+  type Event,
+  type CardStatus,
+  type Worktree
+} from '../../../shared/types'
 
 interface CardDrawerProps {
   card: Card | null
@@ -38,7 +57,10 @@ export function CardDrawer({
 
     const loadWorktree = async (): Promise<void> => {
       try {
-        const worktrees = await window.electron.ipcRenderer.invoke('listWorktrees', projectId) as Worktree[]
+        const worktrees = (await window.electron.ipcRenderer.invoke(
+          'listWorktrees',
+          projectId
+        )) as Worktree[]
         const cardWorktree = worktrees.find(
           (wt) => wt.card_id === card.id && wt.status !== 'cleaned'
         )
@@ -74,7 +96,10 @@ export function CardDrawer({
       await window.electron.ipcRenderer.invoke('recreateWorktree', worktree.id)
       // Reload worktree info
       if (projectId) {
-        const worktrees = await window.electron.ipcRenderer.invoke('listWorktrees', projectId) as Worktree[]
+        const worktrees = (await window.electron.ipcRenderer.invoke(
+          'listWorktrees',
+          projectId
+        )) as Worktree[]
         const cardWorktree = worktrees.find(
           (wt) => wt.card_id === card?.id && wt.status !== 'cleaned'
         )

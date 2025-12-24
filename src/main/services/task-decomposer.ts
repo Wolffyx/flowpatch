@@ -192,10 +192,13 @@ Respond with only the JSON, no markdown code blocks or other text.`
         stderr += data.toString()
       })
 
-      const timeout = setTimeout(() => {
-        child.kill('SIGTERM')
-        reject(new Error('Task analysis timed out after 2 minutes'))
-      }, 2 * 60 * 1000)
+      const timeout = setTimeout(
+        () => {
+          child.kill('SIGTERM')
+          reject(new Error('Task analysis timed out after 2 minutes'))
+        },
+        2 * 60 * 1000
+      )
 
       child.on('close', (code) => {
         clearTimeout(timeout)

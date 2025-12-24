@@ -195,10 +195,7 @@ export class GitWorktreeManager {
       case 'repo':
         return path.join(this.repoPath, '.patchwork-worktrees')
       case 'sibling':
-        return path.join(
-          path.dirname(this.repoPath),
-          `${path.basename(this.repoPath)}-worktrees`
-        )
+        return path.join(path.dirname(this.repoPath), `${path.basename(this.repoPath)}-worktrees`)
       case 'custom':
         if (!config.customPath) {
           throw new Error('Custom worktree path not configured')
@@ -215,9 +212,7 @@ export class GitWorktreeManager {
   computeWorktreePath(branchName: string, config: WorktreeConfig): string {
     const root = this.getWorktreeRoot(config)
     // Use the branch name (without prefix) as the folder name, sanitized
-    const folderName = branchName
-      .replace(/^patchwork\//, '')
-      .replace(/[^a-zA-Z0-9-]/g, '-')
+    const folderName = branchName.replace(/^patchwork\//, '').replace(/[^a-zA-Z0-9-]/g, '-')
     return path.join(root, folderName)
   }
 
@@ -307,7 +302,9 @@ export class GitWorktreeManager {
 
   private tryWriteMarker(worktreePath: string): void {
     try {
-      writeFileSync(path.join(worktreePath, '.patchwork-worktree'), 'managed\n', { encoding: 'utf-8' })
+      writeFileSync(path.join(worktreePath, '.patchwork-worktree'), 'managed\n', {
+        encoding: 'utf-8'
+      })
     } catch {
       // best-effort
     }
@@ -397,7 +394,15 @@ export class GitWorktreeManager {
       this.git(['worktree', 'add', worktreePath, branchName])
     } else if (remote) {
       // Branch exists on remote, create tracking branch with worktree
-      this.git(['worktree', 'add', '--track', '-b', branchName, worktreePath, `origin/${branchName}`])
+      this.git([
+        'worktree',
+        'add',
+        '--track',
+        '-b',
+        branchName,
+        worktreePath,
+        `origin/${branchName}`
+      ])
     } else {
       // Branch doesn't exist, create new branch from base
       this.git(['worktree', 'add', '-b', branchName, worktreePath, baseRef])
@@ -527,7 +532,10 @@ export class GitWorktreeManager {
   /**
    * Verify that a worktree is healthy (exists on disk with correct branch).
    */
-  verifyWorktree(worktreePath: string, expectedBranch?: string): {
+  verifyWorktree(
+    worktreePath: string,
+    expectedBranch?: string
+  ): {
     exists: boolean
     healthy: boolean
     branch: string | null
@@ -540,7 +548,12 @@ export class GitWorktreeManager {
 
     // Check if it's a valid worktree directory
     if (!this.isWorktreeDirectory(worktreePath)) {
-      return { exists: true, healthy: false, branch: null, error: 'Path exists but is not a worktree' }
+      return {
+        exists: true,
+        healthy: false,
+        branch: null,
+        error: 'Path exists but is not a worktree'
+      }
     }
 
     // Verify git recognizes it as a worktree
@@ -550,7 +563,12 @@ export class GitWorktreeManager {
     )
 
     if (!match) {
-      return { exists: true, healthy: false, branch: null, error: 'Directory exists but not registered as worktree' }
+      return {
+        exists: true,
+        healthy: false,
+        branch: null,
+        error: 'Directory exists but not registered as worktree'
+      }
     }
 
     // Get current branch

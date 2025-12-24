@@ -5,7 +5,9 @@ export interface LinkedPullRequestIndex {
   numbers: Set<string>
 }
 
-export function buildLinkedPullRequestIndex(cardLinks: CardLink[] | null | undefined): LinkedPullRequestIndex {
+export function buildLinkedPullRequestIndex(
+  cardLinks: CardLink[] | null | undefined
+): LinkedPullRequestIndex {
   const urls = new Set<string>()
   const numbers = new Set<string>()
 
@@ -25,7 +27,9 @@ export function isLinkedPullRequestCard(card: Card, index: LinkedPullRequestInde
   return false
 }
 
-export function filterOutLinkedPullRequestCards(cards: Card[], index: LinkedPullRequestIndex): Card[] {
+export function filterOutLinkedPullRequestCards(
+  cards: Card[],
+  index: LinkedPullRequestIndex
+): Card[] {
   return cards.filter((card) => !isLinkedPullRequestCard(card, index))
 }
-

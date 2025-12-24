@@ -32,7 +32,8 @@ export interface ProjectAPI {
   getCards: () => Promise<Card[]>
   getCardLinks: () => Promise<CardLink[]>
   moveCard: (cardId: string, status: CardStatus) => Promise<void>
-  createCard: (title: string, body?: string) => Promise<Card>
+  ensureProjectRemote: (projectId: string) => Promise<{ project?: Project; error?: string }>
+  createCard: (data: { title: string; body?: string; createType: 'local' | 'github_issue' }) => Promise<Card>
 
   // Sync
   sync: () => Promise<void>
@@ -53,6 +54,22 @@ export interface ProjectAPI {
 
   // Events
   getEvents: (limit?: number) => Promise<Event[]>
+
+  // Patchwork workspace (.patchwork)
+  getWorkspaceStatus: () => Promise<import('../shared/types').PatchworkWorkspaceStatus | null>
+  ensureWorkspace: () => Promise<unknown>
+  indexBuild: () => Promise<unknown>
+  indexRefresh: () => Promise<unknown>
+  indexWatchStart: () => Promise<unknown>
+  indexWatchStop: () => Promise<unknown>
+  validateConfig: () => Promise<unknown>
+  docsRefresh: () => Promise<unknown>
+  contextPreview: (task: string) => Promise<unknown>
+  repairWorkspace: () => Promise<unknown>
+  migrateWorkspace: () => Promise<unknown>
+  openWorkspaceFolder: () => Promise<unknown>
+  retrieve: (kind: 'symbol' | 'text', query: string, limit?: number) => Promise<unknown>
+  getPatchworkConfig: () => Promise<unknown>
 }
 
 // Types from shared (would be imported in actual usage)
@@ -117,6 +134,26 @@ interface Project {
   last_sync_at: string | null
 }
 
+type ProjectInfo = { projectId: string; projectKey: string; projectPath: string }
+
+const projectOpenedListeners = new Set<(info: ProjectInfo) => void>()
+const projectClosingListeners = new Set<() => void>()
+let lastProjectInfo: ProjectInfo | null = null
+
+ipcRenderer.on('projectOpened', (_event: IpcRendererEvent, info: ProjectInfo) => {
+  lastProjectInfo = info
+  for (const listener of projectOpenedListeners) {
+    listener(info)
+  }
+})
+
+ipcRenderer.on('projectClosing', () => {
+  lastProjectInfo = null
+  for (const listener of projectClosingListeners) {
+    listener()
+  }
+})
+
 // ============================================================================
 // Project API Implementation
 // ============================================================================
@@ -127,25 +164,23 @@ const projectAPI: ProjectAPI = {
   // -------------------------------------------------------------------------
 
   onProjectOpened: (callback) => {
-    const handler = (
-      _event: IpcRendererEvent,
-      info: { projectId: string; projectKey: string; projectPath: string }
-    ) => {
-      callback(info)
+    projectOpenedListeners.add(callback)
+    if (lastProjectInfo) {
+      queueMicrotask(() => {
+        if (lastProjectInfo && projectOpenedListeners.has(callback)) {
+          callback(lastProjectInfo)
+        }
+      })
     }
-    ipcRenderer.on('projectOpened', handler)
     return () => {
-      ipcRenderer.removeListener('projectOpened', handler)
+      projectOpenedListeners.delete(callback)
     }
   },
 
   onProjectClosing: (callback) => {
-    const handler = () => {
-      callback()
-    }
-    ipcRenderer.on('projectClosing', handler)
+    projectClosingListeners.add(callback)
     return () => {
-      ipcRenderer.removeListener('projectClosing', handler)
+      projectClosingListeners.delete(callback)
     }
   },
 
@@ -177,8 +212,23 @@ const projectAPI: ProjectAPI = {
     return ipcRenderer.invoke('moveCard', { cardId, status })
   },
 
-  createCard: (title: string, body?: string) => {
-    return ipcRenderer.invoke('project:createCard', { title, body })
+  ensureProjectRemote: (projectId: string) => {
+    return ipcRenderer.invoke('ensureProjectRemote', { projectId })
+  },
+
+  createCard: async (data: { title: string; body?: string; createType: 'local' | 'github_issue' }) => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) throw new Error('No active project')
+    const result = (await ipcRenderer.invoke('createCard', {
+      projectId,
+      title: data.title,
+      body: data.body,
+      createType: data.createType
+    })) as { card?: Card; error?: string }
+
+    if (result?.error) throw new Error(result.error)
+    if (!result?.card) throw new Error('Failed to create card')
+    return result.card
   },
 
   // -------------------------------------------------------------------------
@@ -257,6 +307,66 @@ const projectAPI: ProjectAPI = {
 
   getEvents: (limit?: number) => {
     return ipcRenderer.invoke('project:getEvents', { limit })
+  },
+
+  // -------------------------------------------------------------------------
+  // Patchwork workspace (.patchwork)
+  // -------------------------------------------------------------------------
+
+  getWorkspaceStatus: () => {
+    return ipcRenderer.invoke('project:getWorkspaceStatus')
+  },
+
+  ensureWorkspace: () => {
+    return ipcRenderer.invoke('project:ensureWorkspace')
+  },
+
+  indexBuild: () => {
+    return ipcRenderer.invoke('project:indexBuild')
+  },
+
+  indexRefresh: () => {
+    return ipcRenderer.invoke('project:indexRefresh')
+  },
+
+  indexWatchStart: () => {
+    return ipcRenderer.invoke('project:indexWatchStart')
+  },
+
+  indexWatchStop: () => {
+    return ipcRenderer.invoke('project:indexWatchStop')
+  },
+
+  validateConfig: () => {
+    return ipcRenderer.invoke('project:validateConfig')
+  },
+
+  docsRefresh: () => {
+    return ipcRenderer.invoke('project:docsRefresh')
+  },
+
+  contextPreview: (task: string) => {
+    return ipcRenderer.invoke('project:contextPreview', { task })
+  },
+
+  repairWorkspace: () => {
+    return ipcRenderer.invoke('project:repairWorkspace')
+  },
+
+  migrateWorkspace: () => {
+    return ipcRenderer.invoke('project:migrateWorkspace')
+  },
+
+  openWorkspaceFolder: () => {
+    return ipcRenderer.invoke('project:openWorkspaceFolder')
+  },
+
+  retrieve: (kind: 'symbol' | 'text', query: string, limit?: number) => {
+    return ipcRenderer.invoke('project:retrieve', { kind, query, limit })
+  },
+
+  getPatchworkConfig: () => {
+    return ipcRenderer.invoke('project:getPatchworkConfig')
   }
 }
 
@@ -268,14 +378,20 @@ const allowedInvokeChannels = [
   'getThemePreference',
   'setThemePreference',
   'getSystemTheme',
+  // AI drafting
+  'generateCardDescription',
+  'generateCardList',
   'listWorktrees',
   'openWorktreeFolder',
   'removeWorktree',
   'recreateWorktree',
   // Onboarding dialogs (LabelSetupDialog, GithubProjectPromptDialog)
+  'getRepoOnboardingState',
   'listRepoLabels',
   'applyLabelConfig',
   'dismissLabelWizard',
+  'dismissStarterCardsWizard',
+  'completeStarterCardsWizard',
   'dismissGithubProjectPrompt',
   'createGithubProjectV2'
 ]

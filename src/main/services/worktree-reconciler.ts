@@ -104,11 +104,16 @@ export class WorktreeReconciler {
                 config: this.config
               })
               result.untrackedCleaned.push(gitWt.worktreePath)
-              console.log(`[WorktreeReconciler] Cleaned untracked patchwork worktree: ${gitWt.worktreePath}`)
+              console.log(
+                `[WorktreeReconciler] Cleaned untracked patchwork worktree: ${gitWt.worktreePath}`
+              )
             } catch (err) {
               const errorMsg = err instanceof Error ? err.message : String(err)
               result.errors.push({ worktree: null, path: gitWt.worktreePath, error: errorMsg })
-              console.error(`[WorktreeReconciler] Failed to clean untracked worktree ${gitWt.worktreePath}:`, errorMsg)
+              console.error(
+                `[WorktreeReconciler] Failed to clean untracked worktree ${gitWt.worktreePath}:`,
+                errorMsg
+              )
             }
           }
         }
@@ -250,7 +255,11 @@ export async function reconcileAllProjects(
       results.set(project.id, result)
 
       // Log summary
-      if (result.orphaned.length > 0 || result.cleanedUp.length > 0 || result.untrackedCleaned.length > 0) {
+      if (
+        result.orphaned.length > 0 ||
+        result.cleanedUp.length > 0 ||
+        result.untrackedCleaned.length > 0
+      ) {
         console.log(
           `[WorktreeReconciler] Project ${project.id}: ` +
             `orphaned=${result.orphaned.length}, ` +

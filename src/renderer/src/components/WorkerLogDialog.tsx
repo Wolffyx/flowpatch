@@ -132,7 +132,9 @@ export function WorkerLogDialog({
         <div className="flex items-center justify-between gap-2 min-w-0">
           <div className="flex items-center gap-2 min-w-0">
             {job && (
-              <Badge variant={job.state === 'failed' ? 'destructive' : 'secondary'}>{job.state}</Badge>
+              <Badge variant={job.state === 'failed' ? 'destructive' : 'secondary'}>
+                {job.state}
+              </Badge>
             )}
             {card && <div className="text-sm text-muted-foreground truncate">{card.title}</div>}
           </div>
@@ -261,7 +263,9 @@ export function WorkerLogDialog({
                       <div
                         className={cn(
                           'leading-5 min-w-0 max-w-full',
-                          wrap ? 'whitespace-pre-wrap break-words' : 'whitespace-pre overflow-x-auto'
+                          wrap
+                            ? 'whitespace-pre-wrap break-words'
+                            : 'whitespace-pre overflow-x-auto'
                         )}
                       >
                         {entry.message || entry.raw}

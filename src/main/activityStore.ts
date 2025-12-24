@@ -154,10 +154,7 @@ export function isAnyProjectBusy(): boolean {
  * Subscribe to activity changes for a specific project.
  * Returns an unsubscribe function.
  */
-export function subscribeToProject(
-  projectId: string,
-  callback: ActivityCallback
-): () => void {
+export function subscribeToProject(projectId: string, callback: ActivityCallback): () => void {
   if (!projectSubscribers.has(projectId)) {
     projectSubscribers.set(projectId, new Set())
   }

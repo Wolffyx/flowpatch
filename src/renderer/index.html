@@ -10,13 +10,13 @@
     />
     <script>
       // Prevent flash of wrong theme on load
-      (function() {
-        var stored = localStorage.getItem('theme-preference');
-        var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      ;(function () {
+        var stored = localStorage.getItem('theme-preference')
+        var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
         if (stored === 'dark' || (stored === 'system' && prefersDark) || (!stored && prefersDark)) {
-          document.documentElement.classList.add('dark');
+          document.documentElement.classList.add('dark')
         }
-      })();
+      })()
     </script>
   </head>
 

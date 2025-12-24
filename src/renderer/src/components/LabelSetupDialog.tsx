@@ -27,13 +27,17 @@ function parsePolicy(project: Project): PolicyConfig {
   }
 }
 
-function readInitialMapping(project: Project): { readyLabel: string; statusLabels: StatusLabelMapping } {
+function readInitialMapping(project: Project): {
+  readyLabel: string
+  statusLabels: StatusLabelMapping
+} {
   const policy = parsePolicy(project)
   const readyLabel = policy.sync?.readyLabel || DEFAULT_POLICY.sync?.readyLabel || 'ready'
   const statusLabels: StatusLabelMapping = {
     draft: policy.sync?.statusLabels?.draft || DEFAULT_POLICY.sync!.statusLabels!.draft!,
     ready: policy.sync?.statusLabels?.ready || DEFAULT_POLICY.sync!.statusLabels!.ready!,
-    inProgress: policy.sync?.statusLabels?.inProgress || DEFAULT_POLICY.sync!.statusLabels!.inProgress!,
+    inProgress:
+      policy.sync?.statusLabels?.inProgress || DEFAULT_POLICY.sync!.statusLabels!.inProgress!,
     inReview: policy.sync?.statusLabels?.inReview || DEFAULT_POLICY.sync!.statusLabels!.inReview!,
     testing: policy.sync?.statusLabels?.testing || DEFAULT_POLICY.sync!.statusLabels!.testing!,
     done: policy.sync?.statusLabels?.done || DEFAULT_POLICY.sync!.statusLabels!.done!
@@ -121,7 +125,9 @@ export function LabelSetupDialog({
           toast.error('Failed to apply labels', { description: res.error })
           return
         }
-        toast.success('Labels configured', { description: 'Patchwork will use these labels for status.' })
+        toast.success('Labels configured', {
+          description: 'Patchwork will use these labels for status.'
+        })
         onApplied?.()
         onOpenChange(false)
       } catch (err) {
@@ -149,7 +155,8 @@ export function LabelSetupDialog({
         <DialogHeader className="shrink-0">
           <DialogTitle>Set up issue labels</DialogTitle>
           <DialogDescription>
-            Patchwork uses issue labels to map remote issues into Kanban columns and to push status changes back.
+            Patchwork uses issue labels to map remote issues into Kanban columns and to push status
+            changes back.
           </DialogDescription>
         </DialogHeader>
 
@@ -160,17 +167,24 @@ export function LabelSetupDialog({
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium">Create missing labels</div>
                   <div className="text-xs text-muted-foreground">
-                    If the chosen labels don&apos;t exist yet, Patchwork will create them in your repo.
+                    If the chosen labels don&apos;t exist yet, Patchwork will create them in your
+                    repo.
                   </div>
                 </div>
-                <Switch checked={createMissingLabels} onCheckedChange={setCreateMissingLabels} className="shrink-0" />
+                <Switch
+                  checked={createMissingLabels}
+                  onCheckedChange={setCreateMissingLabels}
+                  className="shrink-0"
+                />
               </div>
             </div>
 
             <div className="grid gap-2">
               <div className="flex items-center justify-between gap-2">
                 <div className="text-sm font-medium">Existing labels</div>
-                <div className="text-xs text-muted-foreground">{isLoading ? 'Loading…' : `${labels.length} found`}</div>
+                <div className="text-xs text-muted-foreground">
+                  {isLoading ? 'Loading…' : `${labels.length} found`}
+                </div>
               </div>
               <div className="max-h-20 overflow-auto rounded-md border p-2">
                 <div className="flex flex-wrap gap-2">
@@ -188,10 +202,23 @@ export function LabelSetupDialog({
             </div>
 
             <div className="flex flex-wrap gap-2">
-              <Button type="button" variant="outline" size="sm" onClick={() => setMapping(readInitialMapping({ ...project, policy_json: JSON.stringify(DEFAULT_POLICY) }))}>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  setMapping(
+                    readInitialMapping({ ...project, policy_json: JSON.stringify(DEFAULT_POLICY) })
+                  )
+                }
+              >
                 Use Patchwork defaults
               </Button>
-              <Button type="button" size="sm" onClick={() => apply({ forceDefaults: true, forceCreateMissing: true })}>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => apply({ forceDefaults: true, forceCreateMissing: true })}
+              >
                 Create defaults and apply
               </Button>
             </div>
@@ -200,10 +227,14 @@ export function LabelSetupDialog({
               <div className="text-sm font-medium">Label mapping</div>
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="grid gap-2">
-                  <label className="text-xs font-medium text-muted-foreground">Ready eligibility label</label>
+                  <label className="text-xs font-medium text-muted-foreground">
+                    Ready eligibility label
+                  </label>
                   <Input
                     value={readyLabel}
-                    onChange={(e) => setMapping((prev) => ({ ...prev, readyLabel: e.target.value }))}
+                    onChange={(e) =>
+                      setMapping((prev) => ({ ...prev, readyLabel: e.target.value }))
+                    }
                     list="repo-label-options"
                     placeholder="ready"
                   />
@@ -231,7 +262,9 @@ export function LabelSetupDialog({
 
                   return (
                     <div key={col.id} className="grid gap-2">
-                      <label className="text-xs font-medium text-muted-foreground">{col.label} label</label>
+                      <label className="text-xs font-medium text-muted-foreground">
+                        {col.label} label
+                      </label>
                       <Input
                         value={value}
                         onChange={(e) =>

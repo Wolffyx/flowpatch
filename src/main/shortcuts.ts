@@ -73,7 +73,9 @@ export function setShortcuts(patch: ShortcutsPatch): void {
   }
 }
 
-function findDuplicates(items: Array<{ id: string; accelerator: string }>): Array<{ accelerator: string; ids: string[] }> {
+function findDuplicates(
+  items: Array<{ id: string; accelerator: string }>
+): Array<{ accelerator: string; ids: string[] }> {
   const map = new Map<string, string[]>()
   for (const item of items) {
     const key = item.accelerator.trim()

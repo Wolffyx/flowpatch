@@ -115,7 +115,11 @@ export class GithubAdapter {
         ],
         { cwd: this.repoPath }
       )
-      const labels = JSON.parse(stdout) as Array<{ name: string; color?: string; description?: string }>
+      const labels = JSON.parse(stdout) as Array<{
+        name: string
+        color?: string
+        description?: string
+      }>
       return labels.map((l) => ({ name: l.name, color: l.color, description: l.description }))
     } catch (error) {
       logAction('github:listRepoLabels:error', { error: String(error) })
@@ -186,9 +190,7 @@ export class GithubAdapter {
       // Use the first project, or if configured, find by ID
       const configuredProjectId = this.policy.sync?.githubProjectsV2?.projectId
       if (configuredProjectId) {
-        const matchingProject = projects.find(
-          (p: { id: string }) => p.id === configuredProjectId
-        )
+        const matchingProject = projects.find((p: { id: string }) => p.id === configuredProjectId)
         if (matchingProject) {
           logAction('findRepositoryProject: Using configured project', {
             id: matchingProject.id,
@@ -291,11 +293,7 @@ export class GithubAdapter {
         const args = ['api', 'graphql', '-f', `query=${query}`, '-F', `projectId=${projectId}`]
         if (cursor) args.push('-F', `cursor=${cursor}`)
 
-        const { stdout } = await execFileAsync(
-          'gh',
-          args,
-          { cwd: this.repoPath }
-        )
+        const { stdout } = await execFileAsync('gh', args, { cwd: this.repoPath })
 
         const response: ProjectV2Response = JSON.parse(stdout)
 
@@ -723,7 +721,11 @@ export class GithubAdapter {
     return drafts
   }
 
-  async updateLabels(issueNumber: number, labelsToAdd: string[], labelsToRemove: string[]): Promise<boolean> {
+  async updateLabels(
+    issueNumber: number,
+    labelsToAdd: string[],
+    labelsToRemove: string[]
+  ): Promise<boolean> {
     try {
       // Fetch existing labels from the repository to match against
       const repoLabels = await this.fetchRepoLabels()
@@ -752,13 +754,19 @@ export class GithubAdapter {
             )
             continue
           } catch (error) {
-            logAction('updateLabels: Direct add failed, attempting to create label', { label, error: String(error) })
+            logAction('updateLabels: Direct add failed, attempting to create label', {
+              label,
+              error: String(error)
+            })
           }
 
           const created = await this.createRepoLabel({ name: label })
           if (!created.created) {
             failedAdds.push(label)
-            logAction('updateLabels: Failed to create missing label', { label, error: created.error })
+            logAction('updateLabels: Failed to create missing label', {
+              label,
+              error: created.error
+            })
             continue
           }
 
@@ -782,7 +790,11 @@ export class GithubAdapter {
           )
         } catch (error) {
           failedAdds.push(label)
-          logAction('updateLabels: Failed to add label', { label, matchedLabel, error: String(error) })
+          logAction('updateLabels: Failed to add label', {
+            label,
+            matchedLabel,
+            error: String(error)
+          })
         }
       }
       for (const label of labelsToRemove) {
@@ -792,7 +804,15 @@ export class GithubAdapter {
           try {
             await execFileAsync(
               'gh',
-              ['issue', 'edit', String(issueNumber), '--repo', `${this.owner}/${this.repo}`, '--remove-label', matchedLabel],
+              [
+                'issue',
+                'edit',
+                String(issueNumber),
+                '--repo',
+                `${this.owner}/${this.repo}`,
+                '--remove-label',
+                matchedLabel
+              ],
               { cwd: this.repoPath }
             )
           } catch {
@@ -945,12 +965,15 @@ export class GithubAdapter {
         }
       `
 
-      const updateRes = await this.ghApiGraphql<{ errors?: Array<{ message: string }> }>(updateMutation, {
-        projectId,
-        itemId,
-        fieldId: statusField.id,
-        optionId: statusOption.id
-      })
+      const updateRes = await this.ghApiGraphql<{ errors?: Array<{ message: string }> }>(
+        updateMutation,
+        {
+          projectId,
+          itemId,
+          fieldId: statusField.id,
+          optionId: statusOption.id
+        }
+      )
 
       if (updateRes.errors?.length) {
         console.error('GraphQL errors updating project status:', updateRes.errors)
@@ -1024,12 +1047,15 @@ export class GithubAdapter {
         }
       `
 
-      const updateRes = await this.ghApiGraphql<{ errors?: Array<{ message: string }> }>(updateMutation, {
-        projectId,
-        itemId,
-        fieldId: statusField.id,
-        optionId: statusOption.id
-      })
+      const updateRes = await this.ghApiGraphql<{ errors?: Array<{ message: string }> }>(
+        updateMutation,
+        {
+          projectId,
+          itemId,
+          fieldId: statusField.id,
+          optionId: statusOption.id
+        }
+      )
 
       if (updateRes.errors?.length) {
         console.error('GraphQL errors updating project draft status:', updateRes.errors)
@@ -1122,7 +1148,10 @@ export class GithubAdapter {
     return null
   }
 
-  private async findProjectV2ItemIdByIssueNumber(projectId: string, issueNumber: number): Promise<string | null> {
+  private async findProjectV2ItemIdByIssueNumber(
+    projectId: string,
+    issueNumber: number
+  ): Promise<string | null> {
     const query = `
       query($projectId: ID!, $after: String) {
         node(id: $projectId) {
@@ -1173,7 +1202,10 @@ export class GithubAdapter {
     return null
   }
 
-  private async findProjectV2ItemIdByDraftNodeId(projectId: string, draftNodeId: string): Promise<string | null> {
+  private async findProjectV2ItemIdByDraftNodeId(
+    projectId: string,
+    draftNodeId: string
+  ): Promise<string | null> {
     const query = `
       query($projectId: ID!, $after: String) {
         node(id: $projectId) {
@@ -1231,9 +1263,7 @@ export class GithubAdapter {
    */
   private getProjectStatusValue(
     status: CardStatus,
-    statusValues: NonNullable<
-      NonNullable<PolicyConfig['sync']>['githubProjectsV2']
-    >['statusValues']
+    statusValues: NonNullable<NonNullable<PolicyConfig['sync']>['githubProjectsV2']>['statusValues']
   ): string {
     const defaults: Record<CardStatus, string> = {
       draft: 'Backlog',
@@ -1307,7 +1337,15 @@ export class GithubAdapter {
     try {
       await execFileAsync(
         'gh',
-        ['issue', 'comment', String(issueNumber), '--repo', `${this.owner}/${this.repo}`, '--body', comment],
+        [
+          'issue',
+          'comment',
+          String(issueNumber),
+          '--repo',
+          `${this.owner}/${this.repo}`,
+          '--body',
+          comment
+        ],
         { cwd: this.repoPath }
       )
       return true
@@ -1347,14 +1385,7 @@ export class GithubAdapter {
     labels?: string[]
   ): Promise<{ number: number; url: string; card: Card } | null> {
     try {
-      const args = [
-        'issue',
-        'create',
-        '--repo',
-        `${this.owner}/${this.repo}`,
-        '--title',
-        title
-      ]
+      const args = ['issue', 'create', '--repo', `${this.owner}/${this.repo}`, '--title', title]
 
       if (body) {
         args.push('--body', body)
@@ -1403,9 +1434,7 @@ export class GithubAdapter {
 
     // Priority: Projects V2 status > label-based status
     const projectDerivedStatus = this.deriveStatusFromProjectField(projectStatus)
-    const status = isClosed
-      ? 'done'
-      : projectDerivedStatus ?? this.deriveStatus(labels, isClosed)
+    const status = isClosed ? 'done' : (projectDerivedStatus ?? this.deriveStatus(labels, isClosed))
 
     return {
       id: cryptoRandomId(),
@@ -1486,9 +1515,7 @@ export class GithubAdapter {
 
     const normalized = labels.map(normalize)
     const matches = (candidates: (string | undefined)[]): boolean =>
-      candidates
-        .filter(Boolean)
-        .some((c) => normalized.includes(normalize(String(c))))
+      candidates.filter(Boolean).some((c) => normalized.includes(normalize(String(c))))
     logAction('deriveStatus', matches)
 
     if (matches([statusLabels.done, 'done', 'indone'])) return 'done'

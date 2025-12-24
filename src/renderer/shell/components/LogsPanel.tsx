@@ -29,12 +29,7 @@ interface LogsPanelProps {
   onClear: () => void
 }
 
-export function LogsPanel({
-  logs,
-  onClose,
-  onExport,
-  onClear
-}: LogsPanelProps): React.JSX.Element {
+export function LogsPanel({ logs, onClose, onExport, onClear }: LogsPanelProps): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
   const autoScrollRef = useRef(true)
 
@@ -109,15 +104,9 @@ export function LogsPanel({
           <div className="space-y-0.5">
             {logs.map((entry) => (
               <div key={entry.id} className="flex gap-2">
-                <span className="text-muted-foreground shrink-0">
-                  {formatTimestamp(entry.ts)}
-                </span>
-                <span className="text-muted-foreground shrink-0">
-                  [{entry.source}]
-                </span>
-                <span className={cn('break-all', getStreamColor(entry.stream))}>
-                  {entry.line}
-                </span>
+                <span className="text-muted-foreground shrink-0">{formatTimestamp(entry.ts)}</span>
+                <span className="text-muted-foreground shrink-0">[{entry.source}]</span>
+                <span className={cn('break-all', getStreamColor(entry.stream))}>{entry.line}</span>
               </div>
             ))}
           </div>

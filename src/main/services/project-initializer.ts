@@ -17,9 +17,7 @@ export interface WorktreeInitResult {
  * This is called when a project is opened to ensure it has proper
  * worktree and pool configuration for multi-worker support.
  */
-export async function initializeProjectWorktree(
-  projectId: string
-): Promise<WorktreeInitResult> {
+export async function initializeProjectWorktree(projectId: string): Promise<WorktreeInitResult> {
   const project = getProject(projectId)
   if (!project) {
     return {
