@@ -8,6 +8,7 @@ out
 .idea
 .automaker
 build
+.tmp
 
 # Patchwork IDE-like workspace state (generated)
 .patchwork/state/
