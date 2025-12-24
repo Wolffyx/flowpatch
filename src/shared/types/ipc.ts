@@ -150,7 +150,7 @@ export interface CreateCardPayload {
   projectId: string
   title: string
   body?: string
-  createType: 'local' | 'github_issue'
+  createType: 'local' | 'repo_issue' | 'github_issue' | 'gitlab_issue'
 }
 
 export interface CreateCardResult {

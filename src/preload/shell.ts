@@ -32,6 +32,7 @@ export interface ShellAPI {
   openProject: (projectRoot: string) => Promise<OpenProjectResult>
   closeProject: () => Promise<void>
   getProjects: () => Promise<Project[]>
+  deleteProject: (projectId: string) => Promise<{ deleted: boolean }>
   getCurrentProject: () => Promise<OpenProjectSummary | null>
   selectDirectory: () => Promise<SelectDirectoryResult>
 
@@ -231,6 +232,10 @@ const shellAPI: ShellAPI = {
     return ipcRenderer.invoke('shell:getProjects')
   },
 
+  deleteProject: (projectId: string) => {
+    return ipcRenderer.invoke('shell:deleteProject', { projectId })
+  },
+
   getCurrentProject: () => {
     return ipcRenderer.invoke('shell:getCurrentProject')
   },
@@ -417,6 +422,7 @@ const allowedInvokeChannels = [
   'resetLabelWizard',
   'resetGithubProjectPrompt',
   'unlinkProject',
+  'selectDirectory',
   'createRepo'
 ]
 

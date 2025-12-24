@@ -9,10 +9,12 @@
  */
 
 import { ipcMain, BrowserWindow } from 'electron'
+import { existsSync } from 'fs'
 import {
   listProjects,
   getProject,
   upsertProject,
+  deleteProject,
   listRecentJobs,
   createJob,
   updateJobState
@@ -355,7 +357,28 @@ export function registerShellHandlers(mainWindow: BrowserWindow): void {
   })
 
   ipcMain.handle('shell:getProjects', () => {
-    return listProjects()
+    return listProjects().map((p) => ({
+      ...p,
+      local_path_exists: existsSync(p.local_path)
+    }))
+  })
+
+  ipcMain.handle('shell:deleteProject', async (_event, { projectId }: { projectId: string }) => {
+    logAction('shell:deleteProject', { projectId })
+
+    const tabsToClose = getAllTabs().filter((t) => t.projectId === projectId)
+    for (const tab of tabsToClose) {
+      await closeTab(tab.id)
+    }
+
+    const deleted = deleteProject(projectId)
+    if (currentProjectId === projectId) currentProjectId = null
+
+    const active = getActiveTabId()
+    const tab = active ? getAllTabs().find((t) => t.id === active) : null
+    setActiveProject(tab?.projectId ?? null)
+
+    return { deleted }
   })
 
   ipcMain.handle('shell:getCurrentProject', () => {

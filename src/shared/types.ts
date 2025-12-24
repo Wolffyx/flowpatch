@@ -173,6 +173,7 @@ export interface Project {
   id: string
   name: string
   local_path: string
+  local_path_exists?: boolean
   selected_remote_name: string | null
   remote_repo_key: string | null
   provider_hint: 'auto' | 'github' | 'gitlab'

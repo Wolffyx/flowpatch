@@ -3,6 +3,7 @@ import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { Plus, Sparkles } from 'lucide-react'
 import { Button } from './ui/button'
 import { ScrollArea } from './ui/scroll-area'
+import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
 import { KanbanCard } from './KanbanCard'
 import { cn } from '../lib/utils'
 import type { Card, CardLink, CardStatus } from '../../../shared/types'
@@ -55,15 +56,21 @@ export function KanbanColumn({
         {id === 'draft' && (
           <div className="flex items-center gap-1">
             {onGenerateCards && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6"
-                onClick={onGenerateCards}
-                title="Generate cards with AI"
-              >
-                <Sparkles className="h-4 w-4" />
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6"
+                    onClick={onGenerateCards}
+                  >
+                    <Sparkles className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Generate cards with AI</p>
+                </TooltipContent>
+              </Tooltip>
             )}
             {onAddCard && (
               <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onAddCard}>

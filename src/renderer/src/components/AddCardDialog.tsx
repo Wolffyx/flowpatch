@@ -10,12 +10,12 @@ import {
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Textarea } from './ui/textarea'
-import { FileText, Github, Loader2, Check, Sparkles } from 'lucide-react'
+import { FileText, Loader2, Check, Sparkles, Server } from 'lucide-react'
 import { cn } from '../lib/utils'
 import type { Provider } from '../../../shared/types'
 import { AIDescriptionDialog } from './AIDescriptionDialog'
 
-export type CreateCardType = 'local' | 'github_issue'
+export type CreateCardType = 'local' | 'repo_issue'
 
 interface AddCardDialogProps {
   open: boolean
@@ -36,7 +36,11 @@ export function AddCardDialog({
 }: AddCardDialogProps): React.JSX.Element {
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
-  const [createType, setCreateType] = useState<CreateCardType>('local')
+  const [createType, setCreateType] = useState<CreateCardType>(() => {
+    return hasRemote && (remoteProvider === 'github' || remoteProvider === 'gitlab')
+      ? 'repo_issue'
+      : 'local'
+  })
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [aiOpen, setAiOpen] = useState(false)
@@ -61,7 +65,11 @@ export function AddCardDialog({
         // Reset form on success
         setTitle('')
         setBody('')
-        setCreateType('local')
+        setCreateType(
+          hasRemote && (remoteProvider === 'github' || remoteProvider === 'gitlab')
+            ? 'repo_issue'
+            : 'local'
+        )
         onOpenChange(false)
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to create card')
@@ -79,17 +87,21 @@ export function AddCardDialog({
           // Reset form when closing
           setTitle('')
           setBody('')
-          setCreateType('local')
+          setCreateType(
+            hasRemote && (remoteProvider === 'github' || remoteProvider === 'gitlab')
+              ? 'repo_issue'
+              : 'local'
+          )
           setError(null)
           setAiOpen(false)
         }
         onOpenChange(newOpen)
       }
     },
-    [isSubmitting, onOpenChange]
+    [hasRemote, isSubmitting, onOpenChange, remoteProvider]
   )
 
-  const canCreateRemote = hasRemote && remoteProvider === 'github'
+  const canCreateRepoIssue = hasRemote && (remoteProvider === 'github' || remoteProvider === 'gitlab')
   const aiButtonTitle = !title.trim()
     ? 'Add a title first'
     : !projectId
@@ -188,13 +200,13 @@ export function AddCardDialog({
                 {/* GitHub Issue Option */}
                 <button
                   type="button"
-                  onClick={() => canCreateRemote && setCreateType('github_issue')}
-                  disabled={isSubmitting || !canCreateRemote}
+                  onClick={() => canCreateRepoIssue && setCreateType('repo_issue')}
+                  disabled={isSubmitting || !canCreateRepoIssue}
                   className={cn(
                     'flex items-center gap-3 rounded-lg border p-3 text-left transition-colors',
-                    createType === 'github_issue'
+                    createType === 'repo_issue'
                       ? 'border-primary bg-primary/5'
-                      : canCreateRemote
+                      : canCreateRepoIssue
                         ? 'hover:bg-muted/50'
                         : 'opacity-50 cursor-not-allowed'
                   )}
@@ -202,22 +214,24 @@ export function AddCardDialog({
                   <div
                     className={cn(
                       'flex h-4 w-4 items-center justify-center rounded-full border',
-                      createType === 'github_issue'
+                      createType === 'repo_issue'
                         ? 'border-primary bg-primary text-primary-foreground'
                         : 'border-muted-foreground'
                     )}
                   >
-                    {createType === 'github_issue' && <Check className="h-3 w-3" />}
+                    {createType === 'repo_issue' && <Check className="h-3 w-3" />}
                   </div>
-                  <Github className="h-4 w-4 text-muted-foreground" />
+                  <Server className="h-4 w-4 text-muted-foreground" />
                   <div className="flex-1">
-                    <div className="font-medium">GitHub Issue</div>
+                    <div className="font-medium">Repo Issue</div>
                     <div className="text-xs text-muted-foreground">
-                      {canCreateRemote
-                        ? 'Create an issue on GitHub and sync it to your Kanban'
+                      {canCreateRepoIssue
+                        ? remoteProvider === 'github'
+                          ? 'Create an issue on GitHub and sync it to your Kanban'
+                          : 'Create an issue on GitLab and sync it to your Kanban'
                         : hasRemote
-                          ? 'Only GitHub remotes support issue creation'
-                          : 'Select a remote to enable GitHub issue creation'}
+                          ? 'Only GitHub/GitLab remotes support issue creation'
+                          : 'Select a remote to enable repo issue creation'}
                     </div>
                   </div>
                 </button>
@@ -247,10 +261,10 @@ export function AddCardDialog({
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   Creating...
                 </>
-              ) : createType === 'github_issue' ? (
+              ) : createType === 'repo_issue' ? (
                 <>
-                  <Github className="mr-2 h-4 w-4" />
-                  Create Issue
+                  <Server className="mr-2 h-4 w-4" />
+                  Create Repo Issue
                 </>
               ) : (
                 'Create Card'

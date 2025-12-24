@@ -111,6 +111,58 @@ export class GitlabAdapter {
     }
   }
 
+  async createIssue(
+    title: string,
+    description?: string
+  ): Promise<{ iid: number; url: string; card: Card } | null> {
+    const trimmedTitle = (title || '').trim()
+    if (!trimmedTitle) return null
+
+    const argsJson = ['issue', 'create', '--title', trimmedTitle, '-F', 'json']
+    if (description) {
+      argsJson.push('--description', description)
+    }
+
+    try {
+      const { stdout } = await execFileAsync('glab', argsJson, { cwd: this.repoPath })
+      const created = JSON.parse(stdout) as { iid?: number; web_url?: string }
+      const iid = created.iid
+      const url = (created.web_url || '').trim()
+      if (!iid || !url) return null
+
+      const card = await this.getIssue(iid)
+      if (!card) return null
+
+      return { iid, url, card }
+    } catch {
+      // Fallback: parse URL from non-JSON output
+    }
+
+    try {
+      const args = ['issue', 'create', '--title', trimmedTitle]
+      if (description) {
+        args.push('--description', description)
+      }
+
+      const { stdout } = await execFileAsync('glab', args, { cwd: this.repoPath })
+      const out = stdout.trim()
+      const urlMatch = out.match(/https?:\/\/\S+/)
+      const url = urlMatch ? urlMatch[0] : ''
+      const iidMatch = url.match(/\/issues\/(\d+)(?:\D|$)/)
+      if (!iidMatch) return null
+      const iid = parseInt(iidMatch[1], 10)
+      if (!iid || !url) return null
+
+      const card = await this.getIssue(iid)
+      if (!card) return null
+
+      return { iid, url, card }
+    } catch (error) {
+      console.error('Failed to create GitLab issue:', error)
+      return null
+    }
+  }
+
   async listMRs(): Promise<Card[]> {
     try {
       const { stdout } = await execFileAsync(

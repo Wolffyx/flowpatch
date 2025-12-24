@@ -33,7 +33,11 @@ export interface ProjectAPI {
   getCardLinks: () => Promise<CardLink[]>
   moveCard: (cardId: string, status: CardStatus) => Promise<void>
   ensureProjectRemote: (projectId: string) => Promise<{ project?: Project; error?: string }>
-  createCard: (data: { title: string; body?: string; createType: 'local' | 'github_issue' }) => Promise<Card>
+  createCard: (data: {
+    title: string
+    body?: string
+    createType: 'local' | 'repo_issue' | 'github_issue' | 'gitlab_issue'
+  }) => Promise<Card>
 
   // Sync
   sync: () => Promise<void>
@@ -216,7 +220,11 @@ const projectAPI: ProjectAPI = {
     return ipcRenderer.invoke('ensureProjectRemote', { projectId })
   },
 
-  createCard: async (data: { title: string; body?: string; createType: 'local' | 'github_issue' }) => {
+  createCard: async (data: {
+    title: string
+    body?: string
+    createType: 'local' | 'repo_issue' | 'github_issue' | 'gitlab_issue'
+  }) => {
     const projectId = lastProjectInfo?.projectId
     if (!projectId) throw new Error('No active project')
     const result = (await ipcRenderer.invoke('createCard', {

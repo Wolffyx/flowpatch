@@ -57,9 +57,12 @@ export interface AppStore {
   createCard: (data: {
     title: string
     body: string
-    createType: 'local' | 'github_issue'
+    createType: 'local' | 'repo_issue'
   }) => Promise<void>
-  createCardsBatch: (items: Array<{ title: string; body: string }>) => Promise<void>
+  createCardsBatch: (
+    items: Array<{ title: string; body: string }>,
+    createType: 'local' | 'repo_issue'
+  ) => Promise<void>
   syncProject: () => Promise<void>
   toggleWorker: (enabled: boolean) => Promise<void>
   setWorkerToolPreference: (toolPreference: 'auto' | 'claude' | 'codex') => Promise<void>

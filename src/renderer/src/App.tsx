@@ -103,6 +103,9 @@ function App(): React.JSX.Element {
         : null
     : null
 
+  const repoIssueProvider = remoteProvider === 'github' || remoteProvider === 'gitlab' ? remoteProvider : null
+  const canCreateRepoIssues = repoIssueProvider !== null
+
   // If a PR becomes "collapsed into" an issue (linked), ensure it doesn't remain selected.
   useEffect(() => {
     if (!selectedProject || !store.selectedCardId) return
@@ -398,6 +401,8 @@ function App(): React.JSX.Element {
         onOpenChange={setStarterCardsWizardOpen}
         projectId={selectedProject?.project.id || store.selectedProjectId || ''}
         mode={starterCardsWizardMode}
+        canCreateRepoIssues={canCreateRepoIssues}
+        repoIssueProvider={repoIssueProvider}
         onCreateCards={store.createCardsBatch}
       />
 

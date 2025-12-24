@@ -27,9 +27,12 @@ export interface UseCardsResult {
   createCard: (data: {
     title: string
     body: string
-    createType: 'local' | 'github_issue'
+    createType: 'local' | 'repo_issue'
   }) => Promise<void>
-  createCardsBatch: (items: Array<{ title: string; body: string }>) => Promise<void>
+  createCardsBatch: (
+    items: Array<{ title: string; body: string }>,
+    createType: 'local' | 'repo_issue'
+  ) => Promise<void>
 
   // Getters
   getSelectedCard: () => Card | null
@@ -82,7 +85,7 @@ export function useCards(options: UseCardsOptions): UseCardsResult {
   )
 
   const createCard = useCallback(
-    async (data: { title: string; body: string; createType: 'local' | 'github_issue' }) => {
+    async (data: { title: string; body: string; createType: 'local' | 'repo_issue' }) => {
       if (!selectedProjectId) {
         throw new Error('No project selected')
       }
@@ -101,7 +104,7 @@ export function useCards(options: UseCardsOptions): UseCardsResult {
   )
 
   const createCardsBatch = useCallback(
-    async (items: Array<{ title: string; body: string }>) => {
+    async (items: Array<{ title: string; body: string }>, createType: 'local' | 'repo_issue') => {
       if (!selectedProjectId) {
         throw new Error('No project selected')
       }
@@ -110,7 +113,7 @@ export function useCards(options: UseCardsOptions): UseCardsResult {
           projectId: selectedProjectId,
           title: item.title,
           body: item.body || undefined,
-          createType: 'local'
+          createType
         })
         if (result?.error) {
           throw new Error(result.error)

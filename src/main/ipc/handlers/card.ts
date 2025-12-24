@@ -19,6 +19,7 @@ import {
 } from '../../db'
 import { SyncEngine } from '../../sync/engine'
 import { GithubAdapter } from '../../adapters/github'
+import { GitlabAdapter } from '../../adapters/gitlab'
 import {
   parsePolicyJson,
   getStatusLabelFromPolicy,
@@ -51,7 +52,7 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
         projectId: string
         title: string
         body?: string
-        createType: 'local' | 'github_issue'
+        createType: 'local' | 'repo_issue' | 'github_issue' | 'gitlab_issue'
       }
     ) => {
       logAction('createCard', payload)
@@ -76,8 +77,16 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
         return { card }
       }
 
-      if (payload.createType === 'github_issue') {
-        // Verify we have a GitHub remote
+      const createType =
+        payload.createType === 'repo_issue'
+          ? project.remote_repo_key?.startsWith('github:')
+            ? 'github_issue'
+            : project.remote_repo_key?.startsWith('gitlab:')
+              ? 'gitlab_issue'
+              : null
+          : payload.createType
+
+      if (createType === 'github_issue') {
         if (!project.remote_repo_key?.startsWith('github:')) {
           return { error: 'GitHub remote not configured for this project' }
         }
@@ -120,6 +129,45 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
         })
         notifyRenderer()
         return { card, issueNumber: result.number, url: result.url }
+      }
+
+      if (createType === 'gitlab_issue') {
+        if (!project.remote_repo_key?.startsWith('gitlab:')) {
+          return { error: 'GitLab remote not configured for this project' }
+        }
+
+        const policy = parsePolicyJson(project.policy_json)
+        const adapter = new GitlabAdapter(project.local_path, project.remote_repo_key, policy)
+
+        const authResult = await adapter.checkAuth()
+        if (!authResult.authenticated) {
+          return { error: `GitLab authentication failed: ${authResult.error || 'Not logged in'}` }
+        }
+
+        const result = await adapter.createIssue(payload.title, payload.body || undefined)
+        if (!result) {
+          return { error: 'Failed to create GitLab issue' }
+        }
+
+        const card = upsertCard({
+          ...result.card,
+          project_id: payload.projectId
+        })
+
+        createEvent(payload.projectId, 'card_created', card.id, {
+          title: payload.title,
+          type: 'gitlab_issue',
+          issueNumber: result.iid,
+          url: result.url
+        })
+
+        logAction('createCard:gitlab:success', {
+          cardId: card.id,
+          issueNumber: result.iid,
+          url: result.url
+        })
+        notifyRenderer()
+        return { card, issueNumber: result.iid, url: result.url }
       }
 
       return { error: 'Invalid createType' }

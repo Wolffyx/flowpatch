@@ -5,6 +5,7 @@
  */
 
 import { useState, useCallback, useEffect } from 'react'
+import { toast } from 'sonner'
 import type {
   Project,
   Card,
@@ -144,6 +145,13 @@ export function useProjects(): UseProjectsResult {
           setError(result.error)
           return
         }
+
+        if (result.warnings?.length) {
+          toast.warning('Repository created with warnings', {
+            description: result.warnings.join('\n')
+          })
+        }
+
         if (result.needSelection && result.remotes) {
           setPendingRemoteSelection({
             project: result.project,

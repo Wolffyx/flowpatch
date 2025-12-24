@@ -371,6 +371,9 @@ export default function App(): React.JSX.Element {
         : null
     : null
 
+  const repoIssueProvider = remoteProvider === 'github' || remoteProvider === 'gitlab' ? remoteProvider : null
+  const canCreateRepoIssues = repoIssueProvider !== null
+
   const handleOpenAddCard = useCallback((): void => {
     void (async () => {
       if (project && !project.remote_repo_key) {
@@ -389,12 +392,15 @@ export default function App(): React.JSX.Element {
   }, [])
 
   const handleCreateCardsBatch = useCallback(
-    async (items: Array<{ title: string; body: string }>): Promise<void> => {
+    async (
+      items: Array<{ title: string; body: string }>,
+      createType: 'local' | 'repo_issue'
+    ): Promise<void> => {
       for (const item of items) {
         await window.projectAPI.createCard({
           title: item.title,
           body: item.body || undefined,
-          createType: 'local'
+          createType
         })
       }
       const [cardsData, linksData, jobsData] = await Promise.all([
@@ -622,6 +628,8 @@ export default function App(): React.JSX.Element {
         onOpenChange={setStarterCardsWizardOpen}
         projectId={projectInfo?.projectId ?? ''}
         mode={starterCardsWizardMode}
+        canCreateRepoIssues={canCreateRepoIssues}
+        repoIssueProvider={repoIssueProvider}
         onCreateCards={handleCreateCardsBatch}
       />
 

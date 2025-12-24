@@ -16,7 +16,7 @@ import { LogsPanel } from './components/LogsPanel'
 import { SettingsModal } from './components/SettingsModal'
 import { ActivityDialog } from './components/ActivityDialog'
 import { RepoStartDialog } from '../src/components/RepoStartDialog'
-import { Settings, Terminal, Minus, Square, X, Home, ListChecks } from 'lucide-react'
+import { Settings, Terminal, Minus, Square, X, Home, ListChecks, Trash2 } from 'lucide-react'
 import { Button } from '../src/components/ui/button'
 import { Badge } from '../src/components/ui/badge'
 import type { Project, CreateRepoPayload, Job } from '@shared/types'
@@ -46,6 +46,7 @@ declare global {
         needSelection?: boolean
       }>
       getProjects: () => Promise<Project[]>
+      deleteProject: (projectId: string) => Promise<{ deleted: boolean }>
       selectDirectory: () => Promise<{
         canceled?: boolean
         error?: string
@@ -262,6 +263,21 @@ export default function App(): React.JSX.Element {
       }
     } catch (error) {
       console.error('Failed to load tabs:', error)
+    }
+  }
+
+  const handleRemoveRecentProject = async (project: Project): Promise<void> => {
+    const confirmed = window.confirm(
+      `Remove "${project.name}" from recent projects?\n\nThis deletes Patchwork's local data for this project (cards, jobs, settings) but does not delete files on disk.`
+    )
+    if (!confirmed) return
+
+    try {
+      await window.shellAPI.deleteProject(project.id)
+      await loadProjects()
+      await loadTabs()
+    } catch (error) {
+      console.error('Failed to delete project:', error)
     }
   }
 
@@ -526,18 +542,45 @@ export default function App(): React.JSX.Element {
                 <h3 className="text-sm font-medium text-foreground mb-3">Recent Projects</h3>
                 <div className="space-y-2 max-h-64 overflow-auto">
                   {projects.map((project) => (
-                    <button
+                    <div
                       key={project.id}
-                      onClick={() => handleOpenExistingProject(project)}
-                      className="w-full flex items-center gap-3 p-3 rounded-lg border hover:bg-muted/50 transition-colors text-left"
+                      className="w-full flex items-center gap-3 p-3 rounded-lg border hover:bg-muted/50 transition-colors"
                     >
-                      <div className="flex-1 min-w-0">
+                      <button
+                        onClick={() => handleOpenExistingProject(project)}
+                        className="flex-1 min-w-0 text-left"
+                      >
                         <div className="font-medium text-foreground truncate">{project.name}</div>
-                        <div className="text-xs text-muted-foreground truncate">
+                        <div
+                          className={`text-xs truncate ${
+                            project.local_path_exists === false
+                              ? 'text-destructive'
+                              : 'text-muted-foreground'
+                          }`}
+                        >
                           {project.local_path}
                         </div>
-                      </div>
-                    </button>
+                      </button>
+
+                      {project.local_path_exists === false && (
+                        <div
+                          className="h-2 w-2 rounded-full bg-destructive shrink-0"
+                          title="Folder not found"
+                        />
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void handleRemoveRecentProject(project)
+                        }}
+                        className="p-1.5 rounded hover:bg-muted shrink-0"
+                        title="Remove from recent projects"
+                      >
+                        <Trash2 className="h-4 w-4 text-muted-foreground" />
+                      </button>
+                    </div>
                   ))}
                 </div>
               </div>

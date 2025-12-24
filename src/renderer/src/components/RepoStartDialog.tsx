@@ -101,6 +101,18 @@ export function RepoStartDialog({
     }
   }, [handleOpenChange, onOpenRepo])
 
+  const handleSelectRemoteProvider = useCallback((next: RemoteProviderChoice) => {
+    setRemoteProvider((prev) => {
+      if (prev === 'none' && next !== 'none') {
+        setPushToRemote(true)
+      }
+      if (next === 'none') {
+        setPushToRemote(false)
+      }
+      return next
+    })
+  }, [])
+
   const handleCreate = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault()
@@ -280,7 +292,7 @@ export function RepoStartDialog({
                       key={p}
                       type="button"
                       disabled={isSubmitting}
-                      onClick={() => setRemoteProvider(p)}
+                      onClick={() => handleSelectRemoteProvider(p)}
                       className={cn(
                         'flex items-center gap-3 rounded-lg border p-3 text-left transition-colors',
                         remoteProvider === p ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'

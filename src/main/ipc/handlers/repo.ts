@@ -5,6 +5,7 @@
 
 import { ipcMain, dialog } from 'electron'
 import { join } from 'path'
+import { userInfo } from 'os'
 import { existsSync, readFileSync, mkdirSync, readdirSync, writeFileSync } from 'fs'
 import { execFile } from 'child_process'
 import YAML from 'yaml'
@@ -79,6 +80,73 @@ async function getGitRemotes(cwd: string): Promise<RemoteInfo[]> {
   }
 
   return Array.from(remoteMap.values())
+}
+
+async function getGitConfigValue(cwd: string, key: string): Promise<string | null> {
+  try {
+    const out = await execGit(['config', '--get', key], cwd)
+    const value = out.trim()
+    return value.length > 0 ? value : null
+  } catch {
+    return null
+  }
+}
+
+function safeEmailLocalPart(input: string): string {
+  const normalized = input
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9._-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+/, '')
+    .replace(/-+$/, '')
+  return normalized || 'patchwork'
+}
+
+function getDefaultGitUserName(): string {
+  const envName =
+    process.env.GIT_AUTHOR_NAME ||
+    process.env.GIT_COMMITTER_NAME ||
+    process.env.USERNAME ||
+    process.env.USER
+
+  if (envName && envName.trim()) return envName.trim()
+
+  try {
+    const osName = userInfo().username
+    if (osName && osName.trim()) return osName.trim()
+  } catch {
+    // ignore
+  }
+
+  return 'Patchwork'
+}
+
+function getDefaultGitUserEmail(userName: string): string {
+  const envEmail = process.env.GIT_AUTHOR_EMAIL || process.env.GIT_COMMITTER_EMAIL
+  if (envEmail && envEmail.trim()) return envEmail.trim()
+
+  return `${safeEmailLocalPart(userName)}@localhost`
+}
+
+async function ensureGitIdentity(repoPath: string, warnings: string[]): Promise<void> {
+  const existingName = await getGitConfigValue(repoPath, 'user.name')
+  const existingEmail = await getGitConfigValue(repoPath, 'user.email')
+
+  if (existingName && existingEmail) return
+
+  const userName = existingName || getDefaultGitUserName()
+  const userEmail = existingEmail || getDefaultGitUserEmail(userName)
+
+  if (!existingName) {
+    await execGit(['config', 'user.name', userName], repoPath)
+  }
+  if (!existingEmail) {
+    await execGit(['config', 'user.email', userEmail], repoPath)
+  }
+
+  warnings.push('Git user.name/user.email were missing; configured them locally for this repo.')
 }
 
 function readPolicy(repoPath: string): string | null {
@@ -301,6 +369,7 @@ export function registerRepoHandlers(): void {
         let commitSucceeded = false
         if (initialCommit) {
           try {
+            await ensureGitIdentity(repoPath, warnings)
             await execGit(['add', '-A'], repoPath)
             await execGit(['commit', '-m', initialCommitMessage], repoPath)
             commitSucceeded = true
