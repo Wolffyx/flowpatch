@@ -35,8 +35,7 @@ export function RepoStartDialog({
   const [githubOwner, setGithubOwner] = useState('')
   const [gitlabHost, setGitlabHost] = useState('gitlab.com')
   const [gitlabNamespace, setGitlabNamespace] = useState('')
-  const [addReadme, setAddReadme] = useState(true)
-  const [initialCommit, setInitialCommit] = useState(true)
+  const [addReadme, setAddReadme] = useState(false)
   const [pushToRemote, setPushToRemote] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -59,8 +58,7 @@ export function RepoStartDialog({
     setGithubOwner('')
     setGitlabHost('gitlab.com')
     setGitlabNamespace('')
-    setAddReadme(true)
-    setInitialCommit(true)
+    setAddReadme(false)
     setPushToRemote(false)
     setIsSubmitting(false)
     setError(null)
@@ -125,7 +123,7 @@ export function RepoStartDialog({
         repoName: repoName.trim(),
         localParentPath: localParentPath.trim(),
         addReadme,
-        initialCommit,
+        initialCommit: true, // Always create initial commit with git init
         remoteProvider,
         remoteVisibility: remoteProvider === 'none' ? undefined : remoteVisibility,
         remoteName: remoteProvider === 'none' ? undefined : remoteName.trim() || 'origin',
@@ -154,7 +152,6 @@ export function RepoStartDialog({
       gitlabHost,
       gitlabNamespace,
       handleOpenChange,
-      initialCommit,
       localParentPath,
       onCreateRepo,
       pushToRemote,
@@ -427,38 +424,20 @@ export function RepoStartDialog({
                 </div>
               )}
 
-              <div className="grid gap-2 sm:grid-cols-2">
-                <div className="flex items-center justify-between gap-2 rounded-md border px-3 py-2">
-                  <div className="text-sm">
-                    <div className="font-medium">Add README</div>
-                    <div className="text-xs text-muted-foreground">Creates `README.md`</div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant={addReadme ? 'default' : 'outline'}
-                    size="sm"
-                    onClick={() => setAddReadme((v) => !v)}
-                    disabled={isSubmitting}
-                  >
-                    {addReadme ? 'On' : 'Off'}
-                  </Button>
+              <div className="flex items-center justify-between gap-2 rounded-md border px-3 py-2">
+                <div className="text-sm">
+                  <div className="font-medium">Add README</div>
+                  <div className="text-xs text-muted-foreground">Creates `README.md`</div>
                 </div>
-
-                <div className="flex items-center justify-between gap-2 rounded-md border px-3 py-2">
-                  <div className="text-sm">
-                    <div className="font-medium">Initial commit</div>
-                    <div className="text-xs text-muted-foreground">Commits current files</div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant={initialCommit ? 'default' : 'outline'}
-                    size="sm"
-                    onClick={() => setInitialCommit((v) => !v)}
-                    disabled={isSubmitting}
-                  >
-                    {initialCommit ? 'On' : 'Off'}
-                  </Button>
-                </div>
+                <Button
+                  type="button"
+                  variant={addReadme ? 'default' : 'outline'}
+                  size="sm"
+                  onClick={() => setAddReadme((v) => !v)}
+                  disabled={isSubmitting}
+                >
+                  {addReadme ? 'On' : 'Off'}
+                </Button>
               </div>
 
               {error && (

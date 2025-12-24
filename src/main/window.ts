@@ -15,6 +15,8 @@ let mainWindow: BrowserWindow | null = null
  * Create the main application window.
  */
 export function createWindow(): BrowserWindow {
+  const isMac = process.platform === 'darwin'
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -23,7 +25,8 @@ export function createWindow(): BrowserWindow {
     show: false,
     autoHideMenuBar: true,
     frame: false, // Custom title bar for tabs
-    titleBarStyle: 'hidden',
+    titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
+    ...(isMac ? { trafficLightPosition: { x: 12, y: 14 } } : {}),
     backgroundColor: '#0b0b0c',
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {

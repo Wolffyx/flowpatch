@@ -170,6 +170,7 @@ export default function App(): React.JSX.Element {
 
   // Show home when no tabs or explicitly requested
   const isHomeVisible = showHome || tabs.length === 0
+  const isMacOS = /Mac|Macintosh|MacIntel|MacPPC/.test(navigator.userAgent)
 
   // Load initial state
   useEffect(() => {
@@ -420,8 +421,13 @@ export default function App(): React.JSX.Element {
     <div className="flex h-screen flex-col bg-background text-foreground">
       {/* Title Bar with Tabs */}
       <div
-        className="flex items-center bg-muted/50 border-b shrink-0"
-        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+        className="flex items-center bg-muted/50 border-b shrink-0 h-11"
+        style={
+          {
+            WebkitAppRegion: 'drag',
+            paddingLeft: isMacOS ? 72 : 0
+          } as React.CSSProperties
+        }
       >
         {/* Home button */}
         <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
@@ -500,29 +506,31 @@ export default function App(): React.JSX.Element {
           </Button>
 
           {/* Window Controls */}
-          <div className="flex items-center ml-2 border-l pl-2">
-            <button
-              onClick={() => window.shellAPI.minimizeWindow()}
-              className="p-1.5 hover:bg-muted rounded transition-colors"
-              title="Minimize"
-            >
-              <Minus className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => window.shellAPI.maximizeWindow()}
-              className="p-1.5 hover:bg-muted rounded transition-colors"
-              title="Maximize"
-            >
-              <Square className="h-3.5 w-3.5" />
-            </button>
-            <button
-              onClick={() => window.shellAPI.closeWindow()}
-              className="p-1.5 hover:bg-destructive hover:text-destructive-foreground rounded transition-colors"
-              title="Close"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
+          {!isMacOS && (
+            <div className="flex items-center ml-2 border-l pl-2">
+              <button
+                onClick={() => window.shellAPI.minimizeWindow()}
+                className="p-1.5 hover:bg-muted rounded transition-colors"
+                title="Minimize"
+              >
+                <Minus className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => window.shellAPI.maximizeWindow()}
+                className="p-1.5 hover:bg-muted rounded transition-colors"
+                title="Maximize"
+              >
+                <Square className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={() => window.shellAPI.closeWindow()}
+                className="p-1.5 hover:bg-destructive hover:text-destructive-foreground rounded transition-colors"
+                title="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
