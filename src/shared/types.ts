@@ -404,6 +404,8 @@ export interface PolicyConfig {
     allowNetwork?: boolean
     rollbackOnCancel?: boolean
     branchPattern?: string
+    /** Primary branch the worker should pull from before starting (e.g., main or master). */
+    baseBranch?: string
     commitMessage?: string
     allowedCommands?: string[]
     lintCommand?: string

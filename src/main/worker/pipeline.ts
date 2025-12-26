@@ -201,7 +201,7 @@ export class WorkerPipeline {
       // ignore checkpoint failures
     }
   }
-
+F
   private log(message: string, meta?: { source?: string; stream?: 'stdout' | 'stderr' }): void {
     const ts = new Date().toISOString()
     const sourcePrefix = meta?.source
@@ -572,8 +572,7 @@ export class WorkerPipeline {
 
     try {
       const config = this.getWorktreeConfig()
-      const baseBranch =
-        this.policy.worker?.worktree?.baseBranch ?? this.worktreeManager.getDefaultBranch()
+      const baseBranch = await this.getBaseBranch()
       this.baseBranch = baseBranch
 
       // Generate branch name using worktree naming convention
@@ -809,7 +808,8 @@ export class WorkerPipeline {
       }
 
       const onChunk = (stream: 'stdout' | 'stderr', chunk: Buffer): void => {
-        buffers[stream] += chunk.toString('utf-8')
+        // Treat carriage returns as line breaks so progress updates are visible.
+        buffers[stream] += chunk.toString('utf-8').replace(/\r/g, '\n')
         const parts = buffers[stream].split(/\r\n|\n|\r/)
         buffers[stream] = parts.pop() ?? ''
         for (const part of parts) flushLine(part, stream)
@@ -946,7 +946,86 @@ export class WorkerPipeline {
     }
   }
 
+  private async pullBaseBranch(): Promise<void> {
+    if (!this.project) return
+
+    const repoPath = this.project.local_path
+    const baseBranch = await this.getBaseBranch()
+    this.baseBranch = baseBranch
+
+    // Refresh remote refs for the base branch before pulling.
+    try {
+      await execFileAsync('git', ['fetch', 'origin', baseBranch], {
+        cwd: repoPath,
+        env: this.gitEnv()
+      })
+    } catch (error) {
+      this.log(`Base branch fetch warning: ${error}`)
+    }
+
+    // Avoid switching branches if the main worktree has uncommitted changes.
+    try {
+      const { stdout } = await execFileAsync('git', ['status', '--porcelain'], {
+        cwd: repoPath,
+        env: this.gitEnv()
+      })
+      if (stdout.trim()) {
+        this.log('Skipping base branch pull: working tree not clean')
+        return
+      }
+    } catch (error) {
+      this.log(`Base branch status warning: ${error}`)
+      return
+    }
+
+    if (!this.startingBranch) {
+      this.startingBranch = await this.getCurrentBranch()
+    }
+
+    // Check out the base branch (create tracking branch if missing) and pull latest.
+    try {
+      await execFileAsync('git', ['checkout', baseBranch], {
+        cwd: repoPath,
+        env: this.gitEnv()
+      })
+    } catch {
+      try {
+        await execFileAsync(
+          'git',
+          ['checkout', '--track', '-b', baseBranch, `origin/${baseBranch}`],
+          { cwd: repoPath, env: this.gitEnv() }
+        )
+      } catch (error) {
+        this.log(`Base branch checkout warning: ${error}`)
+        return
+      }
+    }
+
+    try {
+      await execFileAsync('git', ['pull', '--rebase', 'origin', baseBranch], {
+        cwd: repoPath,
+        env: this.gitEnv()
+      })
+      this.log(`Updated base branch from origin/${baseBranch}`)
+    } catch (error) {
+      this.log(`Base branch pull warning: ${error}`)
+    } finally {
+      if (this.startingBranch && this.startingBranch !== baseBranch) {
+        try {
+          await execFileAsync('git', ['checkout', this.startingBranch], {
+            cwd: repoPath,
+            env: this.gitEnv()
+          })
+        } catch (error) {
+          this.log(`Return to starting branch warning: ${error}`)
+        }
+      }
+    }
+  }
+
   private async fetchLatest(): Promise<void> {
+    await this.pullBaseBranch()
+
     try {
       await execFileAsync('git', ['fetch', 'origin'], {
         cwd: this.project!.local_path,
@@ -1170,8 +1249,10 @@ export class WorkerPipeline {
   }
 
   private async getBaseBranch(): Promise<string> {
-    // Allow reusing the same config key as worktrees for consistency.
-    const configured = this.policy.worker?.worktree?.baseBranch
+    // Prefer explicit worker base branch, fallback to legacy worktree setting for compatibility.
+    const configured =
+      (this.policy.worker?.baseBranch || '').trim() ||
+      (this.policy.worker?.worktree?.baseBranch || '').trim()
     if (configured) return configured
 
     // Try to read default from origin/HEAD.
@@ -1646,11 +1727,13 @@ Closes #${this.card.remote_number_or_iid}
 _Automated by Patchwork_
 `.trim()
 
+    const baseBranch = this.baseBranch ?? (await this.getBaseBranch())
+
     if (this.adapter instanceof GithubAdapter) {
-      const result = await this.adapter.createPR(title, body, branchName)
+      const result = await this.adapter.createPR(title, body, branchName, baseBranch)
       return result ? { ...result, existing: false } : null
     } else if (this.adapter instanceof GitlabAdapter) {
-      const result = await this.adapter.createMR(title, body, branchName)
+      const result = await this.adapter.createMR(title, body, branchName, baseBranch)
       return result ? { number: result.iid, url: result.url, existing: false } : null
     }
 

@@ -81,6 +81,7 @@ export function SettingsModal({
   // Project-specific settings
   const [toolPreference, setToolPreference] = useState<WorkerToolPreference>('auto')
   const [rollbackOnCancel, setRollbackOnCancel] = useState(false)
+  const [baseBranch, setBaseBranch] = useState('')
   const [showPullRequestsSection, setShowPullRequestsSection] = useState(false)
 
   // API Keys
@@ -90,6 +91,7 @@ export function SettingsModal({
   const [showOpenaiKey, setShowOpenaiKey] = useState(false)
   const [savingAnthropicKey, setSavingAnthropicKey] = useState(false)
   const [savingOpenaiKey, setSavingOpenaiKey] = useState(false)
+  const [savingBaseBranch, setSavingBaseBranch] = useState(false)
 
   // Unlink confirmation
   const [showUnlinkConfirm, setShowUnlinkConfirm] = useState(false)
@@ -157,6 +159,7 @@ export function SettingsModal({
     if (!proj.policy_json) {
       setToolPreference('auto')
       setRollbackOnCancel(false)
+      setBaseBranch('')
       setShowPullRequestsSection(false)
       return
     }
@@ -169,10 +172,14 @@ export function SettingsModal({
         setToolPreference('auto')
       }
       setRollbackOnCancel(!!policy?.worker?.rollbackOnCancel)
+      const configuredBaseBranch =
+        (policy?.worker?.baseBranch || policy?.worker?.worktree?.baseBranch || '').trim()
+      setBaseBranch(configuredBaseBranch)
       setShowPullRequestsSection(!!policy?.ui?.showPullRequestsSection)
     } catch {
       setToolPreference('auto')
       setRollbackOnCancel(false)
+      setBaseBranch('')
       setShowPullRequestsSection(false)
     }
   }
@@ -266,6 +273,35 @@ export function SettingsModal({
     },
     [project, rollbackOnCancel]
   )
+
+  const handleBaseBranchSave = useCallback(async (): Promise<void> => {
+    if (!project) return
+    const value = baseBranch.trim()
+    setSavingBaseBranch(true)
+    try {
+      await window.electron.ipcRenderer.invoke('updateProjectPolicy', {
+        projectId: project.id,
+        policy: {
+          worker: {
+            baseBranch: value || undefined,
+            worktree: { baseBranch: value || undefined }
+          }
+        }
+      })
+      toast.success('Base branch updated', {
+        description: value
+          ? `Worker will pull ${value} before starting`
+          : 'Worker will auto-detect the main branch'
+      })
+    } catch (err) {
+      console.error('Failed to update base branch:', err)
+      toast.error('Failed to update base branch', {
+        description: err instanceof Error ? err.message : 'Unknown error'
+      })
+    } finally {
+      setSavingBaseBranch(false)
+    }
+  }, [project, baseBranch])
 
   const handleShowPRsSectionChange = useCallback(
     async (enabled: boolean): Promise<void> => {
@@ -504,6 +540,33 @@ export function SettingsModal({
                       checked={rollbackOnCancel}
                       onCheckedChange={handleRollbackOnCancelChange}
                     />
+                  </div>
+                </div>
+
+                <div className="grid gap-2">
+                  <h3 className="text-sm font-medium">Worker Base Branch</h3>
+                  <div className="flex items-start justify-between gap-4 rounded-lg border p-3">
+                    <div className="flex-1 space-y-2">
+                      <div className="font-medium text-sm">Pull latest before starting</div>
+                      <div className="text-xs text-muted-foreground">
+                        The worker will pull this branch before working on Ready items. Leave blank
+                        to auto-detect from the remote default.
+                      </div>
+                      <Input
+                        value={baseBranch}
+                        onChange={(e) => setBaseBranch(e.target.value)}
+                        placeholder="main or master"
+                        className="max-w-[240px]"
+                      />
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleBaseBranchSave}
+                      disabled={savingBaseBranch}
+                    >
+                      {savingBaseBranch ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
+                    </Button>
                   </div>
                 </div>
 

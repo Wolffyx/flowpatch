@@ -19,6 +19,16 @@ function parseJobResultLogs(job: Job | null): string[] {
   }
 }
 
+function parseJobResultMeta(job: Job | null): { phase?: string; plan?: string } {
+  if (!job?.result_json) return {}
+  try {
+    const parsed = JSON.parse(job.result_json) as { phase?: string; plan?: string }
+    return { phase: parsed.phase, plan: parsed.plan }
+  } catch {
+    return {}
+  }
+}
+
 type LogStream = 'stdout' | 'stderr'
 type ParsedLogLine = {
   raw: string
@@ -83,6 +93,7 @@ export function WorkerLogDialog({
 }: WorkerLogDialogProps): React.JSX.Element {
   const persistedLogs = useMemo(() => parseJobResultLogs(job), [job])
   const logs = liveLogs.length > 0 ? liveLogs : persistedLogs
+  const { phase: jobPhase } = useMemo(() => parseJobResultMeta(job), [job])
 
   const [query, setQuery] = useState('')
   const [onlyErrors, setOnlyErrors] = useState(false)
@@ -121,6 +132,8 @@ export function WorkerLogDialog({
   const title = card
     ? `Worker logs • ${card.remote_number_or_iid ? `#${card.remote_number_or_iid}` : card.id.slice(0, 6)}`
     : 'Worker logs'
+  const phaseLabel = jobPhase || job?.state || 'unknown'
+  const shortJobId = job?.id ? job.id.slice(0, 8) : null
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -164,6 +177,18 @@ export function WorkerLogDialog({
         </div>
 
         <div className="flex flex-col gap-2 min-w-0">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            {shortJobId && (
+              <Badge variant="outline" className="h-6 px-2 text-[11px]">
+                Job {shortJobId}
+              </Badge>
+            )}
+            <Badge variant={job?.state === 'failed' ? 'destructive' : 'secondary'}>
+              {phaseLabel}
+            </Badge>
+            <span>Live console output from AI tool</span>
+          </div>
+
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex-1 min-w-[220px]">
               <Input

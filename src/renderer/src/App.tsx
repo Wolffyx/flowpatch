@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
 import { KanbanBoard } from './components/KanbanBoard'
@@ -93,6 +93,16 @@ function App(): React.JSX.Element {
   const cardForLogs = jobForLogs?.card_id
     ? selectedProject?.cards.find((c) => c.id === jobForLogs.card_id) || null
     : null
+  const lastWorkerJobId = useRef<string | null>(null)
+
+  // Auto-open worker logs when a new worker job starts.
+  useEffect(() => {
+    const currentId = activeWorkerJob?.id ?? null
+    if (currentId && currentId !== lastWorkerJobId.current) {
+      setWorkerLogsOpen(true)
+    }
+    lastWorkerJobId.current = currentId
+  }, [activeWorkerJob])
 
   // Determine remote provider for the selected project
   const remoteProvider: Provider | null = selectedProject?.project.remote_repo_key
