@@ -4,6 +4,9 @@
  */
 
 import { ipcMain } from 'electron'
+import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { join } from 'path'
+import YAML from 'yaml'
 import {
   listProjects,
   listCards,
@@ -18,7 +21,8 @@ import {
 import { stopWorkerLoop } from '../../worker/loop'
 import { getTabByProjectId, closeTab } from '../../tabManager'
 import { parsePolicyJson, mergePolicyUpdate, logAction } from '@shared/utils'
-import type { PolicyConfig } from '@shared/types'
+import type { PolicyConfig, E2ETestConfig } from '@shared/types'
+import type { PatchworkConfig } from '../../services/patchwork-config'
 
 // ============================================================================
 // Handler Registration
@@ -130,6 +134,63 @@ export function registerProjectHandlers(notifyRenderer: () => void): void {
         action: 'ui_show_pull_requests_section',
         showPullRequestsSection: !!payload.showPullRequestsSection
       })
+
+      notifyRenderer()
+      return { success: true, project: getProject(payload.projectId) }
+    }
+  )
+
+  // Update E2E settings (saves to both database and .patchwork/config.yml)
+  ipcMain.handle(
+    'updateE2ESettings',
+    (_e, payload: { projectId: string; e2eConfig: Partial<E2ETestConfig> }) => {
+      logAction('updateE2ESettings', payload)
+
+      if (!payload?.projectId) return { error: 'Project ID required' }
+      if (!payload?.e2eConfig) return { error: 'E2E config required' }
+
+      const project = getProject(payload.projectId)
+      if (!project) return { error: 'Project not found' }
+
+      // 1. Update database (policy_json)
+      const currentPolicy = parsePolicyJson(project.policy_json)
+      const updatedPolicy = mergePolicyUpdate(currentPolicy, {
+        worker: { e2e: payload.e2eConfig as E2ETestConfig }
+      })
+      updateProjectPolicyJson(payload.projectId, JSON.stringify(updatedPolicy))
+
+      // 2. Update .patchwork/config.yml
+      const repoRoot = project.local_path
+      const configPath = join(repoRoot, '.patchwork', 'config.yml')
+
+      if (existsSync(configPath)) {
+        try {
+          const configContent = readFileSync(configPath, 'utf-8')
+          const config = YAML.parse(configContent) as PatchworkConfig
+
+          // Merge E2E settings
+          config.e2e = {
+            ...config.e2e,
+            enabled: payload.e2eConfig.enabled ?? config.e2e?.enabled,
+            framework: payload.e2eConfig.framework ?? config.e2e?.framework,
+            maxRetries: payload.e2eConfig.maxRetries ?? config.e2e?.maxRetries,
+            timeoutMinutes: payload.e2eConfig.timeoutMinutes ?? config.e2e?.timeoutMinutes,
+            createTestsIfMissing:
+              payload.e2eConfig.createTestsIfMissing ?? config.e2e?.createTestsIfMissing,
+            testCommand: payload.e2eConfig.testCommand ?? config.e2e?.testCommand,
+            testDirectories: payload.e2eConfig.testDirectories ?? config.e2e?.testDirectories
+          }
+
+          // Write back
+          writeFileSync(configPath, YAML.stringify(config), 'utf-8')
+          logAction('updateE2ESettings:configWritten', { configPath })
+        } catch (error) {
+          logAction('updateE2ESettings:configWriteError', {
+            error: error instanceof Error ? error.message : String(error)
+          })
+          // Don't fail - database update succeeded
+        }
+      }
 
       notifyRenderer()
       return { success: true, project: getProject(payload.projectId) }

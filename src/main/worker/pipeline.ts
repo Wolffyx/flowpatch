@@ -49,6 +49,7 @@ import { broadcastToRenderers } from '../ipc/broadcast'
 import { GitWorktreeManager, WorktreeConfig } from '../services/git-worktree-manager'
 import { buildContextBundle, buildPromptContext } from '../services/patchwork-context'
 import { writeCheckpoint, readCheckpoint, ensureRunDir } from '../services/patchwork-runs'
+import { runE2EPhase as runE2EPhaseImpl, type E2EResult } from './phases/e2e'
 
 const execFileAsync = promisify(execFile)
 
@@ -485,6 +486,21 @@ F
         // Still create PR but mark as WIP
       }
 
+      // Phase 7.5: Run E2E tests (if enabled)
+      let e2ePass = true
+      if (this.policy.worker?.e2e?.enabled) {
+        this.setPhase('e2e')
+        this.log('Running E2E tests')
+        const e2eResult = await this.runE2EPhase()
+        this.ensureNotCanceled()
+        this.ensureCardStatusAllowed(['in_progress'])
+        e2ePass = e2eResult.success
+        if (!e2ePass) {
+          this.log(`E2E tests failed after ${e2eResult.fixAttempts} fix attempts`)
+          // Still create PR but mark as WIP
+        }
+      }
+
       // Phase 8: Commit and push
       this.setPhase('push')
       this.log('Committing and pushing changes')
@@ -496,7 +512,7 @@ F
       // Phase 9: Create PR/MR
       this.setPhase('pr')
       this.log('Creating PR/MR')
-      const prResult = await this.createPR(branchName, plan, checksPass)
+      const prResult = await this.createPR(branchName, plan, checksPass && e2ePass)
       this.ensureNotCanceled()
       this.ensureCardStatusAllowed(['in_progress'])
       if (!prResult) {
@@ -1620,6 +1636,41 @@ Please implement the changes now.`
       this.log(`Check failed: ${error}`)
       return false
     }
+  }
+
+  private async runE2EPhase(): Promise<E2EResult> {
+    // Build pipeline context for E2E phase
+    const ctx = {
+      projectId: this.projectId,
+      cardId: this.cardId,
+      jobId: this.jobId,
+      workerId: this.workerId,
+      project: this.project,
+      card: this.card,
+      policy: this.policy,
+      adapter: this.adapter,
+      startingBranch: this.startingBranch,
+      baseBranch: this.baseBranch,
+      baseHeadSha: null,
+      workerBranch: this.workerBranch,
+      useWorktree: this.useWorktree,
+      worktreeManager: this.worktreeManager,
+      worktreeRecord: this.worktreeRecord,
+      worktreePath: this.worktreePath,
+      taskDecomposer: this.taskDecomposer,
+      subtasks: this.subtasks,
+      progress: this.progress,
+      phase: 'e2e',
+      logs: this.logs,
+      lastPlan: undefined,
+      lastPersistMs: 0
+    }
+
+    return runE2EPhaseImpl(
+      ctx,
+      (message, meta) => this.log(message, meta),
+      () => this.isCanceled()
+    )
   }
 
   private async runCommand(cmd: string): Promise<void> {

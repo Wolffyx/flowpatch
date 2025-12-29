@@ -77,6 +77,7 @@ export type EventType =
   | 'card_created'
   | 'card_linked'
   | 'task_decomposed'
+  | 'e2e_tests_run'
 
 // Subtask status for decomposed tasks
 export type SubtaskStatus = 'pending' | 'in_progress' | 'completed' | 'failed'
@@ -301,6 +302,28 @@ export interface AISessionConfig {
 }
 
 /**
+ * E2E testing configuration for worker pipeline
+ */
+export interface E2ETestConfig {
+  /** Enable E2E testing phase */
+  enabled: boolean
+  /** Test framework (currently only playwright supported) */
+  framework: 'playwright'
+  /** Maximum fix attempts when tests fail (1-10) */
+  maxRetries: number
+  /** Timeout in minutes for each E2E test run */
+  timeoutMinutes: number
+  /** E2E test command (e.g., "npx playwright test") */
+  testCommand?: string
+  /** Whether AI should create tests if none exist */
+  createTestsIfMissing: boolean
+  /** Directories to look for existing e2e tests */
+  testDirectories?: string[]
+  /** Tool priority for fixes: always try Claude first, fall back to Codex */
+  fixToolPriority: 'claude-first'
+}
+
+/**
  * Subtask entity for decomposed tasks
  */
 export interface Subtask {
@@ -432,6 +455,8 @@ export interface PolicyConfig {
     decomposition?: TaskDecompositionConfig
     /** AI session configuration for iterative processing */
     session?: AISessionConfig
+    /** E2E testing configuration */
+    e2e?: E2ETestConfig
   }
 }
 
@@ -674,6 +699,15 @@ export const DEFAULT_POLICY: PolicyConfig = {
       maxIterations: 5,
       progressCheckpoint: false,
       contextCarryover: 'summary'
+    },
+    e2e: {
+      enabled: false,
+      framework: 'playwright',
+      maxRetries: 3,
+      timeoutMinutes: 10,
+      createTestsIfMissing: true,
+      testDirectories: ['e2e', 'tests/e2e', 'test/e2e'],
+      fixToolPriority: 'claude-first'
     }
   }
 }

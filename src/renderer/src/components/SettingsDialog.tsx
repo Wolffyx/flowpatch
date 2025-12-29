@@ -79,6 +79,37 @@ function readShowPullRequestsSection(project: Project): boolean {
   }
 }
 
+interface E2ESettings {
+  enabled: boolean
+  maxRetries: number
+  timeoutMinutes: number
+  createTestsIfMissing: boolean
+  testCommand: string
+}
+
+function readE2ESettings(project: Project): E2ESettings {
+  const defaults: E2ESettings = {
+    enabled: false,
+    maxRetries: 3,
+    timeoutMinutes: 10,
+    createTestsIfMissing: true,
+    testCommand: ''
+  }
+  if (!project.policy_json) return defaults
+  try {
+    const policy = JSON.parse(project.policy_json) as PolicyConfig
+    return {
+      enabled: policy?.worker?.e2e?.enabled ?? defaults.enabled,
+      maxRetries: policy?.worker?.e2e?.maxRetries ?? defaults.maxRetries,
+      timeoutMinutes: policy?.worker?.e2e?.timeoutMinutes ?? defaults.timeoutMinutes,
+      createTestsIfMissing: policy?.worker?.e2e?.createTestsIfMissing ?? defaults.createTestsIfMissing,
+      testCommand: policy?.worker?.e2e?.testCommand ?? defaults.testCommand
+    }
+  } catch {
+    return defaults
+  }
+}
+
 const SETTINGS_SECTIONS: {
   id: SettingsSection
   label: string
@@ -129,6 +160,19 @@ export function SettingsDialog({
   const [showUnlinkConfirm, setShowUnlinkConfirm] = useState(false)
   const [isUnlinking, setIsUnlinking] = useState(false)
 
+  // E2E Testing state
+  const [e2eEnabled, setE2eEnabled] = useState(() => readE2ESettings(project).enabled)
+  const [e2eMaxRetries, setE2eMaxRetries] = useState(() => readE2ESettings(project).maxRetries)
+  const [e2eTimeoutMinutes, setE2eTimeoutMinutes] = useState(
+    () => readE2ESettings(project).timeoutMinutes
+  )
+  const [e2eCreateTestsIfMissing, setE2eCreateTestsIfMissing] = useState(
+    () => readE2ESettings(project).createTestsIfMissing
+  )
+  const [e2eTestCommand, setE2eTestCommand] = useState(
+    () => readE2ESettings(project).testCommand
+  )
+
   // Reset to appearance section only when dialog opens (not on every project change)
   useEffect(() => {
     if (open) {
@@ -143,6 +187,14 @@ export function SettingsDialog({
     setToolPreference(readToolPreference(project))
     setRollbackOnCancel(readRollbackOnCancel(project))
     setShowPullRequestsSection(readShowPullRequestsSection(project))
+
+    // Sync E2E settings
+    const e2e = readE2ESettings(project)
+    setE2eEnabled(e2e.enabled)
+    setE2eMaxRetries(e2e.maxRetries)
+    setE2eTimeoutMinutes(e2e.timeoutMinutes)
+    setE2eCreateTestsIfMissing(e2e.createTestsIfMissing)
+    setE2eTestCommand(e2e.testCommand)
 
     // Load API keys
     const loadApiKeys = async () => {
@@ -274,6 +326,79 @@ export function SettingsDialog({
     },
     [showPullRequestsSection, onSetShowPullRequestsSection]
   )
+
+  const updateE2ESetting = useCallback(
+    async (update: Partial<E2ESettings>) => {
+      try {
+        await window.electron.ipcRenderer.invoke('updateE2ESettings', {
+          projectId: project.id,
+          e2eConfig: update
+        })
+        toast.success('E2E settings updated')
+      } catch (err) {
+        toast.error('Failed to update E2E settings', {
+          description: err instanceof Error ? err.message : 'Unknown error'
+        })
+        // Reload settings on error
+        const e2e = readE2ESettings(project)
+        setE2eEnabled(e2e.enabled)
+        setE2eMaxRetries(e2e.maxRetries)
+        setE2eTimeoutMinutes(e2e.timeoutMinutes)
+        setE2eCreateTestsIfMissing(e2e.createTestsIfMissing)
+        setE2eTestCommand(e2e.testCommand)
+      }
+    },
+    [project]
+  )
+
+  const handleE2eEnabledChange = useCallback(
+    (enabled: boolean) => {
+      setE2eEnabled(enabled)
+      updateE2ESetting({ enabled })
+    },
+    [updateE2ESetting]
+  )
+
+  const handleE2eMaxRetriesChange = useCallback(
+    (value: string) => {
+      const num = parseInt(value, 10)
+      if (num >= 1 && num <= 10) {
+        setE2eMaxRetries(num)
+        updateE2ESetting({ maxRetries: num })
+      }
+    },
+    [updateE2ESetting]
+  )
+
+  const handleE2eTimeoutChange = useCallback(
+    (value: string) => {
+      const num = parseInt(value, 10)
+      if (num >= 1 && num <= 60) {
+        setE2eTimeoutMinutes(num)
+        updateE2ESetting({ timeoutMinutes: num })
+      }
+    },
+    [updateE2ESetting]
+  )
+
+  const handleE2eCreateTestsChange = useCallback(
+    (enabled: boolean) => {
+      setE2eCreateTestsIfMissing(enabled)
+      updateE2ESetting({ createTestsIfMissing: enabled })
+    },
+    [updateE2ESetting]
+  )
+
+  const handleE2eTestCommandChange = useCallback(
+    (value: string) => {
+      setE2eTestCommand(value)
+    },
+    []
+  )
+
+  const handleE2eTestCommandBlur = useCallback(() => {
+    updateE2ESetting({ testCommand: e2eTestCommand || undefined })
+  }, [e2eTestCommand, updateE2ESetting])
 
   const handleSaveAnthropicKey = useCallback(async () => {
     setSavingAnthropicKey(true)
@@ -507,6 +632,83 @@ export function SettingsDialog({
                     Reopen
                   </Button>
                 </div>
+              )}
+            </div>
+
+            <div className="grid gap-2">
+              <h3 className="text-sm font-medium">E2E Testing</h3>
+              <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                <div className="flex-1">
+                  <div className="font-medium text-sm">Enable E2E Testing</div>
+                  <div className="text-xs text-muted-foreground">
+                    AI creates and runs Playwright tests before pushing code
+                  </div>
+                </div>
+                <Switch checked={e2eEnabled} onCheckedChange={handleE2eEnabledChange} />
+              </div>
+
+              {e2eEnabled && (
+                <>
+                  <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                    <div className="flex-1">
+                      <div className="font-medium text-sm">Max Fix Attempts</div>
+                      <div className="text-xs text-muted-foreground">
+                        How many times AI attempts to fix failing tests (1-10)
+                      </div>
+                    </div>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={10}
+                      className="w-20"
+                      value={e2eMaxRetries}
+                      onChange={(e) => handleE2eMaxRetriesChange(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                    <div className="flex-1">
+                      <div className="font-medium text-sm">Timeout (minutes)</div>
+                      <div className="text-xs text-muted-foreground">
+                        Maximum time for each E2E test run (1-60)
+                      </div>
+                    </div>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={60}
+                      className="w-20"
+                      value={e2eTimeoutMinutes}
+                      onChange={(e) => handleE2eTimeoutChange(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                    <div className="flex-1">
+                      <div className="font-medium text-sm">Create Tests if Missing</div>
+                      <div className="text-xs text-muted-foreground">
+                        AI will create E2E tests if none exist in the project
+                      </div>
+                    </div>
+                    <Switch
+                      checked={e2eCreateTestsIfMissing}
+                      onCheckedChange={handleE2eCreateTestsChange}
+                    />
+                  </div>
+
+                  <div className="rounded-lg border p-3">
+                    <div className="font-medium text-sm mb-1">Test Command</div>
+                    <div className="text-xs text-muted-foreground mb-2">
+                      Command to run E2E tests (leave empty for default: npx playwright test)
+                    </div>
+                    <Input
+                      placeholder="npx playwright test"
+                      value={e2eTestCommand}
+                      onChange={(e) => handleE2eTestCommandChange(e.target.value)}
+                      onBlur={handleE2eTestCommandBlur}
+                    />
+                  </div>
+                </>
               )}
             </div>
           </div>

@@ -13,6 +13,10 @@ export { checkCommand, isClaudeRetryableLimitError, buildAIPrompt, runAI } from 
 // Verification checks
 export { runChecks } from './checks'
 
+// E2E testing
+export { runE2EPhase, checkPlaywrightInstalled, detectExistingE2ETests } from './e2e'
+export type { E2EResult } from './e2e'
+
 // PR/MR creation
 export { createPR, moveToInReview } from './pr'
 export type { PRResult } from './pr'

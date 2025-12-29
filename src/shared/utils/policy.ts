@@ -101,6 +101,25 @@ export function mergePolicyUpdate(
         current.worker?.session?.contextCarryover ??
         'summary'
     }
+
+    // Ensure e2e has required fields
+    merged.worker.e2e = {
+      enabled: update.worker?.e2e?.enabled ?? current.worker?.e2e?.enabled ?? false,
+      framework: 'playwright',
+      maxRetries: update.worker?.e2e?.maxRetries ?? current.worker?.e2e?.maxRetries ?? 3,
+      timeoutMinutes:
+        update.worker?.e2e?.timeoutMinutes ?? current.worker?.e2e?.timeoutMinutes ?? 10,
+      createTestsIfMissing:
+        update.worker?.e2e?.createTestsIfMissing ??
+        current.worker?.e2e?.createTestsIfMissing ??
+        true,
+      testCommand: update.worker?.e2e?.testCommand ?? current.worker?.e2e?.testCommand,
+      testDirectories:
+        update.worker?.e2e?.testDirectories ??
+        current.worker?.e2e?.testDirectories ??
+        ['e2e', 'tests/e2e', 'test/e2e'],
+      fixToolPriority: 'claude-first'
+    }
   }
 
   return merged

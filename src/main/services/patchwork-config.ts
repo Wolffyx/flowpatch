@@ -18,6 +18,16 @@ export interface PatchworkPrivacyOverride {
   denyGlobs?: string[]
 }
 
+export interface PatchworkE2EConfig {
+  enabled?: boolean
+  framework?: 'playwright'
+  maxRetries?: number
+  timeoutMinutes?: number
+  createTestsIfMissing?: boolean
+  testCommand?: string
+  testDirectories?: string[]
+}
+
 export interface PatchworkConfig {
   schemaVersion: number
   generatedBy?: string
@@ -33,6 +43,7 @@ export interface PatchworkConfig {
     confirmRepair?: boolean
     confirmMigrate?: boolean
   }
+  e2e?: PatchworkE2EConfig
 }
 
 export interface PatchworkConfigDiagnostics {
@@ -166,6 +177,32 @@ export function readPatchworkConfig(repoRoot: string): {
           confirmMigrate: true
         }
 
+  // Parse E2E configuration
+  let e2e: PatchworkE2EConfig | undefined
+  if (parsed?.e2e && typeof parsed.e2e === 'object') {
+    e2e = {
+      enabled: typeof parsed.e2e.enabled === 'boolean' ? parsed.e2e.enabled : undefined,
+      framework: parsed.e2e.framework === 'playwright' ? 'playwright' : undefined,
+      maxRetries:
+        typeof parsed.e2e.maxRetries === 'number' && parsed.e2e.maxRetries > 0
+          ? parsed.e2e.maxRetries
+          : undefined,
+      timeoutMinutes:
+        typeof parsed.e2e.timeoutMinutes === 'number' && parsed.e2e.timeoutMinutes > 0
+          ? parsed.e2e.timeoutMinutes
+          : undefined,
+      createTestsIfMissing:
+        typeof parsed.e2e.createTestsIfMissing === 'boolean'
+          ? parsed.e2e.createTestsIfMissing
+          : undefined,
+      testCommand:
+        typeof parsed.e2e.testCommand === 'string' ? parsed.e2e.testCommand : undefined,
+      testDirectories: Array.isArray(parsed.e2e.testDirectories)
+        ? parsed.e2e.testDirectories.map(String).filter(Boolean)
+        : undefined
+    }
+  }
+
   return {
     config: {
       schemaVersion: Number.isFinite(schemaVersion) && schemaVersion >= 1 ? schemaVersion : 1,
@@ -173,7 +210,8 @@ export function readPatchworkConfig(repoRoot: string): {
       budgets,
       privacy,
       workspaces,
-      approval
+      approval,
+      e2e
     },
     diagnostics: { errors, warnings }
   }

@@ -19,6 +19,8 @@ import type {
   CreateRepoResult,
   SelectDirectoryResult
 } from '@shared/types'
+import { setOnboardingBool } from './onboarding'
+import { notifyRenderer } from './index'
 
 // ============================================================================
 // Utility Functions
@@ -283,8 +285,6 @@ export function registerRepoHandlers(): void {
   // Ensure a project has a selected remote (auto-picks origin/first remote).
   ipcMain.handle('ensureProjectRemote', async (_e, payload: { projectId: string }) => {
     logAction('ensureProjectRemote', payload)
-    const { setOnboardingBool } = await import('./onboarding')
-    const { notifyRenderer } = await import('./index')
 
     if (!payload?.projectId) return { error: 'Project ID required' }
 
@@ -458,7 +458,6 @@ export function registerRepoHandlers(): void {
 
         // New repo created by Patchwork: offer starter cards wizard on first open.
         try {
-          const { setOnboardingBool } = await import('./onboarding')
           if (openResult.project?.id) {
             setOnboardingBool(openResult.project.id, 'starterCardsEligible', true)
             setOnboardingBool(openResult.project.id, 'starterCardsDismissed', false)
@@ -489,8 +488,6 @@ export function registerRepoHandlers(): void {
       payload: { projectId: string; remoteName: string; remoteUrl: string; repoKey: string }
     ) => {
       logAction('selectRemote', payload)
-      const { setOnboardingBool } = await import('./onboarding')
-      const { notifyRenderer } = await import('./index')
 
       const p = getProject(payload.projectId)
       if (!p) return { error: 'Project not found' }
