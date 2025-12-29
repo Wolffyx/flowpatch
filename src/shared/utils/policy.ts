@@ -2,7 +2,24 @@
  * Policy parsing and manipulation utilities.
  */
 
-import type { PolicyConfig, CardStatus } from '../types'
+import type {
+  PolicyConfig,
+  CardStatus,
+  FeaturesConfig,
+  ThinkingConfig,
+  PlanningConfig,
+  MultiAgentConfig,
+  ChatConfig,
+  NotificationsConfig,
+  DiffViewerConfig,
+  GraphViewConfig,
+  UsageTrackingConfig,
+  ImagesConfig,
+  AIProfilesConfig,
+  FeatureSuggestionsConfig,
+  DependenciesConfig,
+  FollowUpInstructionsConfig
+} from '../types'
 import { DEFAULT_POLICY } from '../types'
 
 /**
@@ -14,6 +31,83 @@ export function parsePolicyJson(json: string | null | undefined): PolicyConfig {
     return JSON.parse(json) as PolicyConfig
   } catch {
     return DEFAULT_POLICY
+  }
+}
+
+/**
+ * Merge features config with deep merging for each feature.
+ */
+function mergeFeaturesConfig(
+  current: FeaturesConfig | undefined,
+  update: FeaturesConfig | undefined
+): FeaturesConfig {
+  const defaults = DEFAULT_POLICY.features!
+
+  return {
+    thinking: mergeFeature<ThinkingConfig>(current?.thinking, update?.thinking, defaults.thinking!),
+    planning: mergeFeature<PlanningConfig>(current?.planning, update?.planning, defaults.planning!),
+    multiAgent: mergeFeature<MultiAgentConfig>(
+      current?.multiAgent,
+      update?.multiAgent,
+      defaults.multiAgent!
+    ),
+    chat: mergeFeature<ChatConfig>(current?.chat, update?.chat, defaults.chat!),
+    notifications: mergeFeature<NotificationsConfig>(
+      current?.notifications,
+      update?.notifications,
+      defaults.notifications!
+    ),
+    diffViewer: mergeFeature<DiffViewerConfig>(
+      current?.diffViewer,
+      update?.diffViewer,
+      defaults.diffViewer!
+    ),
+    graphView: mergeFeature<GraphViewConfig>(
+      current?.graphView,
+      update?.graphView,
+      defaults.graphView!
+    ),
+    usageTracking: mergeFeature<UsageTrackingConfig>(
+      current?.usageTracking,
+      update?.usageTracking,
+      defaults.usageTracking!
+    ),
+    images: mergeFeature<ImagesConfig>(current?.images, update?.images, defaults.images!),
+    aiProfiles: mergeFeature<AIProfilesConfig>(
+      current?.aiProfiles,
+      update?.aiProfiles,
+      defaults.aiProfiles!
+    ),
+    featureSuggestions: mergeFeature<FeatureSuggestionsConfig>(
+      current?.featureSuggestions,
+      update?.featureSuggestions,
+      defaults.featureSuggestions!
+    ),
+    dependencies: mergeFeature<DependenciesConfig>(
+      current?.dependencies,
+      update?.dependencies,
+      defaults.dependencies!
+    ),
+    followUpInstructions: mergeFeature<FollowUpInstructionsConfig>(
+      current?.followUpInstructions,
+      update?.followUpInstructions,
+      defaults.followUpInstructions!
+    )
+  }
+}
+
+/**
+ * Merge a single feature config with defaults.
+ */
+function mergeFeature<T extends object>(
+  current: T | undefined,
+  update: T | undefined,
+  defaults: T
+): T {
+  return {
+    ...defaults,
+    ...(current || {}),
+    ...(update || {})
   }
 }
 
@@ -47,6 +141,7 @@ export function mergePolicyUpdate(
         ...(update.sync?.githubProjectsV2 || {})
       }
     },
+    features: mergeFeaturesConfig(current.features, update.features),
     worker: {
       ...current.worker,
       ...(update.worker || {}),

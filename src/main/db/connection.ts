@@ -265,6 +265,90 @@ function createTables(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_progress_card ON worker_progress(card_id);
     CREATE INDEX IF NOT EXISTS idx_progress_job ON worker_progress(job_id);
   `)
+
+  // Plan approvals table (for review before AI execution)
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS plan_approvals (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      card_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      plan TEXT NOT NULL,
+      planning_mode TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      reviewer_notes TEXT,
+      created_at TEXT NOT NULL,
+      reviewed_at TEXT,
+      FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE,
+      FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE CASCADE,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_plan_approvals_job ON plan_approvals(job_id);
+    CREATE INDEX IF NOT EXISTS idx_plan_approvals_card ON plan_approvals(card_id);
+    CREATE INDEX IF NOT EXISTS idx_plan_approvals_project ON plan_approvals(project_id);
+    CREATE INDEX IF NOT EXISTS idx_plan_approvals_status ON plan_approvals(status);
+  `)
+
+  // Follow-up instructions table (for providing feedback to running/paused workers)
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS follow_up_instructions (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      card_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      instruction_type TEXT NOT NULL,
+      content TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      priority INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      processed_at TEXT,
+      FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE,
+      FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE CASCADE,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_follow_up_job ON follow_up_instructions(job_id);
+    CREATE INDEX IF NOT EXISTS idx_follow_up_card ON follow_up_instructions(card_id);
+    CREATE INDEX IF NOT EXISTS idx_follow_up_project ON follow_up_instructions(project_id);
+    CREATE INDEX IF NOT EXISTS idx_follow_up_status ON follow_up_instructions(status);
+  `)
+
+  // Usage records table (for tracking AI tool usage)
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS usage_records (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      job_id TEXT,
+      card_id TEXT,
+      tool_type TEXT NOT NULL,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      total_tokens INTEGER NOT NULL DEFAULT 0,
+      cost_usd REAL,
+      duration_ms INTEGER NOT NULL DEFAULT 0,
+      model TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+      FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL,
+      FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_usage_project ON usage_records(project_id);
+    CREATE INDEX IF NOT EXISTS idx_usage_job ON usage_records(job_id);
+    CREATE INDEX IF NOT EXISTS idx_usage_tool ON usage_records(tool_type);
+    CREATE INDEX IF NOT EXISTS idx_usage_created ON usage_records(created_at);
+  `)
+
+  // AI tool limits table (for configuring usage limits per tool)
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS ai_tool_limits (
+      id TEXT PRIMARY KEY,
+      tool_type TEXT NOT NULL UNIQUE,
+      daily_token_limit INTEGER,
+      monthly_token_limit INTEGER,
+      daily_cost_limit_usd REAL,
+      monthly_cost_limit_usd REAL,
+      updated_at TEXT NOT NULL
+    );
+  `)
 }
 
 /**

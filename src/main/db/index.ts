@@ -129,5 +129,56 @@ export {
 } from './worker-progress'
 export type { WorkerProgress, WorkerProgressCreate } from './worker-progress'
 
+// Plan Approvals
+export {
+  getPlanApproval,
+  getPlanApprovalByJob,
+  getPendingApprovals,
+  getAllPendingApprovals,
+  createPlanApproval,
+  approvePlan,
+  rejectPlan,
+  skipApproval,
+  deletePlanApproval,
+  deletePlanApprovalsByJob
+} from './plan-approvals'
+export type { PlanApprovalCreate } from './plan-approvals'
+
+// Follow-up Instructions
+export {
+  getFollowUpInstruction,
+  getFollowUpInstructionsByJob,
+  getPendingFollowUpInstructions,
+  getPendingInstructionsByProject,
+  getPendingInstructionsByCard,
+  createFollowUpInstruction,
+  markInstructionProcessing,
+  markInstructionApplied,
+  markInstructionRejected,
+  deleteFollowUpInstruction,
+  deleteFollowUpInstructionsByJob,
+  countPendingInstructions,
+  getNextPendingInstruction
+} from './follow-up-instructions'
+export type { FollowUpInstructionCreate } from './follow-up-instructions'
+
+// Usage Tracking
+export {
+  createUsageRecord,
+  getUsageRecords,
+  getUsageRecordsByJob,
+  getUsageStatsByTool,
+  getUsageSummary,
+  getDailyUsage,
+  getMonthlyUsage,
+  getTotalUsage,
+  getToolLimits,
+  getAllToolLimits,
+  setToolLimits,
+  getUsageWithLimits,
+  deleteOldUsageRecords
+} from './usage'
+export type { UsageRecordCreate } from './usage'
+
 // Utility re-export for backward compatibility
 export { generateId as cryptoRandomId } from '@shared/utils'

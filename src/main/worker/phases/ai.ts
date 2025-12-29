@@ -13,6 +13,7 @@ import { getWorkingDir, type PipelineContext, type LogFn } from './types'
 import { buildContextBundle, buildPromptContext } from '../../services/patchwork-context'
 import { ensureRunDir } from '../../services/patchwork-runs'
 import { updateWorkerProgress } from '../../db'
+import type { ThinkingMode } from '../../../shared/types'
 
 const execFileAsync = promisify(execFile)
 
@@ -56,6 +57,31 @@ export function isClaudeRetryableLimitError(error: unknown): boolean {
     s.includes('exceeded') ||
     s.includes('429')
   )
+}
+
+/**
+ * Get the thinking budget tokens for a given thinking mode.
+ * Returns undefined for 'none' mode (no extended thinking).
+ */
+export function getThinkingBudgetTokens(
+  mode: ThinkingMode,
+  customBudget?: number
+): number | undefined {
+  if (mode === 'none') return undefined
+
+  // Use custom budget if provided and mode allows it
+  if (customBudget && customBudget > 0) {
+    return customBudget
+  }
+
+  // Default token budgets for each mode
+  const budgets: Record<Exclude<ThinkingMode, 'none'>, number> = {
+    medium: 1024,
+    deep: 4096,
+    ultra: 16384
+  }
+
+  return budgets[mode]
 }
 
 /**
@@ -119,16 +145,39 @@ ${repoContext}
 Please implement the changes now.`
 }
 
+export interface ClaudeCodeOptions {
+  /** Prompt to send to Claude */
+  prompt: string
+  /** Timeout in milliseconds */
+  timeoutMs: number
+  /** Working directory */
+  cwd: string
+  /** Logging function */
+  log: LogFn
+  /** Cancellation check function */
+  isCanceled: () => boolean
+  /** Thinking mode (optional) */
+  thinkingMode?: ThinkingMode
+  /** Custom thinking budget tokens (optional) */
+  thinkingBudget?: number
+}
+
 /**
  * Run Claude Code CLI.
  */
-export async function runClaudeCode(
-  prompt: string,
-  timeoutMs: number,
-  cwd: string,
-  log: LogFn,
-  isCanceled: () => boolean
-): Promise<void> {
+export async function runClaudeCode(options: ClaudeCodeOptions): Promise<void> {
+  const { prompt, timeoutMs, cwd, log, isCanceled, thinkingMode, thinkingBudget } = options
+
+  // Build CLI arguments
+  const args = ['--print', '--dangerously-skip-permissions', '-p', prompt]
+
+  // Add extended thinking arguments if enabled
+  const budgetTokens = thinkingMode ? getThinkingBudgetTokens(thinkingMode, thinkingBudget) : undefined
+  if (budgetTokens) {
+    args.push('--thinking-budget', budgetTokens.toString())
+    log(`Extended thinking enabled: ${thinkingMode} mode (${budgetTokens} tokens)`)
+  }
+
   log('Invoking Claude Code CLI...')
 
   // Write prompt to a temp file for Claude to read
@@ -138,7 +187,7 @@ export async function runClaudeCode(
   try {
     await runProcessStreaming({
       command: 'claude',
-      args: ['--print', '--dangerously-skip-permissions', '-p', prompt],
+      args,
       cwd,
       timeoutMs,
       source: 'claude',
@@ -255,9 +304,23 @@ Forbidden paths: ${(ctx.policy.worker?.forbidPaths || []).join(', ')}
     // Build the prompt for the AI tool
     const prompt = await buildAIPrompt(ctx, plan)
 
+    // Get thinking mode configuration from policy
+    const thinkingConfig = ctx.policy.features?.thinking
+    const thinkingEnabled = thinkingConfig?.enabled !== false
+    const thinkingMode = thinkingEnabled ? thinkingConfig?.mode : undefined
+    const thinkingBudget = thinkingConfig?.budgetTokens
+
     if (tool === 'claude') {
       try {
-        await runClaudeCode(prompt, timeoutMs, workingDir, log, isCanceled)
+        await runClaudeCode({
+          prompt,
+          timeoutMs,
+          cwd: workingDir,
+          log,
+          isCanceled,
+          thinkingMode,
+          thinkingBudget
+        })
       } catch (error) {
         if (hasCodex && isClaudeRetryableLimitError(error)) {
           log('Claude failed due to rate/usage limit; falling back to Codex...')

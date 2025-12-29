@@ -12,7 +12,10 @@ export type CardType = 'issue' | 'pr' | 'draft' | 'mr' | 'local'
 
 export type SyncState = 'ok' | 'pending' | 'error'
 
-export type JobState = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled' | 'blocked'
+export type JobState = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled' | 'blocked' | 'pending_approval'
+
+/** Status of plan approval */
+export type PlanApprovalStatus = 'pending' | 'approved' | 'rejected' | 'skipped'
 
 export type JobType =
   | 'sync_poll'
@@ -78,6 +81,13 @@ export type EventType =
   | 'card_linked'
   | 'task_decomposed'
   | 'e2e_tests_run'
+  | 'plan_approval_requested'
+  | 'plan_approved'
+  | 'plan_rejected'
+  | 'plan_skipped'
+  | 'follow_up_instruction_added'
+  | 'follow_up_instruction_applied'
+  | 'follow_up_instruction_rejected'
 
 // Subtask status for decomposed tasks
 export type SubtaskStatus = 'pending' | 'in_progress' | 'completed' | 'failed'
@@ -258,6 +268,67 @@ export interface Job {
 }
 
 // ============================================================================
+// Usage Tracking Types
+// ============================================================================
+
+/** AI tool/agent type for usage tracking */
+export type AIToolType = 'claude' | 'codex' | 'other'
+
+/** Usage record for a single AI tool invocation */
+export interface UsageRecord {
+  id: string
+  project_id: string
+  job_id: string | null
+  card_id: string | null
+  tool_type: AIToolType
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  cost_usd: number | null
+  duration_ms: number
+  model: string | null
+  created_at: string
+}
+
+/** Aggregated usage statistics for an AI tool */
+export interface UsageStats {
+  tool_type: AIToolType
+  total_input_tokens: number
+  total_output_tokens: number
+  total_tokens: number
+  total_cost_usd: number
+  invocation_count: number
+  avg_duration_ms: number
+}
+
+/** Usage summary across all tools */
+export interface UsageSummary {
+  total_tokens: number
+  total_cost_usd: number
+  by_tool: UsageStats[]
+  period_start: string
+  period_end: string
+}
+
+/** Tool limits configuration */
+export interface AIToolLimits {
+  tool_type: AIToolType
+  daily_token_limit: number | null
+  monthly_token_limit: number | null
+  daily_cost_limit_usd: number | null
+  monthly_cost_limit_usd: number | null
+}
+
+/** Usage with limit info for display */
+export interface UsageWithLimits extends UsageStats {
+  limits: AIToolLimits | null
+  daily_tokens_used: number
+  monthly_tokens_used: number
+  daily_cost_used: number
+  monthly_cost_used: number
+}
+
+// ============================================================================
 // Worker Pool & Autonomous Worker Types
 // ============================================================================
 
@@ -382,6 +453,258 @@ export interface RemoteInfo {
   repoKey: string
 }
 
+/**
+ * Plan approval request for review before AI execution
+ */
+export interface PlanApproval {
+  id: string
+  job_id: string
+  card_id: string
+  project_id: string
+  plan: string
+  planning_mode: PlanningMode
+  status: PlanApprovalStatus
+  reviewer_notes?: string
+  created_at: string
+  reviewed_at?: string
+}
+
+/** Status of follow-up instruction */
+export type FollowUpInstructionStatus = 'pending' | 'processing' | 'applied' | 'rejected'
+
+/** Type of follow-up instruction */
+export type FollowUpInstructionType = 'revision' | 'clarification' | 'additional' | 'abort'
+
+/**
+ * Follow-up instruction for providing feedback to running/paused workers
+ */
+export interface FollowUpInstruction {
+  id: string
+  job_id: string
+  card_id: string
+  project_id: string
+  instruction_type: FollowUpInstructionType
+  content: string
+  status: FollowUpInstructionStatus
+  priority: number
+  created_at: string
+  processed_at?: string
+}
+
+// ============================================================================
+// Feature Configuration Types
+// ============================================================================
+
+/** Extended thinking mode for AI reasoning depth */
+export type ThinkingMode = 'none' | 'medium' | 'deep' | 'ultra'
+
+/** Planning mode for task execution strategy */
+export type PlanningMode = 'skip' | 'lite' | 'spec' | 'full'
+
+/** Merge strategy for multi-agent execution */
+export type MergeStrategy = 'sequential' | 'parallel-merge'
+
+/** Conflict resolution strategy for multi-agent merges */
+export type ConflictResolution = 'auto' | 'manual'
+
+/** Config sync priority when conflicts occur */
+export type ConfigSyncPriority = 'database' | 'file'
+
+/** Diff viewer display mode */
+export type DiffViewMode = 'side-by-side' | 'inline'
+
+/** Graph layout algorithm */
+export type GraphLayout = 'dagre' | 'force'
+
+/** Usage export format */
+export type UsageExportFormat = 'csv' | 'json'
+
+/**
+ * Extended thinking configuration for AI reasoning
+ */
+export interface ThinkingConfig {
+  /** Enable extended thinking mode */
+  enabled: boolean
+  /** Thinking depth level */
+  mode: ThinkingMode
+  /** Token budget for thinking (medium=1024, deep=4096, ultra=16384) */
+  budgetTokens?: number
+}
+
+/**
+ * Planning mode configuration for task execution
+ */
+export interface PlanningConfig {
+  /** Enable planning modes */
+  enabled: boolean
+  /** Default planning mode */
+  mode: PlanningMode
+  /** Require user approval before execution (for full mode) */
+  approvalRequired: boolean
+}
+
+/**
+ * Multi-agent execution configuration
+ */
+export interface MultiAgentConfig {
+  /** Enable multi-agent task execution */
+  enabled: boolean
+  /** Strategy for merging agent work */
+  mergeStrategy: MergeStrategy
+  /** How to handle merge conflicts */
+  conflictResolution: ConflictResolution
+  /** Maximum agents per card */
+  maxAgentsPerCard?: number
+}
+
+/**
+ * Agent chat configuration
+ */
+export interface ChatConfig {
+  /** Enable agent chat feature */
+  enabled: boolean
+  /** Persist chat sessions to disk */
+  persistSessions: boolean
+  /** Maximum messages to keep in history */
+  maxHistoryMessages: number
+}
+
+/**
+ * Audio notifications configuration
+ */
+export interface NotificationsConfig {
+  /** Enable audio notifications */
+  audioEnabled: boolean
+  /** Play sound on task completion */
+  soundOnComplete: boolean
+  /** Play sound on errors */
+  soundOnError: boolean
+  /** Play sound when approval is needed */
+  soundOnApproval: boolean
+}
+
+/**
+ * Git diff viewer configuration
+ */
+export interface DiffViewerConfig {
+  /** Enable diff viewer feature */
+  enabled: boolean
+  /** Default diff display mode */
+  defaultView: DiffViewMode
+  /** Show minimap in diff editor */
+  showMinimap: boolean
+}
+
+/**
+ * Dependency graph view configuration
+ */
+export interface GraphViewConfig {
+  /** Enable graph view feature */
+  enabled: boolean
+  /** Default graph layout algorithm */
+  defaultLayout: GraphLayout
+  /** Show minimap in graph view */
+  showMinimap: boolean
+}
+
+/**
+ * Usage tracking configuration
+ */
+export interface UsageTrackingConfig {
+  /** Enable usage tracking */
+  enabled: boolean
+  /** Track cost estimates */
+  trackCosts: boolean
+  /** Default export format */
+  exportFormat: UsageExportFormat
+}
+
+/**
+ * Image attachment configuration
+ */
+export interface ImagesConfig {
+  /** Enable image attachments */
+  enabled: boolean
+  /** Maximum image size in MB */
+  maxSizeMb: number
+  /** Allowed image formats */
+  allowedFormats: string[]
+}
+
+/**
+ * AI profiles configuration
+ */
+export interface AIProfilesConfig {
+  /** Enable AI profiles feature */
+  enabled: boolean
+  /** Default profile ID to use */
+  defaultProfileId?: string
+}
+
+/**
+ * Feature suggestions configuration
+ */
+export interface FeatureSuggestionsConfig {
+  /** Enable feature suggestions */
+  enabled: boolean
+  /** Auto-generate suggestions on project analysis */
+  autoSuggestOnAnalysis: boolean
+}
+
+/**
+ * Card dependency configuration
+ */
+export interface DependenciesConfig {
+  /** Enable card dependencies */
+  enabled: boolean
+  /** Block card execution if dependencies incomplete */
+  blockOnIncomplete: boolean
+  /** Show dependency badges on Kanban cards */
+  showInKanban: boolean
+}
+
+/**
+ * Follow-up instructions configuration
+ */
+export interface FollowUpInstructionsConfig {
+  /** Enable follow-up instructions for running agents */
+  enabled: boolean
+  /** Maximum pending messages in queue */
+  maxQueueSize: number
+}
+
+/**
+ * All feature configurations grouped together
+ */
+export interface FeaturesConfig {
+  /** Extended thinking configuration */
+  thinking?: ThinkingConfig
+  /** Planning mode configuration */
+  planning?: PlanningConfig
+  /** Multi-agent execution configuration */
+  multiAgent?: MultiAgentConfig
+  /** Agent chat configuration */
+  chat?: ChatConfig
+  /** Audio notifications configuration */
+  notifications?: NotificationsConfig
+  /** Diff viewer configuration */
+  diffViewer?: DiffViewerConfig
+  /** Graph view configuration */
+  graphView?: GraphViewConfig
+  /** Usage tracking configuration */
+  usageTracking?: UsageTrackingConfig
+  /** Image attachments configuration */
+  images?: ImagesConfig
+  /** AI profiles configuration */
+  aiProfiles?: AIProfilesConfig
+  /** Feature suggestions configuration */
+  featureSuggestions?: FeatureSuggestionsConfig
+  /** Card dependencies configuration */
+  dependencies?: DependenciesConfig
+  /** Follow-up instructions configuration */
+  followUpInstructions?: FollowUpInstructionsConfig
+}
+
 export interface PolicyConfig {
   version: number
   ui?: {
@@ -418,7 +741,15 @@ export interface PolicyConfig {
         done?: string
       }
     }
+    /** Config sync priority when conflicts occur between DB and file */
+    configPriority?: ConfigSyncPriority
+    /** Sync config on startup */
+    syncOnStartup?: boolean
+    /** Watch .patchwork/config.yml for external changes */
+    watchFileChanges?: boolean
   }
+  /** Feature configurations for optional capabilities */
+  features?: FeaturesConfig
   worker?: {
     enabled?: boolean
     toolPreference?: 'auto' | 'claude' | 'codex'
@@ -656,6 +987,74 @@ export const DEFAULT_POLICY: PolicyConfig = {
     },
     githubProjectsV2: {
       enabled: false
+    },
+    configPriority: 'database',
+    syncOnStartup: true,
+    watchFileChanges: true
+  },
+  features: {
+    thinking: {
+      enabled: false,
+      mode: 'none',
+      budgetTokens: 4096
+    },
+    planning: {
+      enabled: true,
+      mode: 'lite',
+      approvalRequired: false
+    },
+    multiAgent: {
+      enabled: false,
+      mergeStrategy: 'sequential',
+      conflictResolution: 'auto',
+      maxAgentsPerCard: 3
+    },
+    chat: {
+      enabled: true,
+      persistSessions: true,
+      maxHistoryMessages: 500
+    },
+    notifications: {
+      audioEnabled: false,
+      soundOnComplete: true,
+      soundOnError: true,
+      soundOnApproval: true
+    },
+    diffViewer: {
+      enabled: true,
+      defaultView: 'side-by-side',
+      showMinimap: false
+    },
+    graphView: {
+      enabled: true,
+      defaultLayout: 'dagre',
+      showMinimap: true
+    },
+    usageTracking: {
+      enabled: true,
+      trackCosts: true,
+      exportFormat: 'csv'
+    },
+    images: {
+      enabled: true,
+      maxSizeMb: 10,
+      allowedFormats: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg']
+    },
+    aiProfiles: {
+      enabled: true
+    },
+    featureSuggestions: {
+      enabled: true,
+      autoSuggestOnAnalysis: false
+    },
+    dependencies: {
+      enabled: true,
+      blockOnIncomplete: true,
+      showInKanban: true
+    },
+    followUpInstructions: {
+      enabled: true,
+      maxQueueSize: 10
     }
   },
   worker: {

@@ -1,5 +1,9 @@
 {
   "permissions": {
-    "allow": ["Bash(dir:*)", "Bash(npx tsc:*)"]
+    "allow": [
+      "Bash(dir:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npm run typecheck:*)"
+    ]
   }
 }

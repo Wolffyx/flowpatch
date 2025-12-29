@@ -49,6 +49,30 @@ export interface ProjectAPI {
   runWorker: (cardId?: string) => Promise<void>
   cancelWorker: (jobId: string) => Promise<void>
 
+  // Plan Approval
+  getPendingApprovals: () => Promise<{ approvals: PlanApproval[] }>
+  getPlanApproval: (params: { approvalId?: string; jobId?: string }) => Promise<{ approval?: PlanApproval; error?: string }>
+  approvePlan: (approvalId: string, notes?: string) => Promise<{ success: boolean; error?: string }>
+  rejectPlan: (approvalId: string, notes?: string) => Promise<{ success: boolean; error?: string }>
+  skipPlanApproval: (approvalId: string) => Promise<{ success: boolean; error?: string }>
+  onPlanApprovalRequired: (callback: (data: { projectId: string; cardId: string; jobId: string; approvalId: string }) => void) => () => void
+
+  // Follow-up Instructions
+  getFollowUpInstructions: (params: { jobId?: string; cardId?: string; pendingOnly?: boolean }) => Promise<{ instructions: FollowUpInstruction[]; error?: string }>
+  createFollowUpInstruction: (data: {
+    jobId: string
+    cardId: string
+    instructionType: FollowUpInstructionType
+    content: string
+    priority?: number
+  }) => Promise<{ success: boolean; instruction?: FollowUpInstruction; error?: string }>
+  deleteFollowUpInstruction: (instructionId: string) => Promise<{ success: boolean; error?: string }>
+  countPendingInstructions: (jobId: string) => Promise<{ count: number; error?: string }>
+
+  // Usage Tracking
+  getTotalUsage: () => Promise<{ usage: { tokens: number; cost: number } }>
+  getUsageWithLimits: () => Promise<{ usageWithLimits: UsageWithLimits[] }>
+
   // State updates
   onStateUpdate: (callback: () => void) => () => void
   onWorkerLog: (callback: (log: WorkerLogMessage) => void) => () => void
@@ -74,6 +98,43 @@ export interface ProjectAPI {
   openWorkspaceFolder: () => Promise<unknown>
   retrieve: (kind: 'symbol' | 'text', query: string, limit?: number) => Promise<unknown>
   getPatchworkConfig: () => Promise<unknown>
+
+  // Configuration sync
+  syncConfig: (priorityOverride?: 'database' | 'file') => Promise<{
+    success: boolean
+    source?: 'database' | 'file' | 'merged'
+    policy?: PolicyConfig
+    errors?: string[]
+    warnings?: string[]
+  }>
+  getConfig: () => Promise<PolicyConfig>
+  updateFeatureConfig: (
+    featureKey: string,
+    config: Record<string, unknown>
+  ) => Promise<{
+    success: boolean
+    policy?: PolicyConfig
+    errors?: string[]
+    warnings?: string[]
+  }>
+  getConfigSyncPriority: () => Promise<'database' | 'file'>
+  setConfigSyncPriority: (priority: 'database' | 'file') => Promise<{
+    success: boolean
+    policy?: PolicyConfig
+    errors?: string[]
+    warnings?: string[]
+  }>
+  startConfigWatcher: () => Promise<{ success: boolean }>
+  stopConfigWatcher: () => Promise<{ success: boolean }>
+  onConfigChanged: (
+    callback: (data: { policy: PolicyConfig; source: 'database' | 'file' | 'merged' }) => void
+  ) => () => void
+}
+
+interface PolicyConfig {
+  version: number
+  features?: Record<string, unknown>
+  [key: string]: unknown
 }
 
 // Types from shared (would be imported in actual usage)
@@ -124,6 +185,63 @@ interface WorkerLogMessage {
   line: string
   source?: string
   stream?: 'stdout' | 'stderr'
+}
+
+type PlanningMode = 'skip' | 'lite' | 'spec' | 'full'
+type PlanApprovalStatus = 'pending' | 'approved' | 'rejected' | 'skipped'
+
+interface PlanApproval {
+  id: string
+  job_id: string
+  card_id: string
+  project_id: string
+  plan: string
+  planning_mode: PlanningMode
+  status: PlanApprovalStatus
+  reviewer_notes?: string
+  created_at: string
+  reviewed_at?: string
+}
+
+type FollowUpInstructionStatus = 'pending' | 'processing' | 'applied' | 'rejected'
+type FollowUpInstructionType = 'revision' | 'clarification' | 'additional' | 'abort'
+
+interface FollowUpInstruction {
+  id: string
+  job_id: string
+  card_id: string
+  project_id: string
+  instruction_type: FollowUpInstructionType
+  content: string
+  status: FollowUpInstructionStatus
+  priority: number
+  created_at: string
+  processed_at?: string
+}
+
+type AIToolType = 'claude' | 'codex' | 'other'
+
+interface AIToolLimits {
+  tool_type: AIToolType
+  daily_token_limit: number | null
+  monthly_token_limit: number | null
+  daily_cost_limit_usd: number | null
+  monthly_cost_limit_usd: number | null
+}
+
+interface UsageWithLimits {
+  tool_type: AIToolType
+  total_input_tokens: number
+  total_output_tokens: number
+  total_tokens: number
+  total_cost_usd: number
+  invocation_count: number
+  avg_duration_ms: number
+  limits: AIToolLimits | null
+  daily_tokens_used: number
+  monthly_tokens_used: number
+  daily_cost_used: number
+  monthly_cost_used: number
 }
 
 interface Project {
@@ -278,6 +396,82 @@ const projectAPI: ProjectAPI = {
   },
 
   // -------------------------------------------------------------------------
+  // Plan Approval
+  // -------------------------------------------------------------------------
+
+  getPendingApprovals: () => {
+    const projectId = lastProjectInfo?.projectId
+    return ipcRenderer.invoke('getPendingApprovals', projectId ? { projectId } : undefined)
+  },
+
+  getPlanApproval: (params: { approvalId?: string; jobId?: string }) => {
+    return ipcRenderer.invoke('getPlanApproval', params)
+  },
+
+  approvePlan: (approvalId: string, notes?: string) => {
+    return ipcRenderer.invoke('approvePlan', { approvalId, notes })
+  },
+
+  rejectPlan: (approvalId: string, notes?: string) => {
+    return ipcRenderer.invoke('rejectPlan', { approvalId, notes })
+  },
+
+  skipPlanApproval: (approvalId: string) => {
+    return ipcRenderer.invoke('skipPlanApproval', { approvalId })
+  },
+
+  onPlanApprovalRequired: (callback: (data: { projectId: string; cardId: string; jobId: string; approvalId: string }) => void) => {
+    const handler = (_event: IpcRendererEvent, data: { projectId: string; cardId: string; jobId: string; approvalId: string }) => {
+      callback(data)
+    }
+    ipcRenderer.on('planApprovalRequired', handler)
+    return () => {
+      ipcRenderer.removeListener('planApprovalRequired', handler)
+    }
+  },
+
+  // -------------------------------------------------------------------------
+  // Follow-up Instructions
+  // -------------------------------------------------------------------------
+
+  getFollowUpInstructions: (params: { jobId?: string; cardId?: string; pendingOnly?: boolean }) => {
+    const projectId = lastProjectInfo?.projectId
+    return ipcRenderer.invoke('getFollowUpInstructions', { ...params, projectId })
+  },
+
+  createFollowUpInstruction: (data: {
+    jobId: string
+    cardId: string
+    instructionType: FollowUpInstructionType
+    content: string
+    priority?: number
+  }) => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) return Promise.reject(new Error('No active project'))
+    return ipcRenderer.invoke('createFollowUpInstruction', { ...data, projectId })
+  },
+
+  deleteFollowUpInstruction: (instructionId: string) => {
+    return ipcRenderer.invoke('deleteFollowUpInstruction', { instructionId })
+  },
+
+  countPendingInstructions: (jobId: string) => {
+    return ipcRenderer.invoke('countPendingInstructions', { jobId })
+  },
+
+  // -------------------------------------------------------------------------
+  // Usage Tracking
+  // -------------------------------------------------------------------------
+
+  getTotalUsage: () => {
+    return ipcRenderer.invoke('usage:getTotal')
+  },
+
+  getUsageWithLimits: () => {
+    return ipcRenderer.invoke('usage:getWithLimits')
+  },
+
+  // -------------------------------------------------------------------------
   // State Updates
   // -------------------------------------------------------------------------
 
@@ -375,6 +569,64 @@ const projectAPI: ProjectAPI = {
 
   getPatchworkConfig: () => {
     return ipcRenderer.invoke('project:getPatchworkConfig')
+  },
+
+  // -------------------------------------------------------------------------
+  // Configuration Sync
+  // -------------------------------------------------------------------------
+
+  syncConfig: (priorityOverride?: 'database' | 'file') => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) return Promise.reject(new Error('No active project'))
+    return ipcRenderer.invoke('syncProjectConfig', { projectId, priorityOverride })
+  },
+
+  getConfig: () => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) return Promise.reject(new Error('No active project'))
+    return ipcRenderer.invoke('getProjectConfig', { projectId })
+  },
+
+  updateFeatureConfig: (featureKey: string, config: Record<string, unknown>) => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) return Promise.reject(new Error('No active project'))
+    return ipcRenderer.invoke('updateFeatureConfig', { projectId, featureKey, config })
+  },
+
+  getConfigSyncPriority: () => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) return Promise.reject(new Error('No active project'))
+    return ipcRenderer.invoke('getConfigSyncPriority', { projectId })
+  },
+
+  setConfigSyncPriority: (priority: 'database' | 'file') => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) return Promise.reject(new Error('No active project'))
+    return ipcRenderer.invoke('setConfigSyncPriority', { projectId, priority })
+  },
+
+  startConfigWatcher: () => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) return Promise.reject(new Error('No active project'))
+    return ipcRenderer.invoke('startConfigFileWatcher', { projectId })
+  },
+
+  stopConfigWatcher: () => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) return Promise.reject(new Error('No active project'))
+    return ipcRenderer.invoke('stopConfigFileWatcher', { projectId })
+  },
+
+  onConfigChanged: (
+    callback: (data: { policy: PolicyConfig; source: 'database' | 'file' | 'merged' }) => void
+  ) => {
+    const handler = (_event: IpcRendererEvent, data: { policy: PolicyConfig; source: 'database' | 'file' | 'merged' }) => {
+      callback(data)
+    }
+    ipcRenderer.on('configChanged', handler)
+    return () => {
+      ipcRenderer.removeListener('configChanged', handler)
+    }
   }
 }
 

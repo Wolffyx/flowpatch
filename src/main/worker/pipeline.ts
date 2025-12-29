@@ -30,7 +30,14 @@ import {
   getNextPendingSubtask,
   createWorkerProgress,
   updateWorkerProgress,
-  getWorkerProgress
+  getWorkerProgress,
+  createPlanApproval,
+  getPlanApprovalByJob,
+  deletePlanApprovalsByJob,
+  getNextPendingInstruction,
+  markInstructionProcessing,
+  markInstructionApplied,
+  deleteFollowUpInstructionsByJob
 } from '../db'
 import { TaskDecomposer } from '../services/task-decomposer'
 import type {
@@ -42,7 +49,10 @@ import type {
   WorkerLogMessage,
   Worktree,
   Subtask,
-  WorkerProgress
+  WorkerProgress,
+  PlanningMode,
+  PlanApproval,
+  FollowUpInstruction
 } from '../../shared/types'
 import { slugify, generateWorktreeBranchName } from '../../shared/types'
 import { broadcastToRenderers } from '../ipc/broadcast'
@@ -66,6 +76,13 @@ class WorkerCanceledError extends Error {
   constructor(message = 'Canceled') {
     super(message)
     this.name = 'WorkerCanceledError'
+  }
+}
+
+class WorkerPendingApprovalError extends Error {
+  constructor(public planApprovalId: string) {
+    super('Pending plan approval')
+    this.name = 'WorkerPendingApprovalError'
   }
 }
 
@@ -99,6 +116,12 @@ export class WorkerPipeline {
   private subtasks: Subtask[] = []
   private progress: WorkerProgress | null = null
   private taskDecomposer: TaskDecomposer | null = null
+
+  // Plan approval state
+  private planApproval: PlanApproval | null = null
+
+  // Follow-up instructions state
+  private followUpInstructions: FollowUpInstruction[] = []
 
   constructor(projectId: string, cardId: string) {
     this.projectId = projectId
@@ -168,6 +191,153 @@ export class WorkerPipeline {
     if (this.isCanceled()) throw new WorkerCanceledError()
   }
 
+  /**
+   * Check if plan approval is required and handle the approval flow.
+   * Returns true if we can proceed, throws WorkerPendingApprovalError if waiting for approval.
+   */
+  private async checkPlanApproval(plan: string, planningMode: PlanningMode): Promise<void> {
+    const planningConfig = this.policy.features?.planning
+    if (!planningConfig?.approvalRequired) {
+      return // No approval needed
+    }
+
+    // Check if we already have an approval for this job
+    const existingApproval = this.jobId ? getPlanApprovalByJob(this.jobId) : null
+
+    if (existingApproval) {
+      this.planApproval = existingApproval
+
+      if (existingApproval.status === 'approved' || existingApproval.status === 'skipped') {
+        this.log(`Plan already ${existingApproval.status}`)
+        return // Already approved or skipped
+      }
+
+      if (existingApproval.status === 'rejected') {
+        // Plan was rejected - cancel the job
+        this.cancelJob('Plan rejected by reviewer')
+        throw new WorkerCanceledError('Plan rejected')
+      }
+
+      if (existingApproval.status === 'pending') {
+        // Still waiting for approval
+        this.log('Waiting for plan approval...')
+        throw new WorkerPendingApprovalError(existingApproval.id)
+      }
+    }
+
+    // Create a new plan approval request
+    this.log('Creating plan approval request...')
+    this.planApproval = createPlanApproval({
+      jobId: this.jobId!,
+      cardId: this.cardId,
+      projectId: this.projectId,
+      plan,
+      planningMode
+    })
+
+    // Update job state to pending_approval
+    updateJobState(this.jobId!, 'pending_approval', {
+      success: false,
+      phase: 'pending_approval',
+      plan,
+      logs: this.logs.slice(-500)
+    })
+
+    // Broadcast the update
+    broadcastToRenderers('stateUpdated')
+    broadcastToRenderers('planApprovalRequired', {
+      projectId: this.projectId,
+      cardId: this.cardId,
+      jobId: this.jobId,
+      approvalId: this.planApproval.id
+    })
+
+    // Create event for the approval request
+    createEvent(this.projectId, 'plan_approval_requested', this.cardId, {
+      approvalId: this.planApproval.id,
+      planningMode
+    })
+
+    this.log('Plan submitted for approval')
+    throw new WorkerPendingApprovalError(this.planApproval.id)
+  }
+
+  /**
+   * Check for pending follow-up instructions and process them.
+   * Returns any pending instructions to be incorporated into the next iteration.
+   */
+  private checkFollowUpInstructions(): FollowUpInstruction[] {
+    if (!this.jobId) return []
+
+    const followUpConfig = this.policy.features?.followUpInstructions
+    if (!followUpConfig?.enabled) return []
+
+    // Get the next pending instruction
+    const instruction = getNextPendingInstruction(this.jobId)
+    if (!instruction) return []
+
+    // Handle abort instruction specially
+    if (instruction.instruction_type === 'abort') {
+      this.log('Received abort instruction, canceling job')
+      markInstructionApplied(instruction.id)
+      createEvent(this.projectId, 'follow_up_instruction_applied', this.cardId, {
+        instructionId: instruction.id,
+        instructionType: 'abort'
+      })
+      throw new WorkerCanceledError('Aborted by follow-up instruction')
+    }
+
+    // Mark as processing
+    markInstructionProcessing(instruction.id)
+    this.log(`Processing follow-up instruction: ${instruction.instruction_type}`)
+
+    // Add to our tracked list
+    this.followUpInstructions.push(instruction)
+
+    return [instruction]
+  }
+
+  /**
+   * Build additional context from follow-up instructions for the AI prompt.
+   */
+  private buildFollowUpContext(): string {
+    if (this.followUpInstructions.length === 0) return ''
+
+    const sections: string[] = [
+      '\n## Follow-up Instructions from User\n',
+      'The user has provided the following additional instructions that should be incorporated:\n'
+    ]
+
+    for (const instruction of this.followUpInstructions) {
+      const typeLabel = instruction.instruction_type === 'revision' ? 'REVISION REQUEST'
+        : instruction.instruction_type === 'clarification' ? 'CLARIFICATION'
+        : instruction.instruction_type === 'additional' ? 'ADDITIONAL REQUIREMENT'
+        : instruction.instruction_type.toUpperCase()
+
+      sections.push(`### ${typeLabel}`)
+      sections.push(instruction.content)
+      sections.push('')
+    }
+
+    return sections.join('\n')
+  }
+
+  /**
+   * Mark all processed follow-up instructions as applied.
+   */
+  private markFollowUpInstructionsApplied(): void {
+    for (const instruction of this.followUpInstructions) {
+      if (instruction.status === 'processing') {
+        markInstructionApplied(instruction.id)
+        createEvent(this.projectId, 'follow_up_instruction_applied', this.cardId, {
+          instructionId: instruction.id,
+          instructionType: instruction.instruction_type
+        })
+      }
+    }
+    this.followUpInstructions = []
+  }
+
   private ensureCardStatusAllowed(allowed: CardStatus[], reason?: string): void {
     const card = getCard(this.cardId)
     if (!card) return
@@ -202,7 +372,7 @@ export class WorkerPipeline {
       // ignore checkpoint failures
     }
   }
-F
+
   private log(message: string, meta?: { source?: string; stream?: 'stdout' | 'stderr' }): void {
     const ts = new Date().toISOString()
     const sourcePrefix = meta?.source
@@ -432,22 +602,39 @@ F
       this.ensureNotCanceled()
       this.ensureCardStatusAllowed(['in_progress'])
 
-      // Phase 5: Generate plan
+      // Phase 5: Generate plan (based on planning mode)
       this.setPhase('plan')
-      this.log('Generating implementation plan')
-      const plan = await this.generatePlan()
-      if (!plan) {
-        return {
-          success: false,
-          phase: 'plan',
-          error: 'Failed to generate plan',
-          logs: this.logs
+      const planningConfig = this.policy.features?.planning
+      const planningMode: PlanningMode =
+        planningConfig?.enabled !== false ? (planningConfig?.mode ?? 'lite') : 'skip'
+
+      let plan: string | null = null
+      if (planningMode === 'skip') {
+        this.log('Planning skipped (mode: skip)')
+        plan = this.generateMinimalPlan()
+      } else {
+        this.log(`Generating implementation plan (mode: ${planningMode})`)
+        plan = await this.generatePlan(planningMode)
+        if (!plan) {
+          return {
+            success: false,
+            phase: 'plan',
+            error: 'Failed to generate plan',
+            logs: this.logs
+          }
         }
       }
       this.lastPlan = plan
 
       // Store plan as event
       createEvent(this.projectId, 'worker_plan', this.cardId, { plan })
+
+      // Phase 5.5: Check for plan approval (if required)
+      // This will throw WorkerPendingApprovalError if approval is needed and pending
+      await this.checkPlanApproval(plan, planningMode)
+
+      this.ensureNotCanceled()
+      this.ensureCardStatusAllowed(['in_progress'])
 
       // Phase 6: Run AI tool (Claude Code or Codex)
       // Supports both single-shot and iterative modes
@@ -546,6 +733,17 @@ F
           success: false,
           phase: 'canceled',
           error: 'Canceled',
+          plan: this.lastPlan,
+          logs: this.logs
+        }
+      }
+      if (err instanceof WorkerPendingApprovalError) {
+        this.setPhase('pending_approval')
+        this.log('Waiting for plan approval')
+        return {
+          success: false,
+          phase: 'pending_approval',
+          error: 'Pending plan approval',
           plan: this.lastPlan,
           logs: this.logs
         }
@@ -1321,42 +1519,226 @@ F
     }
   }
 
-  private async generatePlan(): Promise<string | null> {
+  /**
+   * Generate a minimal plan for 'skip' mode.
+   * Returns a simple task summary without detailed planning.
+   */
+  private generateMinimalPlan(): string {
+    if (!this.card) return 'No card context available.'
+
+    return `
+# Task Summary
+
+**Title:** ${this.card.title}
+
+**Description:** ${this.card.body || 'No description provided'}
+
+**Commands:** ${(this.policy.worker?.allowedCommands || []).join(', ') || 'None specified'}
+
+*Planning skipped - proceeding directly to implementation.*
+`.trim()
+  }
+
+  /**
+   * Generate implementation plan based on planning mode.
+   * - lite: Basic plan with task overview and high-level approach
+   * - spec: Detailed specification with file analysis and dependencies
+   * - full: Comprehensive plan with risk analysis and verification steps
+   */
+  private async generatePlan(mode: PlanningMode): Promise<string | null> {
     if (!this.card) return null
 
-    const plan = `
-# Implementation Plan
+    switch (mode) {
+      case 'lite':
+        return this.generateLitePlan()
+      case 'spec':
+        return this.generateSpecPlan()
+      case 'full':
+        return this.generateFullPlan()
+      default:
+        return this.generateLitePlan()
+    }
+  }
+
+  /**
+   * Generate a lite plan - basic overview and approach.
+   */
+  private generateLitePlan(): string {
+    return `
+# Implementation Plan (Lite)
 
 ## Task
-${this.card.title}
+${this.card!.title}
 
 ## Description
-${this.card.body || 'No description provided'}
+${this.card!.body || 'No description provided'}
 
 ## Approach
 1. Analyze the requirements
 2. Identify files to modify
 3. Implement changes
-4. Run tests and linting
+4. Run verification commands
 5. Commit and push
 
-## Files to Touch
-- To be determined during implementation
-
 ## Commands to Run
-${(this.policy.worker?.allowedCommands || []).map((c) => `- ${c}`).join('\n')}
+${(this.policy.worker?.allowedCommands || []).map((c) => `- ${c}`).join('\n') || '- None specified'}
+`.trim()
+  }
+
+  /**
+   * Generate a spec plan - detailed specification with file analysis.
+   */
+  private generateSpecPlan(): string {
+    const lintCmd = this.policy.worker?.lintCommand
+    const testCmd = this.policy.worker?.testCommand
+    const buildCmd = this.policy.worker?.buildCommand
+
+    return `
+# Implementation Specification (Spec)
+
+## Task
+${this.card!.title}
+
+## Description
+${this.card!.body || 'No description provided'}
+
+## Analysis Requirements
+Before implementing, analyze the following:
+1. Identify all files that need to be modified
+2. List any new files that need to be created
+3. Check for existing patterns in the codebase to follow
+4. Identify any dependencies or related components
+
+## Implementation Steps
+1. **Preparation**
+   - Review existing code structure
+   - Identify integration points
+
+2. **Core Changes**
+   - Implement the main functionality
+   - Follow existing code patterns and conventions
+
+3. **Integration**
+   - Wire up new components
+   - Update any necessary imports/exports
+
+4. **Testing**
+   - Add or update tests as needed
+   - Verify existing tests still pass
+
+## Verification
+${lintCmd ? `- Lint: \`${lintCmd}\`` : ''}
+${testCmd ? `- Test: \`${testCmd}\`` : ''}
+${buildCmd ? `- Build: \`${buildCmd}\`` : ''}
+
+## Allowed Commands
+${(this.policy.worker?.allowedCommands || []).map((c) => `- ${c}`).join('\n') || '- None specified'}
+
+## Forbidden Paths
+${(this.policy.worker?.forbidPaths || []).map((p) => `- ${p}`).join('\n') || '- None'}
+`.trim()
+  }
+
+  /**
+   * Generate a full plan - comprehensive with risk analysis.
+   */
+  private generateFullPlan(): string {
+    const lintCmd = this.policy.worker?.lintCommand
+    const testCmd = this.policy.worker?.testCommand
+    const buildCmd = this.policy.worker?.buildCommand
+
+    return `
+# Comprehensive Implementation Plan (Full)
+
+## Task
+${this.card!.title}
+
+## Description
+${this.card!.body || 'No description provided'}
+
+## Pre-Implementation Analysis
+Before making any changes:
+1. **Codebase Exploration**
+   - Map the relevant parts of the codebase
+   - Identify all files that might be affected
+   - Understand the data flow and dependencies
+
+2. **Pattern Recognition**
+   - Identify coding patterns used in similar features
+   - Note any architectural conventions
+   - Check for reusable components or utilities
+
+3. **Risk Assessment**
+   - Identify potential breaking changes
+   - Note any performance considerations
+   - Consider backward compatibility
+
+## Implementation Phases
+
+### Phase 1: Foundation
+- Set up any necessary infrastructure
+- Create new files/modules if needed
+- Establish type definitions
+
+### Phase 2: Core Implementation
+- Implement the main functionality
+- Follow TDD where appropriate
+- Keep changes atomic and reviewable
+
+### Phase 3: Integration
+- Connect new code with existing systems
+- Update any configuration files
+- Wire up UI components if applicable
+
+### Phase 4: Polish
+- Handle edge cases
+- Add error handling
+- Improve code clarity
+
+## Testing Strategy
+1. **Unit Tests**
+   - Test individual functions/components
+   - Cover edge cases
+
+2. **Integration Tests**
+   - Test component interactions
+   - Verify data flow
+
+3. **Manual Verification**
+   - Test the full user flow
+   - Verify in development environment
+
+## Verification Commands
+${lintCmd ? `- Lint: \`${lintCmd}\`` : ''}
+${testCmd ? `- Test: \`${testCmd}\`` : ''}
+${buildCmd ? `- Build: \`${buildCmd}\`` : ''}
+
+## Constraints
+### Allowed Commands
+${(this.policy.worker?.allowedCommands || []).map((c) => `- ${c}`).join('\n') || '- None specified'}
+
+### Forbidden Paths
+${(this.policy.worker?.forbidPaths || []).map((p) => `- ${p}`).join('\n') || '- None'}
 
 ## Expected Outcomes
-- Task requirements are met
-- All tests pass
+- All acceptance criteria from the task are met
+- All tests pass (existing and new)
 - Code follows project conventions
+- No regressions introduced
 
-## Risks/Assumptions
-- Assuming clean codebase state
-- Assuming tests are comprehensive
+## Risks and Mitigations
+| Risk | Mitigation |
+|------|------------|
+| Breaking existing functionality | Run full test suite before and after |
+| Performance degradation | Profile critical paths if applicable |
+| Incomplete implementation | Validate against all acceptance criteria |
+
+## Rollback Plan
+If issues are discovered after merge:
+1. Revert the PR/MR
+2. Document what went wrong
+3. Create follow-up issue for proper fix
 `.trim()
-
-    return plan
   }
 
   private async runAI(plan: string): Promise<boolean> {
@@ -1408,6 +1790,9 @@ Forbidden paths: ${(this.policy.worker?.forbidPaths || []).join(', ')}
     try {
       this.log(`Running ${tool} with ${maxMinutes} minute timeout`)
 
+      // Check for any follow-up instructions before building prompt
+      this.checkFollowUpInstructions()
+
       // Build the prompt for the AI tool
       const prompt = await this.buildAIPrompt(plan)
 
@@ -1425,6 +1810,9 @@ Forbidden paths: ${(this.policy.worker?.forbidPaths || []).join(', ')}
       } else if (tool === 'codex') {
         await this.runCodex(prompt, timeoutMs)
       }
+
+      // Mark any follow-up instructions as applied after successful AI run
+      this.markFollowUpInstructionsApplied()
 
       this.log('AI implementation completed')
       return true
@@ -1533,7 +1921,7 @@ ${this.policy.worker?.buildCommand ? `- Build: ${this.policy.worker.buildCommand
 
 ## Project Memory (from .patchwork)
 ${repoContext}
-
+${this.buildFollowUpContext()}
 Please implement the changes now.`
   }
 
@@ -2223,12 +2611,65 @@ export async function runWorker(jobId: string): Promise<WorkerResult> {
   const finalState = getJob(jobId)?.state
   if (result.phase === 'canceled' || finalState === 'canceled') {
     updateJobState(jobId, 'canceled', result, result.error)
+    // Clean up any pending approvals and follow-up instructions
+    deletePlanApprovalsByJob(jobId)
+    deleteFollowUpInstructionsByJob(jobId)
+  } else if (result.phase === 'pending_approval' || finalState === 'pending_approval') {
+    // Job is waiting for plan approval - don't update state, it's already set
+    // The job will be resumed when the plan is approved
   } else if (result.success) {
     updateJobState(jobId, 'succeeded', result)
+    // Clean up approval records and follow-up instructions on success
+    deletePlanApprovalsByJob(jobId)
+    deleteFollowUpInstructionsByJob(jobId)
   } else {
     updateJobState(jobId, 'failed', result, result.error)
+    // Clean up any pending approvals and follow-up instructions on failure
+    deletePlanApprovalsByJob(jobId)
+    deleteFollowUpInstructionsByJob(jobId)
   }
   broadcastToRenderers('stateUpdated')
 
   return result
+}
+
+/**
+ * Resume a worker job after plan approval.
+ * This is called when a pending_approval job is approved.
+ */
+export async function resumeWorkerAfterApproval(jobId: string): Promise<WorkerResult> {
+  const job = getJob(jobId)
+  if (!job) {
+    return { success: false, phase: 'init', error: 'Job not found' }
+  }
+
+  if (job.state !== 'pending_approval') {
+    return { success: false, phase: 'init', error: 'Job is not pending approval' }
+  }
+
+  // Check the plan approval status
+  const approval = getPlanApprovalByJob(jobId)
+  if (!approval) {
+    return { success: false, phase: 'init', error: 'No plan approval found' }
+  }
+
+  if (approval.status === 'pending') {
+    return { success: false, phase: 'pending_approval', error: 'Plan still pending approval' }
+  }
+
+  if (approval.status === 'rejected') {
+    updateJobState(jobId, 'canceled', { success: false, phase: 'canceled', error: 'Plan rejected' }, 'Plan rejected by reviewer')
+    deletePlanApprovalsByJob(jobId)
+    deleteFollowUpInstructionsByJob(jobId)
+    broadcastToRenderers('stateUpdated')
+    return { success: false, phase: 'canceled', error: 'Plan rejected by reviewer' }
+  }
+
+  // Plan is approved or skipped - resume the job
+  // Update job state back to running
+  updateJobState(jobId, 'running', { success: false, phase: 'ai', plan: approval.plan })
+  broadcastToRenderers('stateUpdated')
+
+  // Run the worker again - it will continue from where it left off
+  return runWorker(jobId)
 }

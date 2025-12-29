@@ -15,6 +15,10 @@ import { registerSettingsHandlers } from './settings'
 import { registerAIHandlers } from './ai'
 import { registerOnboardingHandlers } from './onboarding'
 import { registerWorktreeHandlers } from './worktree'
+import { registerConfigHandlers } from './config'
+import { registerPlanApprovalHandlers } from './plan-approval'
+import { registerFollowUpInstructionHandlers } from './follow-up-instructions'
+import { registerUsageHandlers } from './usage'
 import { sendToAllTabs } from '../../tabManager'
 
 let mainWindowRef: BrowserWindow | null = null
@@ -47,6 +51,10 @@ export function registerAllHandlers(mainWindow: BrowserWindow): void {
   registerAIHandlers()
   registerOnboardingHandlers(notifyRenderer)
   registerWorktreeHandlers(notifyRenderer)
+  registerConfigHandlers(notifyRenderer)
+  registerPlanApprovalHandlers(notifyRenderer)
+  registerFollowUpInstructionHandlers(notifyRenderer)
+  registerUsageHandlers(notifyRenderer)
 }
 
 // Re-export individual registrations for granular use
@@ -59,7 +67,11 @@ export {
   registerSettingsHandlers,
   registerAIHandlers,
   registerOnboardingHandlers,
-  registerWorktreeHandlers
+  registerWorktreeHandlers,
+  registerConfigHandlers,
+  registerPlanApprovalHandlers,
+  registerFollowUpInstructionHandlers,
+  registerUsageHandlers
 }
 
 // Re-export onboarding helpers used by repo handlers

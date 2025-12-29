@@ -28,9 +28,13 @@ import {
   Key,
   Unlink,
   Eye,
-  EyeOff
+  EyeOff,
+  Brain,
+  Zap,
+  ClipboardList,
+  Users
 } from 'lucide-react'
-import type { PolicyConfig, Project, ThemePreference } from '../../../shared/types'
+import type { PolicyConfig, Project, ThemePreference, ThinkingMode, PlanningMode, MergeStrategy, ConflictResolution } from '../../../shared/types'
 import { useTheme } from '../context/ThemeContext'
 import { ShortcutsEditor } from './ShortcutsEditor'
 import type { ShortcutBinding } from '@shared/shortcuts'
@@ -85,6 +89,84 @@ interface E2ESettings {
   timeoutMinutes: number
   createTestsIfMissing: boolean
   testCommand: string
+}
+
+interface ThinkingSettings {
+  enabled: boolean
+  mode: ThinkingMode
+  budgetTokens: number | undefined
+}
+
+function readThinkingSettings(project: Project): ThinkingSettings {
+  const defaults: ThinkingSettings = {
+    enabled: true,
+    mode: 'medium',
+    budgetTokens: undefined
+  }
+  if (!project.policy_json) return defaults
+  try {
+    const policy = JSON.parse(project.policy_json) as PolicyConfig
+    return {
+      enabled: policy?.features?.thinking?.enabled ?? defaults.enabled,
+      mode: policy?.features?.thinking?.mode ?? defaults.mode,
+      budgetTokens: policy?.features?.thinking?.budgetTokens ?? defaults.budgetTokens
+    }
+  } catch {
+    return defaults
+  }
+}
+
+interface PlanningSettings {
+  enabled: boolean
+  mode: PlanningMode
+  approvalRequired: boolean
+}
+
+function readPlanningSettings(project: Project): PlanningSettings {
+  const defaults: PlanningSettings = {
+    enabled: true,
+    mode: 'lite',
+    approvalRequired: false
+  }
+  if (!project.policy_json) return defaults
+  try {
+    const policy = JSON.parse(project.policy_json) as PolicyConfig
+    return {
+      enabled: policy?.features?.planning?.enabled ?? defaults.enabled,
+      mode: policy?.features?.planning?.mode ?? defaults.mode,
+      approvalRequired: policy?.features?.planning?.approvalRequired ?? defaults.approvalRequired
+    }
+  } catch {
+    return defaults
+  }
+}
+
+interface MultiAgentSettings {
+  enabled: boolean
+  mergeStrategy: MergeStrategy
+  conflictResolution: ConflictResolution
+  maxAgentsPerCard: number | undefined
+}
+
+function readMultiAgentSettings(project: Project): MultiAgentSettings {
+  const defaults: MultiAgentSettings = {
+    enabled: false,
+    mergeStrategy: 'sequential',
+    conflictResolution: 'auto',
+    maxAgentsPerCard: undefined
+  }
+  if (!project.policy_json) return defaults
+  try {
+    const policy = JSON.parse(project.policy_json) as PolicyConfig
+    return {
+      enabled: policy?.features?.multiAgent?.enabled ?? defaults.enabled,
+      mergeStrategy: policy?.features?.multiAgent?.mergeStrategy ?? defaults.mergeStrategy,
+      conflictResolution: policy?.features?.multiAgent?.conflictResolution ?? defaults.conflictResolution,
+      maxAgentsPerCard: policy?.features?.multiAgent?.maxAgentsPerCard ?? defaults.maxAgentsPerCard
+    }
+  } catch {
+    return defaults
+  }
 }
 
 function readE2ESettings(project: Project): E2ESettings {
@@ -173,6 +255,42 @@ export function SettingsDialog({
     () => readE2ESettings(project).testCommand
   )
 
+  // Thinking mode state
+  const [thinkingEnabled, setThinkingEnabled] = useState(
+    () => readThinkingSettings(project).enabled
+  )
+  const [thinkingMode, setThinkingMode] = useState<ThinkingMode>(
+    () => readThinkingSettings(project).mode
+  )
+  const [thinkingBudgetTokens, setThinkingBudgetTokens] = useState<string>(
+    () => readThinkingSettings(project).budgetTokens?.toString() || ''
+  )
+
+  // Planning mode state
+  const [planningEnabled, setPlanningEnabled] = useState(
+    () => readPlanningSettings(project).enabled
+  )
+  const [planningMode, setPlanningMode] = useState<PlanningMode>(
+    () => readPlanningSettings(project).mode
+  )
+  const [planApprovalRequired, setPlanApprovalRequired] = useState(
+    () => readPlanningSettings(project).approvalRequired
+  )
+
+  // Multi-Agent state
+  const [multiAgentEnabled, setMultiAgentEnabled] = useState(
+    () => readMultiAgentSettings(project).enabled
+  )
+  const [mergeStrategy, setMergeStrategy] = useState<MergeStrategy>(
+    () => readMultiAgentSettings(project).mergeStrategy
+  )
+  const [conflictResolution, setConflictResolution] = useState<ConflictResolution>(
+    () => readMultiAgentSettings(project).conflictResolution
+  )
+  const [maxAgentsPerCard, setMaxAgentsPerCard] = useState<string>(
+    () => readMultiAgentSettings(project).maxAgentsPerCard?.toString() || ''
+  )
+
   // Reset to appearance section only when dialog opens (not on every project change)
   useEffect(() => {
     if (open) {
@@ -195,6 +313,25 @@ export function SettingsDialog({
     setE2eTimeoutMinutes(e2e.timeoutMinutes)
     setE2eCreateTestsIfMissing(e2e.createTestsIfMissing)
     setE2eTestCommand(e2e.testCommand)
+
+    // Sync thinking settings
+    const thinking = readThinkingSettings(project)
+    setThinkingEnabled(thinking.enabled)
+    setThinkingMode(thinking.mode)
+    setThinkingBudgetTokens(thinking.budgetTokens?.toString() || '')
+
+    // Sync planning settings
+    const planning = readPlanningSettings(project)
+    setPlanningEnabled(planning.enabled)
+    setPlanningMode(planning.mode)
+    setPlanApprovalRequired(planning.approvalRequired)
+
+    // Sync multi-agent settings
+    const multiAgent = readMultiAgentSettings(project)
+    setMultiAgentEnabled(multiAgent.enabled)
+    setMergeStrategy(multiAgent.mergeStrategy)
+    setConflictResolution(multiAgent.conflictResolution)
+    setMaxAgentsPerCard(multiAgent.maxAgentsPerCard?.toString() || '')
 
     // Load API keys
     const loadApiKeys = async () => {
@@ -351,6 +488,25 @@ export function SettingsDialog({
     [project]
   )
 
+  const updateThinkingSetting = useCallback(
+    async (update: Partial<ThinkingSettings>) => {
+      try {
+        await window.projectAPI.updateFeatureConfig('thinking', update)
+        toast.success('Thinking settings updated')
+      } catch (err) {
+        toast.error('Failed to update thinking settings', {
+          description: err instanceof Error ? err.message : 'Unknown error'
+        })
+        // Reload settings on error
+        const thinking = readThinkingSettings(project)
+        setThinkingEnabled(thinking.enabled)
+        setThinkingMode(thinking.mode)
+        setThinkingBudgetTokens(thinking.budgetTokens?.toString() || '')
+      }
+    },
+    [project]
+  )
+
   const handleE2eEnabledChange = useCallback(
     (enabled: boolean) => {
       setE2eEnabled(enabled)
@@ -399,6 +555,137 @@ export function SettingsDialog({
   const handleE2eTestCommandBlur = useCallback(() => {
     updateE2ESetting({ testCommand: e2eTestCommand || undefined })
   }, [e2eTestCommand, updateE2ESetting])
+
+  // Thinking mode handlers
+  const handleThinkingEnabledChange = useCallback(
+    (enabled: boolean) => {
+      setThinkingEnabled(enabled)
+      updateThinkingSetting({ enabled })
+    },
+    [updateThinkingSetting]
+  )
+
+  const handleThinkingModeChange = useCallback(
+    (mode: ThinkingMode) => {
+      setThinkingMode(mode)
+      updateThinkingSetting({ mode })
+    },
+    [updateThinkingSetting]
+  )
+
+  const handleThinkingBudgetChange = useCallback((value: string) => {
+    setThinkingBudgetTokens(value)
+  }, [])
+
+  const handleThinkingBudgetBlur = useCallback(() => {
+    const num = parseInt(thinkingBudgetTokens, 10)
+    if (num > 0) {
+      updateThinkingSetting({ budgetTokens: num })
+    } else if (thinkingBudgetTokens === '') {
+      updateThinkingSetting({ budgetTokens: undefined })
+    }
+  }, [thinkingBudgetTokens, updateThinkingSetting])
+
+  // Planning mode handlers
+  const updatePlanningSetting = useCallback(
+    async (update: Partial<PlanningSettings>) => {
+      try {
+        await window.projectAPI.updateFeatureConfig('planning', update)
+        toast.success('Planning settings updated')
+      } catch (err) {
+        toast.error('Failed to update planning settings', {
+          description: err instanceof Error ? err.message : 'Unknown error'
+        })
+        // Reload settings on error
+        const planning = readPlanningSettings(project)
+        setPlanningEnabled(planning.enabled)
+        setPlanningMode(planning.mode)
+      }
+    },
+    [project]
+  )
+
+  const handlePlanningEnabledChange = useCallback(
+    (enabled: boolean) => {
+      setPlanningEnabled(enabled)
+      updatePlanningSetting({ enabled })
+    },
+    [updatePlanningSetting]
+  )
+
+  const handlePlanningModeChange = useCallback(
+    (mode: PlanningMode) => {
+      setPlanningMode(mode)
+      updatePlanningSetting({ mode })
+    },
+    [updatePlanningSetting]
+  )
+
+  const handlePlanApprovalRequiredChange = useCallback(
+    (required: boolean) => {
+      setPlanApprovalRequired(required)
+      updatePlanningSetting({ approvalRequired: required })
+    },
+    [updatePlanningSetting]
+  )
+
+  // Multi-Agent handlers
+  const updateMultiAgentSetting = useCallback(
+    async (update: Partial<MultiAgentSettings>) => {
+      try {
+        await window.projectAPI.updateFeatureConfig('multiAgent', update)
+        toast.success('Multi-Agent settings updated')
+      } catch (err) {
+        toast.error('Failed to update Multi-Agent settings', {
+          description: err instanceof Error ? err.message : 'Unknown error'
+        })
+        // Reload settings on error
+        const multiAgent = readMultiAgentSettings(project)
+        setMultiAgentEnabled(multiAgent.enabled)
+        setMergeStrategy(multiAgent.mergeStrategy)
+        setConflictResolution(multiAgent.conflictResolution)
+        setMaxAgentsPerCard(multiAgent.maxAgentsPerCard?.toString() || '')
+      }
+    },
+    [project]
+  )
+
+  const handleMultiAgentEnabledChange = useCallback(
+    (enabled: boolean) => {
+      setMultiAgentEnabled(enabled)
+      updateMultiAgentSetting({ enabled })
+    },
+    [updateMultiAgentSetting]
+  )
+
+  const handleMergeStrategyChange = useCallback(
+    (strategy: MergeStrategy) => {
+      setMergeStrategy(strategy)
+      updateMultiAgentSetting({ mergeStrategy: strategy })
+    },
+    [updateMultiAgentSetting]
+  )
+
+  const handleConflictResolutionChange = useCallback(
+    (resolution: ConflictResolution) => {
+      setConflictResolution(resolution)
+      updateMultiAgentSetting({ conflictResolution: resolution })
+    },
+    [updateMultiAgentSetting]
+  )
+
+  const handleMaxAgentsPerCardChange = useCallback((value: string) => {
+    setMaxAgentsPerCard(value)
+  }, [])
+
+  const handleMaxAgentsPerCardBlur = useCallback(() => {
+    const num = parseInt(maxAgentsPerCard, 10)
+    if (num > 0) {
+      updateMultiAgentSetting({ maxAgentsPerCard: num })
+    } else if (maxAgentsPerCard === '') {
+      updateMultiAgentSetting({ maxAgentsPerCard: undefined })
+    }
+  }, [maxAgentsPerCard, updateMultiAgentSetting])
 
   const handleSaveAnthropicKey = useCallback(async () => {
     setSavingAnthropicKey(true)
@@ -524,6 +811,115 @@ export function SettingsDialog({
       title: 'Codex',
       description: 'Prefer the Codex CLI when the worker runs.',
       icon: <Code className="h-4 w-4 text-foreground/70" />
+    }
+  ]
+
+  const thinkingModeOptions: {
+    id: ThinkingMode
+    title: string
+    description: string
+    tokens: string
+    icon: ReactNode
+  }[] = [
+    {
+      id: 'none',
+      title: 'None',
+      description: 'Standard processing without extended thinking.',
+      tokens: '0',
+      icon: <Zap className="h-4 w-4 text-foreground/70" />
+    },
+    {
+      id: 'medium',
+      title: 'Medium',
+      description: 'Balanced thinking for most tasks.',
+      tokens: '~1K',
+      icon: <Brain className="h-4 w-4 text-foreground/70" />
+    },
+    {
+      id: 'deep',
+      title: 'Deep',
+      description: 'More thorough analysis for complex problems.',
+      tokens: '~4K',
+      icon: <Brain className="h-4 w-4 text-foreground/70" />
+    },
+    {
+      id: 'ultra',
+      title: 'Ultra',
+      description: 'Maximum thinking depth for difficult tasks.',
+      tokens: '~16K',
+      icon: <Brain className="h-4 w-4 text-foreground/70" />
+    }
+  ]
+
+  const planningModeOptions: {
+    id: PlanningMode
+    title: string
+    description: string
+    icon: ReactNode
+  }[] = [
+    {
+      id: 'skip',
+      title: 'Skip',
+      description: 'No planning phase, proceed directly to implementation.',
+      icon: <Zap className="h-4 w-4 text-foreground/70" />
+    },
+    {
+      id: 'lite',
+      title: 'Lite',
+      description: 'Basic plan with task overview and high-level approach.',
+      icon: <ClipboardList className="h-4 w-4 text-foreground/70" />
+    },
+    {
+      id: 'spec',
+      title: 'Spec',
+      description: 'Detailed specification with file analysis and dependencies.',
+      icon: <ClipboardList className="h-4 w-4 text-foreground/70" />
+    },
+    {
+      id: 'full',
+      title: 'Full',
+      description: 'Comprehensive plan with risk analysis and verification steps.',
+      icon: <ClipboardList className="h-4 w-4 text-foreground/70" />
+    }
+  ]
+
+  const mergeStrategyOptions: {
+    id: MergeStrategy
+    title: string
+    description: string
+    icon: ReactNode
+  }[] = [
+    {
+      id: 'sequential',
+      title: 'Sequential',
+      description: 'Agents work one at a time, changes applied in order.',
+      icon: <Users className="h-4 w-4 text-foreground/70" />
+    },
+    {
+      id: 'parallel-merge',
+      title: 'Parallel Merge',
+      description: 'Agents work simultaneously, changes merged at the end.',
+      icon: <Users className="h-4 w-4 text-foreground/70" />
+    }
+  ]
+
+  const conflictResolutionOptions: {
+    id: ConflictResolution
+    title: string
+    description: string
+    icon: ReactNode
+  }[] = [
+    {
+      id: 'auto',
+      title: 'Automatic',
+      description: 'AI automatically resolves merge conflicts.',
+      icon: <Sparkles className="h-4 w-4 text-foreground/70" />
+    },
+    {
+      id: 'manual',
+      title: 'Manual',
+      description: 'Pause for user review when conflicts occur.',
+      icon: <AlertTriangle className="h-4 w-4 text-foreground/70" />
     }
   ]
 
@@ -757,6 +1153,263 @@ export function SettingsDialog({
                 Stored in this project&apos;s policy (database). The worker still falls back if the
                 selected CLI isn&apos;t installed.
               </p>
+            </div>
+
+            <div className="border-t pt-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Brain className="h-4 w-4 text-foreground/70" />
+                <h3 className="text-sm font-medium">Extended Thinking</h3>
+              </div>
+              <div className="flex items-center justify-between gap-4 rounded-lg border p-3 mb-3">
+                <div className="flex-1">
+                  <div className="font-medium text-sm">Enable Extended Thinking</div>
+                  <div className="text-xs text-muted-foreground">
+                    Allow Claude to &quot;think&quot; longer before responding, improving complex reasoning.
+                  </div>
+                </div>
+                <Switch checked={thinkingEnabled} onCheckedChange={handleThinkingEnabledChange} />
+              </div>
+
+              {thinkingEnabled && (
+                <>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    Select thinking depth (more tokens = longer thinking time):
+                  </p>
+                  <div className="grid gap-2 mb-3">
+                    {thinkingModeOptions
+                      .filter((opt) => opt.id !== 'none')
+                      .map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => handleThinkingModeChange(opt.id)}
+                          className={cn(
+                            'flex items-center gap-3 rounded-lg border p-3 text-left transition-colors',
+                            thinkingMode === opt.id
+                              ? 'border-primary bg-primary/5'
+                              : 'hover:bg-muted/50'
+                          )}
+                        >
+                          <div
+                            className={cn(
+                              'flex h-4 w-4 items-center justify-center rounded-full border',
+                              thinkingMode === opt.id
+                                ? 'border-primary bg-primary text-primary-foreground'
+                                : 'border-muted-foreground'
+                            )}
+                          >
+                            {thinkingMode === opt.id && <Check className="h-3 w-3" />}
+                          </div>
+                          {opt.icon}
+                          <div className="flex-1">
+                            <div className="font-medium">
+                              {opt.title}{' '}
+                              <span className="text-xs text-muted-foreground">
+                                ({opt.tokens} tokens)
+                              </span>
+                            </div>
+                            <div className="text-xs text-muted-foreground">{opt.description}</div>
+                          </div>
+                        </button>
+                      ))}
+                  </div>
+
+                  <div className="rounded-lg border p-3">
+                    <div className="font-medium text-sm mb-1">Custom Token Budget</div>
+                    <div className="text-xs text-muted-foreground mb-2">
+                      Override the default budget (leave empty to use mode default)
+                    </div>
+                    <Input
+                      type="number"
+                      min={0}
+                      placeholder="e.g. 2048"
+                      value={thinkingBudgetTokens}
+                      onChange={(e) => handleThinkingBudgetChange(e.target.value)}
+                      onBlur={handleThinkingBudgetBlur}
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="border-t pt-4">
+              <div className="flex items-center gap-2 mb-3">
+                <ClipboardList className="h-4 w-4 text-foreground/70" />
+                <h3 className="text-sm font-medium">Planning Mode</h3>
+              </div>
+              <div className="flex items-center justify-between gap-4 rounded-lg border p-3 mb-3">
+                <div className="flex-1">
+                  <div className="font-medium text-sm">Enable Planning</div>
+                  <div className="text-xs text-muted-foreground">
+                    Generate an implementation plan before coding to improve task success.
+                  </div>
+                </div>
+                <Switch checked={planningEnabled} onCheckedChange={handlePlanningEnabledChange} />
+              </div>
+
+              {planningEnabled && (
+                <>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    Select planning depth (more detail = better guidance for AI):
+                  </p>
+                  <div className="grid gap-2 mb-4">
+                    {planningModeOptions
+                      .filter((opt) => opt.id !== 'skip')
+                      .map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => handlePlanningModeChange(opt.id)}
+                          className={cn(
+                            'flex items-center gap-3 rounded-lg border p-3 text-left transition-colors',
+                            planningMode === opt.id
+                              ? 'border-primary bg-primary/5'
+                              : 'hover:bg-muted/50'
+                          )}
+                        >
+                          <div
+                            className={cn(
+                              'flex h-4 w-4 items-center justify-center rounded-full border',
+                              planningMode === opt.id
+                                ? 'border-primary bg-primary text-primary-foreground'
+                                : 'border-muted-foreground'
+                            )}
+                          >
+                            {planningMode === opt.id && <Check className="h-3 w-3" />}
+                          </div>
+                          {opt.icon}
+                          <div className="flex-1">
+                            <div className="font-medium">{opt.title}</div>
+                            <div className="text-xs text-muted-foreground">{opt.description}</div>
+                          </div>
+                        </button>
+                      ))}
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                    <div className="flex-1">
+                      <div className="font-medium text-sm">Require Plan Approval</div>
+                      <div className="text-xs text-muted-foreground">
+                        Pause the worker after plan generation for manual review before AI starts coding.
+                      </div>
+                    </div>
+                    <Switch
+                      checked={planApprovalRequired}
+                      onCheckedChange={handlePlanApprovalRequiredChange}
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="border-t pt-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Users className="h-4 w-4 text-foreground/70" />
+                <h3 className="text-sm font-medium">Multi-Agent Mode</h3>
+              </div>
+              <div className="flex items-center justify-between gap-4 rounded-lg border p-3 mb-3">
+                <div className="flex-1">
+                  <div className="font-medium text-sm">Enable Multi-Agent</div>
+                  <div className="text-xs text-muted-foreground">
+                    Allow multiple AI agents to work on different cards concurrently.
+                  </div>
+                </div>
+                <Switch checked={multiAgentEnabled} onCheckedChange={handleMultiAgentEnabledChange} />
+              </div>
+
+              {multiAgentEnabled && (
+                <>
+                  <div className="mb-4">
+                    <p className="text-xs text-muted-foreground mb-2">
+                      How agents coordinate their work:
+                    </p>
+                    <div className="grid gap-2">
+                      {mergeStrategyOptions.map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => handleMergeStrategyChange(opt.id)}
+                          className={cn(
+                            'flex items-center gap-3 rounded-lg border p-3 text-left transition-colors',
+                            mergeStrategy === opt.id
+                              ? 'border-primary bg-primary/5'
+                              : 'hover:bg-muted/50'
+                          )}
+                        >
+                          <div
+                            className={cn(
+                              'flex h-4 w-4 items-center justify-center rounded-full border',
+                              mergeStrategy === opt.id
+                                ? 'border-primary bg-primary text-primary-foreground'
+                                : 'border-muted-foreground'
+                            )}
+                          >
+                            {mergeStrategy === opt.id && <Check className="h-3 w-3" />}
+                          </div>
+                          {opt.icon}
+                          <div className="flex-1">
+                            <div className="font-medium">{opt.title}</div>
+                            <div className="text-xs text-muted-foreground">{opt.description}</div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="mb-4">
+                    <p className="text-xs text-muted-foreground mb-2">
+                      How to handle merge conflicts:
+                    </p>
+                    <div className="grid gap-2">
+                      {conflictResolutionOptions.map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => handleConflictResolutionChange(opt.id)}
+                          className={cn(
+                            'flex items-center gap-3 rounded-lg border p-3 text-left transition-colors',
+                            conflictResolution === opt.id
+                              ? 'border-primary bg-primary/5'
+                              : 'hover:bg-muted/50'
+                          )}
+                        >
+                          <div
+                            className={cn(
+                              'flex h-4 w-4 items-center justify-center rounded-full border',
+                              conflictResolution === opt.id
+                                ? 'border-primary bg-primary text-primary-foreground'
+                                : 'border-muted-foreground'
+                            )}
+                          >
+                            {conflictResolution === opt.id && <Check className="h-3 w-3" />}
+                          </div>
+                          {opt.icon}
+                          <div className="flex-1">
+                            <div className="font-medium">{opt.title}</div>
+                            <div className="text-xs text-muted-foreground">{opt.description}</div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border p-3">
+                    <div className="font-medium text-sm mb-1">Max Agents Per Card</div>
+                    <div className="text-xs text-muted-foreground mb-2">
+                      Maximum concurrent agents working on a single card (leave empty for unlimited)
+                    </div>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={10}
+                      placeholder="e.g. 3"
+                      value={maxAgentsPerCard}
+                      onChange={(e) => handleMaxAgentsPerCardChange(e.target.value)}
+                      onBlur={handleMaxAgentsPerCardBlur}
+                    />
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="border-t pt-4">

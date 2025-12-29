@@ -221,11 +221,25 @@ async function attemptE2EFix(
   const hasClaude = await checkCommand('claude')
   const hasCodex = await checkCommand('codex')
 
+  // Get thinking mode configuration from policy
+  const thinkingConfig = ctx.policy.features?.thinking
+  const thinkingEnabled = thinkingConfig?.enabled !== false
+  const thinkingMode = thinkingEnabled ? thinkingConfig?.mode : undefined
+  const thinkingBudget = thinkingConfig?.budgetTokens
+
   try {
     if (hasClaude) {
       try {
         log('Attempting E2E fix with Claude Code...')
-        await runClaudeCode(prompt, timeoutMs, cwd, log, isCanceled)
+        await runClaudeCode({
+          prompt,
+          timeoutMs,
+          cwd,
+          log,
+          isCanceled,
+          thinkingMode,
+          thinkingBudget
+        })
         return true
       } catch (error) {
         if (error instanceof WorkerCanceledError) throw error
@@ -275,11 +289,25 @@ async function createE2ETests(
   const hasClaude = await checkCommand('claude')
   const hasCodex = await checkCommand('codex')
 
+  // Get thinking mode configuration from policy
+  const thinkingConfig = ctx.policy.features?.thinking
+  const thinkingEnabled = thinkingConfig?.enabled !== false
+  const thinkingMode = thinkingEnabled ? thinkingConfig?.mode : undefined
+  const thinkingBudget = thinkingConfig?.budgetTokens
+
   try {
     if (hasClaude) {
       try {
         log('Creating E2E tests with Claude Code...')
-        await runClaudeCode(prompt, timeoutMs, cwd, log, isCanceled)
+        await runClaudeCode({
+          prompt,
+          timeoutMs,
+          cwd,
+          log,
+          isCanceled,
+          thinkingMode,
+          thinkingBudget
+        })
         return true
       } catch (error) {
         if (error instanceof WorkerCanceledError) throw error

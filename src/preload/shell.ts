@@ -417,6 +417,7 @@ const shellAPI: ShellAPI = {
 
 const allowedInvokeChannels = [
   'updateProjectPolicy',
+  'updateFeatureConfig',
   'setApiKey',
   'getApiKey',
   'resetLabelWizard',
