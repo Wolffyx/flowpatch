@@ -349,6 +349,128 @@ function createTables(database: Database.Database): void {
       updated_at TEXT NOT NULL
     );
   `)
+
+  // Agent chat messages table (for interactive chat during worker execution)
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS agent_chat_messages (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      card_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'sent',
+      metadata_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT,
+      FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE,
+      FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE CASCADE,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_chat_job ON agent_chat_messages(job_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_chat_card ON agent_chat_messages(card_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_chat_project ON agent_chat_messages(project_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_chat_role ON agent_chat_messages(role);
+    CREATE INDEX IF NOT EXISTS idx_agent_chat_created ON agent_chat_messages(created_at);
+  `)
+
+  // AI profiles table (for storing different AI configuration profiles)
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS ai_profiles (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      is_default INTEGER NOT NULL DEFAULT 0,
+
+      -- Model configuration
+      model_provider TEXT NOT NULL DEFAULT 'auto',
+      model_name TEXT,
+
+      -- Model parameters
+      temperature REAL,
+      max_tokens INTEGER,
+      top_p REAL,
+
+      -- Custom instructions
+      system_prompt TEXT,
+
+      -- AI Features
+      thinking_enabled INTEGER,
+      thinking_mode TEXT,
+      thinking_budget_tokens INTEGER,
+      planning_enabled INTEGER,
+      planning_mode TEXT,
+
+      -- Timestamps
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+      UNIQUE(project_id, name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_ai_profiles_project ON ai_profiles(project_id);
+    CREATE INDEX IF NOT EXISTS idx_ai_profiles_default ON ai_profiles(project_id, is_default);
+  `)
+
+  // Feature suggestions table (for user-submitted feature ideas)
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS feature_suggestions (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'feature',
+      priority INTEGER NOT NULL DEFAULT 0,
+      vote_count INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'open',
+      created_by TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_feature_suggestions_project ON feature_suggestions(project_id);
+    CREATE INDEX IF NOT EXISTS idx_feature_suggestions_status ON feature_suggestions(status);
+    CREATE INDEX IF NOT EXISTS idx_feature_suggestions_category ON feature_suggestions(category);
+    CREATE INDEX IF NOT EXISTS idx_feature_suggestions_votes ON feature_suggestions(vote_count);
+  `)
+
+  // Feature suggestion votes table (for tracking votes on suggestions)
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS feature_suggestion_votes (
+      id TEXT PRIMARY KEY,
+      suggestion_id TEXT NOT NULL,
+      voter_id TEXT,
+      vote_type TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (suggestion_id) REFERENCES feature_suggestions(id) ON DELETE CASCADE,
+      UNIQUE(suggestion_id, voter_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_feature_votes_suggestion ON feature_suggestion_votes(suggestion_id);
+  `)
+
+  // Card dependencies table (for dependency blocking feature)
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS card_dependencies (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      card_id TEXT NOT NULL,
+      depends_on_card_id TEXT NOT NULL,
+      blocking_statuses_json TEXT NOT NULL DEFAULT '["ready","in_progress"]',
+      required_status TEXT NOT NULL DEFAULT 'done',
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+      FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE CASCADE,
+      FOREIGN KEY (depends_on_card_id) REFERENCES cards(id) ON DELETE CASCADE,
+      UNIQUE(card_id, depends_on_card_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_card_deps_project ON card_dependencies(project_id);
+    CREATE INDEX IF NOT EXISTS idx_card_deps_card ON card_dependencies(card_id);
+    CREATE INDEX IF NOT EXISTS idx_card_deps_depends_on ON card_dependencies(depends_on_card_id);
+    CREATE INDEX IF NOT EXISTS idx_card_deps_active ON card_dependencies(card_id, is_active);
+  `)
 }
 
 /**

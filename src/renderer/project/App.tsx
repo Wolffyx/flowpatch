@@ -24,10 +24,12 @@ import {
 } from '../src/components/StarterCardsWizardDialog'
 import { WorkspaceDialog } from './components/WorkspaceDialog'
 import { UsageIndicator } from './components/UsageIndicator'
+import { FeatureSuggestionsDialog } from '../src/components/FeatureSuggestionsDialog'
+import { GraphViewDialog } from '../src/components/GraphViewDialog'
 import { Button } from '../src/components/ui/button'
 import { Switch } from '../src/components/ui/switch'
 import { Badge } from '../src/components/ui/badge'
-import { RefreshCw, Bot, Loader2, Play, Pause, AlertCircle, Terminal, Folder } from 'lucide-react'
+import { RefreshCw, Bot, Loader2, Play, Pause, AlertCircle, Terminal, Folder, Lightbulb, Network } from 'lucide-react'
 import { cn } from '../src/lib/utils'
 import {
   buildLinkedPullRequestIndex,
@@ -124,6 +126,22 @@ declare global {
           monthly_cost_used: number
         }[]
       }>
+
+      // Dependencies
+      getDependenciesByProject: () => Promise<{
+        dependencies: {
+          id: string
+          project_id: string
+          card_id: string
+          depends_on_card_id: string
+          blocking_statuses: CardStatus[]
+          required_status: CardStatus
+          is_active: number
+          created_at: string
+          updated_at: string
+        }[]
+        error?: string
+      }>
     }
   }
 }
@@ -155,6 +173,8 @@ export default function App(): React.JSX.Element {
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [workspaceStatus, setWorkspaceStatus] = useState<PatchworkWorkspaceStatus | null>(null)
   const [workspaceStatusLoading, setWorkspaceStatusLoading] = useState(false)
+  const [featureSuggestionsOpen, setFeatureSuggestionsOpen] = useState(false)
+  const [graphViewOpen, setGraphViewOpen] = useState(false)
 
   // Initial load - shows loading indicator
   async function loadWorkspaceStatus(): Promise<void> {
@@ -616,6 +636,26 @@ export default function App(): React.JSX.Element {
             Logs
           </Button>
 
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setFeatureSuggestionsOpen(true)}
+            title="Feature Suggestions"
+          >
+            <Lightbulb className="mr-2 h-4 w-4" />
+            Ideas
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setGraphViewOpen(true)}
+            title="Dependency Graph"
+          >
+            <Network className="mr-2 h-4 w-4" />
+            Graph
+          </Button>
+
           {/* Sync button */}
           <Button variant="outline" size="sm" onClick={handleSync} disabled={isSyncing}>
             <RefreshCw className={cn('mr-2 h-4 w-4', isSyncing && 'animate-spin')} />
@@ -709,6 +749,22 @@ export default function App(): React.JSX.Element {
           project={project}
         />
       )}
+
+      {/* Feature Suggestions Dialog */}
+      <FeatureSuggestionsDialog
+        open={featureSuggestionsOpen}
+        onOpenChange={setFeatureSuggestionsOpen}
+      />
+
+      {/* Graph View Dialog */}
+      <GraphViewDialog
+        open={graphViewOpen}
+        onOpenChange={setGraphViewOpen}
+        onSelectCard={(cardId) => {
+          setSelectedCardId(cardId)
+          setGraphViewOpen(false)
+        }}
+      />
 
       <Toaster />
     </div>

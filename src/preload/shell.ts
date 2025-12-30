@@ -83,6 +83,19 @@ export interface ShellAPI {
   getShortcuts: () => Promise<ShortcutBinding[]>
   setShortcuts: (patch: Record<string, string | null>) => Promise<void>
   onShortcutsUpdated: (callback: () => void) => () => void
+
+  // Agent Chat
+  getChatMessages: (jobId: string, limit?: number) => Promise<{ messages: AgentChatMessage[]; error?: string }>
+  sendChatMessage: (params: {
+    jobId: string
+    cardId: string
+    projectId: string
+    content: string
+    metadata?: Record<string, unknown>
+  }) => Promise<{ message: AgentChatMessage; error?: string }>
+  markChatAsRead: (jobId: string) => Promise<{ success: boolean; error?: string }>
+  clearChatHistory: (jobId: string) => Promise<{ success: boolean; count: number; error?: string }>
+  onChatMessage: (callback: (data: { type: string; message: AgentChatMessage; jobId: string }) => void) => () => void
 }
 
 // Re-export types from shared (these would be imported in actual usage)
@@ -159,6 +172,23 @@ interface TabData {
 interface TabManagerState {
   tabs: TabData[]
   activeTabId: string | null
+}
+
+// Agent Chat types
+type AgentChatRole = 'user' | 'agent' | 'system'
+type AgentChatMessageStatus = 'sent' | 'delivered' | 'read' | 'error'
+
+interface AgentChatMessage {
+  id: string
+  job_id: string
+  card_id: string
+  project_id: string
+  role: AgentChatRole
+  content: string
+  status: AgentChatMessageStatus
+  metadata_json?: string
+  created_at: string
+  updated_at?: string
 }
 
 // ============================================================================
@@ -408,6 +438,42 @@ const shellAPI: ShellAPI = {
     const handler = (_event: IpcRendererEvent) => callback()
     ipcRenderer.on('shortcutsUpdated', handler)
     return () => ipcRenderer.removeListener('shortcutsUpdated', handler)
+  },
+
+  // -------------------------------------------------------------------------
+  // Agent Chat
+  // -------------------------------------------------------------------------
+
+  getChatMessages: (jobId: string, limit?: number) => {
+    return ipcRenderer.invoke('chat:getMessages', { jobId, limit })
+  },
+
+  sendChatMessage: (params: {
+    jobId: string
+    cardId: string
+    projectId: string
+    content: string
+    metadata?: Record<string, unknown>
+  }) => {
+    return ipcRenderer.invoke('chat:sendMessage', params)
+  },
+
+  markChatAsRead: (jobId: string) => {
+    return ipcRenderer.invoke('chat:markAsRead', jobId)
+  },
+
+  clearChatHistory: (jobId: string) => {
+    return ipcRenderer.invoke('chat:clearHistory', jobId)
+  },
+
+  onChatMessage: (callback: (data: { type: string; message: AgentChatMessage; jobId: string }) => void) => {
+    const handler = (_event: IpcRendererEvent, data: { type: string; message: AgentChatMessage; jobId: string }) => {
+      callback(data)
+    }
+    ipcRenderer.on('agentChatMessage', handler)
+    return () => {
+      ipcRenderer.removeListener('agentChatMessage', handler)
+    }
   }
 }
 

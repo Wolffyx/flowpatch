@@ -492,6 +492,44 @@ export interface FollowUpInstruction {
 }
 
 // ============================================================================
+// Agent Chat Types
+// ============================================================================
+
+/** Role of the chat message sender */
+export type AgentChatRole = 'user' | 'agent' | 'system'
+
+/** Status of an agent chat message */
+export type AgentChatMessageStatus = 'sent' | 'delivered' | 'read' | 'error'
+
+/**
+ * A chat message between user and agent during worker execution
+ */
+export interface AgentChatMessage {
+  id: string
+  job_id: string
+  card_id: string
+  project_id: string
+  role: AgentChatRole
+  content: string
+  status: AgentChatMessageStatus
+  /** Optional metadata like tool usage, thinking, etc. */
+  metadata_json?: string
+  created_at: string
+  updated_at?: string
+}
+
+/**
+ * Summary of unread chat messages for UI badges
+ */
+export interface AgentChatSummary {
+  job_id: string
+  total_messages: number
+  unread_count: number
+  last_message_at?: string
+  last_agent_message?: string
+}
+
+// ============================================================================
 // Feature Configuration Types
 // ============================================================================
 
@@ -632,6 +670,62 @@ export interface ImagesConfig {
 }
 
 /**
+ * AI model provider options
+ */
+export type AIModelProvider = 'anthropic' | 'openai' | 'auto'
+
+/**
+ * Individual AI profile definition
+ */
+export interface AIProfile {
+  /** Unique profile ID */
+  id: string
+  /** Project ID this profile belongs to */
+  project_id: string
+  /** Display name for the profile */
+  name: string
+  /** Optional description */
+  description?: string
+  /** Whether this is the default profile for the project */
+  is_default: boolean
+
+  // Model configuration
+  /** Model provider (anthropic, openai, auto) */
+  model_provider: AIModelProvider
+  /** Specific model name (e.g., claude-3-opus, gpt-4) */
+  model_name?: string
+
+  // Model parameters
+  /** Temperature setting (0.0-1.0) */
+  temperature?: number
+  /** Maximum tokens for response */
+  max_tokens?: number
+  /** Top-p (nucleus sampling) value */
+  top_p?: number
+
+  // Custom instructions
+  /** Custom system prompt/instructions */
+  system_prompt?: string
+
+  // AI Features
+  /** Enable extended thinking */
+  thinking_enabled?: boolean
+  /** Thinking mode level */
+  thinking_mode?: ThinkingMode
+  /** Token budget for thinking */
+  thinking_budget_tokens?: number
+
+  /** Enable planning mode */
+  planning_enabled?: boolean
+  /** Planning mode level */
+  planning_mode?: PlanningMode
+
+  // Timestamps
+  created_at: string
+  updated_at: string
+}
+
+/**
  * AI profiles configuration
  */
 export interface AIProfilesConfig {
@@ -649,6 +743,81 @@ export interface FeatureSuggestionsConfig {
   enabled: boolean
   /** Auto-generate suggestions on project analysis */
   autoSuggestOnAnalysis: boolean
+}
+
+/**
+ * Feature suggestion status
+ */
+export type FeatureSuggestionStatus = 'open' | 'in_progress' | 'completed' | 'rejected'
+
+/**
+ * Feature suggestion category
+ */
+export type FeatureSuggestionCategory = 'ui' | 'performance' | 'feature' | 'bug' | 'documentation' | 'other'
+
+/**
+ * Feature suggestion entity
+ */
+export interface FeatureSuggestion {
+  id: string
+  project_id: string
+  title: string
+  description: string
+  category: FeatureSuggestionCategory
+  priority: number
+  vote_count: number
+  status: FeatureSuggestionStatus
+  created_by?: string
+  created_at: string
+  updated_at: string
+}
+
+/**
+ * Feature suggestion vote
+ */
+export interface FeatureSuggestionVote {
+  id: string
+  suggestion_id: string
+  voter_id?: string
+  vote_type: 'up' | 'down'
+  created_at: string
+}
+
+/**
+ * Dependency type for card relationships
+ */
+export type DependencyType = 'blocks' | 'blocked_by'
+
+/**
+ * Card dependency relationship
+ */
+export interface CardDependency {
+  id: string
+  project_id: string
+  card_id: string
+  depends_on_card_id: string
+  blocking_statuses: CardStatus[]
+  required_status: CardStatus
+  is_active: number
+  created_at: string
+  updated_at: string
+}
+
+/**
+ * Card dependency with related card info for display
+ */
+export interface CardDependencyWithCard extends CardDependency {
+  depends_on_card?: Card
+  card?: Card
+}
+
+/**
+ * Result of checking if a card can move to a status
+ */
+export interface DependencyCheckResult {
+  canMove: boolean
+  blockedBy: CardDependencyWithCard[]
+  reason?: string
 }
 
 /**

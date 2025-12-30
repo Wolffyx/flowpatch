@@ -32,9 +32,17 @@ import {
   Brain,
   Zap,
   ClipboardList,
-  Users
+  Users,
+  User,
+  Plus,
+  Pencil,
+  Trash2,
+  Copy,
+  Star,
+  Volume2,
+  VolumeX
 } from 'lucide-react'
-import type { PolicyConfig, Project, ThemePreference, ThinkingMode, PlanningMode, MergeStrategy, ConflictResolution } from '../../../shared/types'
+import type { PolicyConfig, Project, ThemePreference, ThinkingMode, PlanningMode, MergeStrategy, ConflictResolution, AIProfile, AIModelProvider } from '../../../shared/types'
 import { useTheme } from '../context/ThemeContext'
 import { ShortcutsEditor } from './ShortcutsEditor'
 import type { ShortcutBinding } from '@shared/shortcuts'
@@ -169,6 +177,34 @@ function readMultiAgentSettings(project: Project): MultiAgentSettings {
   }
 }
 
+interface NotificationsSettings {
+  audioEnabled: boolean
+  soundOnComplete: boolean
+  soundOnError: boolean
+  soundOnApproval: boolean
+}
+
+function readNotificationsSettings(project: Project): NotificationsSettings {
+  const defaults: NotificationsSettings = {
+    audioEnabled: false,
+    soundOnComplete: true,
+    soundOnError: true,
+    soundOnApproval: true
+  }
+  if (!project.policy_json) return defaults
+  try {
+    const policy = JSON.parse(project.policy_json) as PolicyConfig
+    return {
+      audioEnabled: policy?.features?.notifications?.audioEnabled ?? defaults.audioEnabled,
+      soundOnComplete: policy?.features?.notifications?.soundOnComplete ?? defaults.soundOnComplete,
+      soundOnError: policy?.features?.notifications?.soundOnError ?? defaults.soundOnError,
+      soundOnApproval: policy?.features?.notifications?.soundOnApproval ?? defaults.soundOnApproval
+    }
+  } catch {
+    return defaults
+  }
+}
+
 function readE2ESettings(project: Project): E2ESettings {
   const defaults: E2ESettings = {
     enabled: false,
@@ -290,6 +326,56 @@ export function SettingsDialog({
   const [maxAgentsPerCard, setMaxAgentsPerCard] = useState<string>(
     () => readMultiAgentSettings(project).maxAgentsPerCard?.toString() || ''
   )
+
+  // Audio notifications state
+  const [audioEnabled, setAudioEnabled] = useState(
+    () => readNotificationsSettings(project).audioEnabled
+  )
+  const [soundOnComplete, setSoundOnComplete] = useState(
+    () => readNotificationsSettings(project).soundOnComplete
+  )
+  const [soundOnError, setSoundOnError] = useState(
+    () => readNotificationsSettings(project).soundOnError
+  )
+  const [soundOnApproval, setSoundOnApproval] = useState(
+    () => readNotificationsSettings(project).soundOnApproval
+  )
+
+  // AI Profiles state
+  const [aiProfiles, setAiProfiles] = useState<AIProfile[]>([])
+  const [aiProfilesLoading, setAiProfilesLoading] = useState(false)
+  const [editingProfile, setEditingProfile] = useState<AIProfile | null>(null)
+  const [isCreatingProfile, setIsCreatingProfile] = useState(false)
+  const [profileFormData, setProfileFormData] = useState<{
+    name: string
+    description: string
+    modelProvider: AIModelProvider
+    modelName: string
+    temperature: string
+    maxTokens: string
+    topP: string
+    systemPrompt: string
+    thinkingEnabled: boolean
+    thinkingMode: ThinkingMode
+    thinkingBudgetTokens: string
+    planningEnabled: boolean
+    planningMode: PlanningMode
+  }>({
+    name: '',
+    description: '',
+    modelProvider: 'auto',
+    modelName: '',
+    temperature: '',
+    maxTokens: '',
+    topP: '',
+    systemPrompt: '',
+    thinkingEnabled: false,
+    thinkingMode: 'medium',
+    thinkingBudgetTokens: '',
+    planningEnabled: false,
+    planningMode: 'lite'
+  })
+  const [savingProfile, setSavingProfile] = useState(false)
 
   // Reset to appearance section only when dialog opens (not on every project change)
   useEffect(() => {
@@ -686,6 +772,184 @@ export function SettingsDialog({
       updateMultiAgentSetting({ maxAgentsPerCard: undefined })
     }
   }, [maxAgentsPerCard, updateMultiAgentSetting])
+
+  // AI Profiles handlers
+  const loadAIProfiles = useCallback(async () => {
+    setAiProfilesLoading(true)
+    try {
+      const result = await window.projectAPI.getAIProfiles()
+      if (result.error) {
+        toast.error('Failed to load AI profiles', { description: result.error })
+      } else {
+        setAiProfiles(result.profiles)
+      }
+    } catch (err) {
+      toast.error('Failed to load AI profiles', {
+        description: err instanceof Error ? err.message : 'Unknown error'
+      })
+    } finally {
+      setAiProfilesLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (open && activeSection === 'ai-agents') {
+      loadAIProfiles()
+    }
+  }, [open, activeSection, loadAIProfiles])
+
+  const resetProfileForm = useCallback(() => {
+    setProfileFormData({
+      name: '',
+      description: '',
+      modelProvider: 'auto',
+      modelName: '',
+      temperature: '',
+      maxTokens: '',
+      topP: '',
+      systemPrompt: '',
+      thinkingEnabled: false,
+      thinkingMode: 'medium',
+      thinkingBudgetTokens: '',
+      planningEnabled: false,
+      planningMode: 'lite'
+    })
+  }, [])
+
+  const handleCreateProfile = useCallback(() => {
+    resetProfileForm()
+    setEditingProfile(null)
+    setIsCreatingProfile(true)
+  }, [resetProfileForm])
+
+  const handleEditProfile = useCallback((profile: AIProfile) => {
+    setProfileFormData({
+      name: profile.name,
+      description: profile.description || '',
+      modelProvider: profile.model_provider,
+      modelName: profile.model_name || '',
+      temperature: profile.temperature?.toString() || '',
+      maxTokens: profile.max_tokens?.toString() || '',
+      topP: profile.top_p?.toString() || '',
+      systemPrompt: profile.system_prompt || '',
+      thinkingEnabled: profile.thinking_enabled ?? false,
+      thinkingMode: profile.thinking_mode || 'medium',
+      thinkingBudgetTokens: profile.thinking_budget_tokens?.toString() || '',
+      planningEnabled: profile.planning_enabled ?? false,
+      planningMode: profile.planning_mode || 'lite'
+    })
+    setEditingProfile(profile)
+    setIsCreatingProfile(true)
+  }, [])
+
+  const handleCancelProfileEdit = useCallback(() => {
+    setIsCreatingProfile(false)
+    setEditingProfile(null)
+    resetProfileForm()
+  }, [resetProfileForm])
+
+  const handleSaveProfile = useCallback(async () => {
+    if (!profileFormData.name.trim()) {
+      toast.error('Profile name is required')
+      return
+    }
+
+    setSavingProfile(true)
+    try {
+      const data = {
+        name: profileFormData.name.trim(),
+        description: profileFormData.description.trim() || undefined,
+        modelProvider: profileFormData.modelProvider,
+        modelName: profileFormData.modelName.trim() || undefined,
+        temperature: profileFormData.temperature ? parseFloat(profileFormData.temperature) : undefined,
+        maxTokens: profileFormData.maxTokens ? parseInt(profileFormData.maxTokens, 10) : undefined,
+        topP: profileFormData.topP ? parseFloat(profileFormData.topP) : undefined,
+        systemPrompt: profileFormData.systemPrompt.trim() || undefined,
+        thinkingEnabled: profileFormData.thinkingEnabled,
+        thinkingMode: profileFormData.thinkingMode,
+        thinkingBudgetTokens: profileFormData.thinkingBudgetTokens ? parseInt(profileFormData.thinkingBudgetTokens, 10) : undefined,
+        planningEnabled: profileFormData.planningEnabled,
+        planningMode: profileFormData.planningMode
+      }
+
+      if (editingProfile) {
+        const result = await window.projectAPI.updateAIProfile(editingProfile.id, data)
+        if (result.error) {
+          toast.error('Failed to update profile', { description: result.error })
+        } else {
+          toast.success('Profile updated')
+          setIsCreatingProfile(false)
+          setEditingProfile(null)
+          resetProfileForm()
+          loadAIProfiles()
+        }
+      } else {
+        const result = await window.projectAPI.createAIProfile(data)
+        if (result.error) {
+          toast.error('Failed to create profile', { description: result.error })
+        } else {
+          toast.success('Profile created')
+          setIsCreatingProfile(false)
+          resetProfileForm()
+          loadAIProfiles()
+        }
+      }
+    } catch (err) {
+      toast.error('Failed to save profile', {
+        description: err instanceof Error ? err.message : 'Unknown error'
+      })
+    } finally {
+      setSavingProfile(false)
+    }
+  }, [profileFormData, editingProfile, resetProfileForm, loadAIProfiles])
+
+  const handleDeleteProfile = useCallback(async (profileId: string) => {
+    try {
+      const result = await window.projectAPI.deleteAIProfile(profileId)
+      if (result.error) {
+        toast.error('Failed to delete profile', { description: result.error })
+      } else {
+        toast.success('Profile deleted')
+        loadAIProfiles()
+      }
+    } catch (err) {
+      toast.error('Failed to delete profile', {
+        description: err instanceof Error ? err.message : 'Unknown error'
+      })
+    }
+  }, [loadAIProfiles])
+
+  const handleSetDefaultProfile = useCallback(async (profileId: string) => {
+    try {
+      const result = await window.projectAPI.setDefaultAIProfile(profileId)
+      if (result.error) {
+        toast.error('Failed to set default profile', { description: result.error })
+      } else {
+        toast.success('Default profile set')
+        loadAIProfiles()
+      }
+    } catch (err) {
+      toast.error('Failed to set default profile', {
+        description: err instanceof Error ? err.message : 'Unknown error'
+      })
+    }
+  }, [loadAIProfiles])
+
+  const handleDuplicateProfile = useCallback(async (profileId: string, currentName: string) => {
+    try {
+      const result = await window.projectAPI.duplicateAIProfile(profileId, `${currentName} (Copy)`)
+      if (result.error) {
+        toast.error('Failed to duplicate profile', { description: result.error })
+      } else {
+        toast.success('Profile duplicated')
+        loadAIProfiles()
+      }
+    } catch (err) {
+      toast.error('Failed to duplicate profile', {
+        description: err instanceof Error ? err.message : 'Unknown error'
+      })
+    }
+  }, [loadAIProfiles])
 
   const handleSaveAnthropicKey = useCallback(async () => {
     setSavingAnthropicKey(true)
@@ -1113,7 +1377,300 @@ export function SettingsDialog({
       case 'ai-agents':
         return (
           <div className="grid gap-6">
+            {/* AI Profiles Section */}
             <div className="grid gap-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <User className="h-4 w-4 text-foreground/70" />
+                  <h3 className="text-sm font-medium">AI Profiles</h3>
+                </div>
+                {!isCreatingProfile && (
+                  <Button variant="outline" size="sm" onClick={handleCreateProfile}>
+                    <Plus className="h-3 w-3 mr-1" />
+                    New Profile
+                  </Button>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Create and manage AI configuration presets for different use cases.
+              </p>
+
+              {isCreatingProfile ? (
+                <div className="border rounded-lg p-4 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-medium text-sm">
+                      {editingProfile ? 'Edit Profile' : 'New Profile'}
+                    </h4>
+                    <Button variant="ghost" size="sm" onClick={handleCancelProfileEdit}>
+                      Cancel
+                    </Button>
+                  </div>
+
+                  <div className="grid gap-3">
+                    <div className="grid gap-1.5">
+                      <label className="text-xs font-medium">Name *</label>
+                      <Input
+                        placeholder="e.g., Fast Coding, Deep Analysis"
+                        value={profileFormData.name}
+                        onChange={(e) => setProfileFormData(prev => ({ ...prev, name: e.target.value }))}
+                      />
+                    </div>
+
+                    <div className="grid gap-1.5">
+                      <label className="text-xs font-medium">Description</label>
+                      <Input
+                        placeholder="Brief description of this profile"
+                        value={profileFormData.description}
+                        onChange={(e) => setProfileFormData(prev => ({ ...prev, description: e.target.value }))}
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="grid gap-1.5">
+                        <label className="text-xs font-medium">Model Provider</label>
+                        <select
+                          className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
+                          value={profileFormData.modelProvider}
+                          onChange={(e) => setProfileFormData(prev => ({ ...prev, modelProvider: e.target.value as AIModelProvider }))}
+                        >
+                          <option value="auto">Auto</option>
+                          <option value="anthropic">Anthropic</option>
+                          <option value="openai">OpenAI</option>
+                        </select>
+                      </div>
+
+                      <div className="grid gap-1.5">
+                        <label className="text-xs font-medium">Model Name</label>
+                        <Input
+                          placeholder="e.g., claude-3-opus"
+                          value={profileFormData.modelName}
+                          onChange={(e) => setProfileFormData(prev => ({ ...prev, modelName: e.target.value }))}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="grid gap-1.5">
+                        <label className="text-xs font-medium">Temperature</label>
+                        <Input
+                          type="number"
+                          min="0"
+                          max="2"
+                          step="0.1"
+                          placeholder="0.0-2.0"
+                          value={profileFormData.temperature}
+                          onChange={(e) => setProfileFormData(prev => ({ ...prev, temperature: e.target.value }))}
+                        />
+                      </div>
+
+                      <div className="grid gap-1.5">
+                        <label className="text-xs font-medium">Max Tokens</label>
+                        <Input
+                          type="number"
+                          min="1"
+                          placeholder="e.g., 4096"
+                          value={profileFormData.maxTokens}
+                          onChange={(e) => setProfileFormData(prev => ({ ...prev, maxTokens: e.target.value }))}
+                        />
+                      </div>
+
+                      <div className="grid gap-1.5">
+                        <label className="text-xs font-medium">Top P</label>
+                        <Input
+                          type="number"
+                          min="0"
+                          max="1"
+                          step="0.1"
+                          placeholder="0.0-1.0"
+                          value={profileFormData.topP}
+                          onChange={(e) => setProfileFormData(prev => ({ ...prev, topP: e.target.value }))}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid gap-1.5">
+                      <label className="text-xs font-medium">System Prompt</label>
+                      <textarea
+                        className="min-h-[80px] rounded-md border border-input bg-transparent px-3 py-2 text-sm resize-y"
+                        placeholder="Custom system instructions for this profile"
+                        value={profileFormData.systemPrompt}
+                        onChange={(e) => setProfileFormData(prev => ({ ...prev, systemPrompt: e.target.value }))}
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="flex items-center justify-between rounded-lg border p-3">
+                        <div>
+                          <div className="font-medium text-sm">Extended Thinking</div>
+                          <div className="text-xs text-muted-foreground">Enable deeper reasoning</div>
+                        </div>
+                        <Switch
+                          checked={profileFormData.thinkingEnabled}
+                          onCheckedChange={(checked) => setProfileFormData(prev => ({ ...prev, thinkingEnabled: checked }))}
+                        />
+                      </div>
+
+                      <div className="flex items-center justify-between rounded-lg border p-3">
+                        <div>
+                          <div className="font-medium text-sm">Planning</div>
+                          <div className="text-xs text-muted-foreground">Generate plan first</div>
+                        </div>
+                        <Switch
+                          checked={profileFormData.planningEnabled}
+                          onCheckedChange={(checked) => setProfileFormData(prev => ({ ...prev, planningEnabled: checked }))}
+                        />
+                      </div>
+                    </div>
+
+                    {profileFormData.thinkingEnabled && (
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="grid gap-1.5">
+                          <label className="text-xs font-medium">Thinking Mode</label>
+                          <select
+                            className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
+                            value={profileFormData.thinkingMode}
+                            onChange={(e) => setProfileFormData(prev => ({ ...prev, thinkingMode: e.target.value as ThinkingMode }))}
+                          >
+                            <option value="medium">Medium (~1K tokens)</option>
+                            <option value="deep">Deep (~4K tokens)</option>
+                            <option value="ultra">Ultra (~16K tokens)</option>
+                          </select>
+                        </div>
+
+                        <div className="grid gap-1.5">
+                          <label className="text-xs font-medium">Custom Budget</label>
+                          <Input
+                            type="number"
+                            min="0"
+                            placeholder="Token budget"
+                            value={profileFormData.thinkingBudgetTokens}
+                            onChange={(e) => setProfileFormData(prev => ({ ...prev, thinkingBudgetTokens: e.target.value }))}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {profileFormData.planningEnabled && (
+                      <div className="grid gap-1.5">
+                        <label className="text-xs font-medium">Planning Mode</label>
+                        <select
+                          className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
+                          value={profileFormData.planningMode}
+                          onChange={(e) => setProfileFormData(prev => ({ ...prev, planningMode: e.target.value as PlanningMode }))}
+                        >
+                          <option value="lite">Lite - Basic task overview</option>
+                          <option value="spec">Spec - Detailed specification</option>
+                          <option value="full">Full - Comprehensive plan</option>
+                        </select>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-2">
+                    <Button variant="outline" size="sm" onClick={handleCancelProfileEdit}>
+                      Cancel
+                    </Button>
+                    <Button size="sm" onClick={handleSaveProfile} disabled={savingProfile}>
+                      {savingProfile ? (
+                        <>
+                          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                          Saving...
+                        </>
+                      ) : editingProfile ? (
+                        'Save Changes'
+                      ) : (
+                        'Create Profile'
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              ) : aiProfilesLoading ? (
+                <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Loading profiles...
+                </div>
+              ) : aiProfiles.length === 0 ? (
+                <div className="text-center py-8 text-sm text-muted-foreground">
+                  No profiles yet. Create one to save AI configuration presets.
+                </div>
+              ) : (
+                <div className="grid gap-2">
+                  {aiProfiles.map((profile) => (
+                    <div
+                      key={profile.id}
+                      className={cn(
+                        'flex items-center justify-between gap-3 rounded-lg border p-3',
+                        profile.is_default && 'border-primary bg-primary/5'
+                      )}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-sm truncate">{profile.name}</span>
+                          {profile.is_default && (
+                            <span className="text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded">
+                              Default
+                            </span>
+                          )}
+                        </div>
+                        {profile.description && (
+                          <div className="text-xs text-muted-foreground truncate">
+                            {profile.description}
+                          </div>
+                        )}
+                        <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
+                          <span className="capitalize">{profile.model_provider}</span>
+                          {profile.model_name && <span>• {profile.model_name}</span>}
+                          {profile.thinking_enabled && <span>• Thinking</span>}
+                          {profile.planning_enabled && <span>• Planning</span>}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {!profile.is_default && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 w-8 p-0"
+                            title="Set as default"
+                            onClick={() => handleSetDefaultProfile(profile.id)}
+                          >
+                            <Star className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 w-8 p-0"
+                          title="Duplicate"
+                          onClick={() => handleDuplicateProfile(profile.id, profile.name)}
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 w-8 p-0"
+                          title="Edit"
+                          onClick={() => handleEditProfile(profile)}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                          title="Delete"
+                          onClick={() => handleDeleteProfile(profile.id)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="border-t pt-4">
               <h3 className="text-sm font-medium">Tool Preference</h3>
               <p className="text-xs text-muted-foreground">
                 Select which AI tool the worker should use.

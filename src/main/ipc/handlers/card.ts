@@ -15,7 +15,8 @@ import {
   createJob,
   getActiveWorkerJobForCard,
   cancelJob,
-  updateJobState
+  updateJobState,
+  checkCanMoveToStatus
 } from '../../db'
 import { SyncEngine } from '../../sync/engine'
 import { GithubAdapter } from '../../adapters/github'
@@ -182,8 +183,26 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
       payload: {
         cardId: string
         status: CardStatus
+        skipDependencyCheck?: boolean
       }
     ) => {
+      // Check dependencies unless explicitly skipped
+      if (!payload.skipDependencyCheck) {
+        const dependencyCheck = checkCanMoveToStatus(payload.cardId, payload.status)
+        if (!dependencyCheck.canMove) {
+          logAction('moveCard:blocked_by_dependencies', {
+            cardId: payload.cardId,
+            targetStatus: payload.status,
+            blockedBy: dependencyCheck.blockedBy.map((b) => b.depends_on_card_id)
+          })
+          return {
+            card: null,
+            error: dependencyCheck.reason ?? 'Blocked by dependencies',
+            blockedByDependencies: dependencyCheck.blockedBy
+          }
+        }
+      }
+
       const before = getCard(payload.cardId)
       const card = updateCardStatus(payload.cardId, payload.status)
       if (card) {

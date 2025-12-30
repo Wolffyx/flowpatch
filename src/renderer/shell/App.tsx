@@ -16,9 +16,11 @@ import { LogsPanel } from './components/LogsPanel'
 import { SettingsModal } from './components/SettingsModal'
 import { ActivityDialog } from './components/ActivityDialog'
 import { RepoStartDialog } from '../src/components/RepoStartDialog'
-import { Settings, Terminal, Minus, Square, X, Home, ListChecks, Trash2 } from 'lucide-react'
+import { Settings, Terminal, Minus, Square, X, Home, ListChecks, Trash2, MessageSquare, History } from 'lucide-react'
 import { Button } from '../src/components/ui/button'
 import { Badge } from '../src/components/ui/badge'
+import { GlobalAgentChatDialog } from './components/GlobalAgentChatDialog'
+import { SessionHistoryDialog } from './components/SessionHistoryDialog'
 import type { Project, CreateRepoPayload, Job } from '@shared/types'
 
 // Declare the shell API type
@@ -104,6 +106,62 @@ declare global {
       getThemePreference: () => Promise<'light' | 'dark' | 'system'>
       setThemePreference: (theme: 'light' | 'dark' | 'system') => Promise<void>
       getSystemTheme: () => Promise<'light' | 'dark'>
+
+      // Agent Chat
+      getChatMessages: (jobId: string, limit?: number) => Promise<{
+        messages: {
+          id: string
+          job_id: string
+          card_id: string
+          project_id: string
+          role: 'user' | 'agent' | 'system'
+          content: string
+          status: 'sent' | 'delivered' | 'read' | 'error'
+          metadata_json?: string
+          created_at: string
+          updated_at?: string
+        }[]
+        error?: string
+      }>
+      sendChatMessage: (params: {
+        jobId: string
+        cardId: string
+        projectId: string
+        content: string
+        metadata?: Record<string, unknown>
+      }) => Promise<{
+        message: {
+          id: string
+          job_id: string
+          card_id: string
+          project_id: string
+          role: 'user' | 'agent' | 'system'
+          content: string
+          status: 'sent' | 'delivered' | 'read' | 'error'
+          metadata_json?: string
+          created_at: string
+          updated_at?: string
+        }
+        error?: string
+      }>
+      markChatAsRead: (jobId: string) => Promise<{ success: boolean; error?: string }>
+      clearChatHistory: (jobId: string) => Promise<{ success: boolean; count: number; error?: string }>
+      onChatMessage: (callback: (data: {
+        type: string
+        message: {
+          id: string
+          job_id: string
+          card_id: string
+          project_id: string
+          role: 'user' | 'agent' | 'system'
+          content: string
+          status: 'sent' | 'delivered' | 'read' | 'error'
+          metadata_json?: string
+          created_at: string
+          updated_at?: string
+        }
+        jobId: string
+      }) => void) => () => void
     }
 
     // For RepoStartDialog compatibility
@@ -157,6 +215,8 @@ export default function App(): React.JSX.Element {
   const [logsPanelOpen, setLogsPanelOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [activityOpen, setActivityOpen] = useState(false)
+  const [chatOpen, setChatOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const [recentJobs, setRecentJobs] = useState<Job[]>([])
   const [repoDialogOpen, setRepoDialogOpen] = useState(false)
 
@@ -234,9 +294,9 @@ export default function App(): React.JSX.Element {
 
   // Notify main process when modal dialogs open/close
   useEffect(() => {
-    const anyModalOpen = settingsOpen || repoDialogOpen || activityOpen
+    const anyModalOpen = settingsOpen || repoDialogOpen || activityOpen || chatOpen || historyOpen
     window.shellAPI.setModalOpen(anyModalOpen)
-  }, [settingsOpen, repoDialogOpen, activityOpen])
+  }, [settingsOpen, repoDialogOpen, activityOpen, chatOpen, historyOpen])
 
   const loadProjects = async (): Promise<void> => {
     try {
@@ -494,6 +554,34 @@ export default function App(): React.JSX.Element {
             <ListChecks className="h-4 w-4" />
           </Button>
 
+          {/* Agent Chat */}
+          <Button
+            variant={chatOpen ? 'secondary' : 'ghost'}
+            size="sm"
+            className="h-7 px-2"
+            onClick={() => {
+              setChatOpen(true)
+              loadRecentJobs()
+            }}
+            title="Agent Chat"
+          >
+            <MessageSquare className="h-4 w-4" />
+          </Button>
+
+          {/* Session History */}
+          <Button
+            variant={historyOpen ? 'secondary' : 'ghost'}
+            size="sm"
+            className="h-7 px-2"
+            onClick={() => {
+              setHistoryOpen(true)
+              loadRecentJobs()
+            }}
+            title="Session History"
+          >
+            <History className="h-4 w-4" />
+          </Button>
+
           {/* Settings */}
           <Button
             variant="ghost"
@@ -617,6 +705,22 @@ export default function App(): React.JSX.Element {
       <ActivityDialog
         open={activityOpen}
         onOpenChange={setActivityOpen}
+        jobs={recentJobs}
+        projectNameById={Object.fromEntries(projects.map((p) => [p.id, p.name]))}
+      />
+
+      {/* Agent Chat Dialog */}
+      <GlobalAgentChatDialog
+        open={chatOpen}
+        onOpenChange={setChatOpen}
+        jobs={recentJobs}
+        projectNameById={Object.fromEntries(projects.map((p) => [p.id, p.name]))}
+      />
+
+      {/* Session History Dialog */}
+      <SessionHistoryDialog
+        open={historyOpen}
+        onOpenChange={setHistoryOpen}
         jobs={recentJobs}
         projectNameById={Object.fromEntries(projects.map((p) => [p.id, p.name]))}
       />

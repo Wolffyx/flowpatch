@@ -180,5 +180,86 @@ export {
 } from './usage'
 export type { UsageRecordCreate } from './usage'
 
+// Agent Chat
+export {
+  createChatMessage,
+  getChatMessage,
+  getChatMessagesByJob,
+  getChatMessagesByCard,
+  getChatMessagesByProject,
+  getRecentChatContext,
+  getUnreadCount,
+  getChatSummary,
+  updateMessageStatus,
+  markAllAsRead,
+  updateMessageContent,
+  deleteChatMessage,
+  deleteChatMessagesByJob,
+  deleteOldChatMessages,
+  buildChatContextForPrompt
+} from './agent-chat'
+
+// AI Profiles
+export {
+  createAIProfile,
+  getAIProfile,
+  getAIProfilesByProject,
+  getDefaultAIProfile,
+  getAIProfileByName,
+  countAIProfiles,
+  updateAIProfile,
+  setDefaultAIProfile,
+  deleteAIProfile,
+  deleteAIProfilesByProject,
+  duplicateAIProfile
+} from './ai-profiles'
+export type { CreateAIProfileData, UpdateAIProfileData } from './ai-profiles'
+
+// Feature Suggestions
+export {
+  createFeatureSuggestion,
+  getFeatureSuggestion,
+  getFeatureSuggestionsByProject,
+  countFeatureSuggestions,
+  updateFeatureSuggestion,
+  updateFeatureSuggestionStatus,
+  deleteFeatureSuggestion,
+  deleteFeatureSuggestionsByProject,
+  voteOnSuggestion,
+  getUserVote,
+  getVotesForSuggestion,
+  removeVote
+} from './feature-suggestions'
+export type {
+  CreateFeatureSuggestionData,
+  UpdateFeatureSuggestionData,
+  GetFeatureSuggestionsOptions
+} from './feature-suggestions'
+
+// Card Dependencies
+export {
+  createCardDependency,
+  getCardDependency,
+  getDependenciesForCard,
+  getDependenciesForCardWithCards,
+  getDependentsOfCard,
+  getDependenciesByProject,
+  countDependenciesForCard,
+  countDependentsOfCard,
+  checkCanMoveToStatus,
+  wouldCreateCycle,
+  updateCardDependency,
+  toggleDependency,
+  deleteCardDependency,
+  deleteDependenciesForCard,
+  deleteDependentsOfCard,
+  deleteDependenciesByProject,
+  deleteDependencyBetweenCards
+} from './card-dependencies'
+export type {
+  CreateCardDependencyData,
+  UpdateCardDependencyData
+} from './card-dependencies'
+
 // Utility re-export for backward compatibility
 export { generateId as cryptoRandomId } from '@shared/utils'

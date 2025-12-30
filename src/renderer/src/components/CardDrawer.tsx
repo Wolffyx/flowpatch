@@ -10,11 +10,16 @@ import {
   GitBranch,
   FolderOpen,
   Trash2,
-  GitPullRequest
+  GitPullRequest,
+  GitCompareArrows,
+  MessageSquare
 } from 'lucide-react'
 import { Button } from './ui/button'
 import { Badge } from './ui/badge'
 import { ScrollArea } from './ui/scroll-area'
+import { GitDiffDialog } from './GitDiffDialog'
+import { AgentChatDialog } from './AgentChatDialog'
+import { DependencyManager } from './DependencyManager'
 import { cn } from '../lib/utils'
 import { formatRelativeTime, parseLabels, parseAssignees } from '../lib/utils'
 import {
@@ -23,7 +28,8 @@ import {
   type CardLink,
   type Event,
   type CardStatus,
-  type Worktree
+  type Worktree,
+  type Job
 } from '../../../shared/types'
 
 interface CardDrawerProps {
@@ -47,16 +53,21 @@ export function CardDrawer({
 }: CardDrawerProps): React.JSX.Element | null {
   const [worktree, setWorktree] = useState<Worktree | null>(null)
   const [worktreeLoading, setWorktreeLoading] = useState(false)
+  const [diffDialogOpen, setDiffDialogOpen] = useState(false)
+  const [chatDialogOpen, setChatDialogOpen] = useState(false)
+  const [latestJob, setLatestJob] = useState<Job | null>(null)
 
-  // Load worktree info for this card
+  // Load worktree and latest job info for this card
   useEffect(() => {
     if (!card || !projectId) {
       setWorktree(null)
+      setLatestJob(null)
       return
     }
 
-    const loadWorktree = async (): Promise<void> => {
+    const loadData = async (): Promise<void> => {
       try {
+        // Load worktrees
         const worktrees = (await window.electron.ipcRenderer.invoke(
           'listWorktrees',
           projectId
@@ -65,12 +76,24 @@ export function CardDrawer({
           (wt) => wt.card_id === card.id && wt.status !== 'cleaned'
         )
         setWorktree(cardWorktree ?? null)
+
+        // Load latest job for this card
+        const jobs = (await window.projectAPI.getJobs()) as Job[]
+        const cardJobs = jobs.filter((j) => j.card_id === card.id)
+        if (cardJobs.length > 0) {
+          // Sort by created_at descending and get the most recent
+          cardJobs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+          setLatestJob(cardJobs[0])
+        } else {
+          setLatestJob(null)
+        }
       } catch {
         setWorktree(null)
+        setLatestJob(null)
       }
     }
 
-    loadWorktree()
+    loadData()
   }, [card?.id, projectId])
 
   const handleOpenWorktreeFolder = async (): Promise<void> => {
@@ -219,6 +242,11 @@ export function CardDrawer({
             </div>
           )}
 
+          {/* Dependencies */}
+          <div className="rounded-md bg-muted p-3">
+            <DependencyManager card={card} />
+          </div>
+
           {/* Status controls */}
           <div>
             <h4 className="text-sm font-medium mb-2">Status</h4>
@@ -281,6 +309,40 @@ export function CardDrawer({
             </div>
           )}
 
+          {/* Agent Chat - shown when there's a job for this card */}
+          {latestJob && (
+            <div>
+              <h4 className="text-sm font-medium mb-2">Agent Chat</h4>
+              <div className="space-y-2 rounded-md bg-muted p-3">
+                <div className="flex items-center gap-2 text-sm">
+                  <Badge
+                    variant={
+                      latestJob.state === 'failed'
+                        ? 'destructive'
+                        : latestJob.state === 'running'
+                          ? 'default'
+                          : 'secondary'
+                    }
+                  >
+                    {latestJob.state}
+                  </Badge>
+                  <span className="text-muted-foreground text-xs">
+                    {formatRelativeTime(latestJob.created_at)}
+                  </span>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setChatDialogOpen(true)}
+                  className="w-full"
+                >
+                  <MessageSquare className="h-4 w-4 mr-2" />
+                  Open Chat
+                </Button>
+              </div>
+            </div>
+          )}
+
           {/* Worktree info */}
           {worktree && (
             <div>
@@ -309,6 +371,15 @@ export function CardDrawer({
                   <p className="text-xs text-destructive">{worktree.last_error}</p>
                 )}
                 <div className="flex flex-wrap gap-2 mt-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setDiffDialogOpen(true)}
+                    disabled={worktreeLoading || worktree.status === 'cleaned'}
+                  >
+                    <GitCompareArrows className="h-3 w-3 mr-1" />
+                    View Diff
+                  </Button>
                   <Button
                     variant="outline"
                     size="sm"
@@ -341,6 +412,27 @@ export function CardDrawer({
                 </div>
               </div>
             </div>
+          )}
+
+          {/* Git Diff Dialog */}
+          {worktree && (
+            <GitDiffDialog
+              open={diffDialogOpen}
+              onOpenChange={setDiffDialogOpen}
+              worktreeId={worktree.id}
+              branchName={worktree.branch_name}
+            />
+          )}
+
+          {/* Agent Chat Dialog */}
+          {latestJob && card && (
+            <AgentChatDialog
+              open={chatDialogOpen}
+              onOpenChange={setChatDialogOpen}
+              jobId={latestJob.id}
+              cardId={card.id}
+              cardTitle={card.title}
+            />
           )}
 
           {/* Timeline */}

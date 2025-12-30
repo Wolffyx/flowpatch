@@ -19,6 +19,11 @@ import { registerConfigHandlers } from './config'
 import { registerPlanApprovalHandlers } from './plan-approval'
 import { registerFollowUpInstructionHandlers } from './follow-up-instructions'
 import { registerUsageHandlers } from './usage'
+import { registerDiffHandlers } from './diff'
+import { registerAgentChatHandlers } from './agent-chat'
+import { registerAIProfileHandlers } from './ai-profiles'
+import { registerFeatureSuggestionHandlers } from './feature-suggestions'
+import { registerDependencyHandlers } from './dependencies'
 import { sendToAllTabs } from '../../tabManager'
 
 let mainWindowRef: BrowserWindow | null = null
@@ -55,6 +60,11 @@ export function registerAllHandlers(mainWindow: BrowserWindow): void {
   registerPlanApprovalHandlers(notifyRenderer)
   registerFollowUpInstructionHandlers(notifyRenderer)
   registerUsageHandlers(notifyRenderer)
+  registerDiffHandlers()
+  registerAgentChatHandlers(notifyRenderer)
+  registerAIProfileHandlers(notifyRenderer)
+  registerFeatureSuggestionHandlers(notifyRenderer)
+  registerDependencyHandlers(notifyRenderer)
 }
 
 // Re-export individual registrations for granular use
@@ -71,7 +81,12 @@ export {
   registerConfigHandlers,
   registerPlanApprovalHandlers,
   registerFollowUpInstructionHandlers,
-  registerUsageHandlers
+  registerUsageHandlers,
+  registerDiffHandlers,
+  registerAgentChatHandlers,
+  registerAIProfileHandlers,
+  registerFeatureSuggestionHandlers,
+  registerDependencyHandlers
 }
 
 // Re-export onboarding helpers used by repo handlers
