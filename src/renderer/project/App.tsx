@@ -26,6 +26,7 @@ import { WorkspaceDialog } from './components/WorkspaceDialog'
 import { UsageIndicator } from './components/UsageIndicator'
 import { FeatureSuggestionsDialog } from '../src/components/FeatureSuggestionsDialog'
 import { GraphViewDialog } from '../src/components/GraphViewDialog'
+import { useAudioNotifications } from '../src/hooks/useAudioNotifications'
 import { Button } from '../src/components/ui/button'
 import { Switch } from '../src/components/ui/switch'
 import { Badge } from '../src/components/ui/badge'
@@ -175,6 +176,56 @@ export default function App(): React.JSX.Element {
   const [workspaceStatusLoading, setWorkspaceStatusLoading] = useState(false)
   const [featureSuggestionsOpen, setFeatureSuggestionsOpen] = useState(false)
   const [graphViewOpen, setGraphViewOpen] = useState(false)
+
+  // Audio notifications - read config from project policy
+  const notificationsConfig = useMemo(() => {
+    if (!project?.policy_json) {
+      return {
+        audioEnabled: false,
+        soundOnComplete: true,
+        soundOnError: true,
+        soundOnApproval: true
+      }
+    }
+    try {
+      const policy = JSON.parse(project.policy_json)
+      return {
+        audioEnabled: policy?.features?.notifications?.audioEnabled ?? false,
+        soundOnComplete: policy?.features?.notifications?.soundOnComplete ?? true,
+        soundOnError: policy?.features?.notifications?.soundOnError ?? true,
+        soundOnApproval: policy?.features?.notifications?.soundOnApproval ?? true
+      }
+    } catch {
+      return {
+        audioEnabled: false,
+        soundOnComplete: true,
+        soundOnError: true,
+        soundOnApproval: true
+      }
+    }
+  }, [project?.policy_json])
+
+  // Use audio notifications hook to play sounds on job state changes
+  const { initializeAudio } = useAudioNotifications({
+    config: notificationsConfig,
+    jobs,
+    enabled: notificationsConfig.audioEnabled
+  })
+
+  // Initialize audio on first user interaction
+  useEffect(() => {
+    const handleUserInteraction = (): void => {
+      initializeAudio()
+      window.removeEventListener('click', handleUserInteraction)
+      window.removeEventListener('keydown', handleUserInteraction)
+    }
+    window.addEventListener('click', handleUserInteraction)
+    window.addEventListener('keydown', handleUserInteraction)
+    return () => {
+      window.removeEventListener('click', handleUserInteraction)
+      window.removeEventListener('keydown', handleUserInteraction)
+    }
+  }, [initializeAudio])
 
   // Initial load - shows loading indicator
   async function loadWorkspaceStatus(): Promise<void> {

@@ -490,7 +490,16 @@ const allowedInvokeChannels = [
   'resetGithubProjectPrompt',
   'unlinkProject',
   'selectDirectory',
-  'createRepo'
+  'createRepo',
+  // E2E Testing
+  'updateE2ESettings',
+  // AI Profiles
+  'aiProfiles:list',
+  'aiProfiles:create',
+  'aiProfiles:update',
+  'aiProfiles:delete',
+  'aiProfiles:setDefault',
+  'aiProfiles:duplicate'
 ]
 
 const electronAPI = {

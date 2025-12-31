@@ -28,46 +28,6 @@ function getAudioContext(): AudioContext {
   return audioContext
 }
 
-// Generate a simple tone programmatically (no external files needed)
-function generateTone(
-  frequency: number,
-  duration: number,
-  type: OscillatorType = 'sine',
-  volume: number = 0.3
-): AudioBuffer {
-  const ctx = getAudioContext()
-  const sampleRate = ctx.sampleRate
-  const length = sampleRate * duration
-  const buffer = ctx.createBuffer(1, length, sampleRate)
-  const data = buffer.getChannelData(0)
-
-  for (let i = 0; i < length; i++) {
-    const t = i / sampleRate
-    // Apply envelope (fade in/out)
-    const envelope = Math.min(1, t * 20) * Math.min(1, (duration - t) * 20)
-    let sample = 0
-
-    switch (type) {
-      case 'sine':
-        sample = Math.sin(2 * Math.PI * frequency * t)
-        break
-      case 'square':
-        sample = Math.sign(Math.sin(2 * Math.PI * frequency * t))
-        break
-      case 'triangle':
-        sample = Math.asin(Math.sin(2 * Math.PI * frequency * t)) * (2 / Math.PI)
-        break
-      case 'sawtooth':
-        sample = 2 * ((frequency * t) % 1) - 1
-        break
-    }
-
-    data[i] = sample * envelope * volume
-  }
-
-  return buffer
-}
-
 // Generate a chord (multiple frequencies)
 function generateChord(
   frequencies: number[],

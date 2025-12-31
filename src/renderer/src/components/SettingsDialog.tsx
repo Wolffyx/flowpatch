@@ -773,6 +773,58 @@ export function SettingsDialog({
     }
   }, [maxAgentsPerCard, updateMultiAgentSetting])
 
+  // Audio notifications handlers
+  const updateNotificationSetting = useCallback(
+    async (update: Partial<NotificationsSettings>) => {
+      try {
+        await window.projectAPI.updateFeatureConfig('notifications', update)
+        toast.success('Notification settings updated')
+      } catch (err) {
+        toast.error('Failed to update notification settings', {
+          description: err instanceof Error ? err.message : 'Unknown error'
+        })
+        const notifications = readNotificationsSettings(project)
+        setAudioEnabled(notifications.audioEnabled)
+        setSoundOnComplete(notifications.soundOnComplete)
+        setSoundOnError(notifications.soundOnError)
+        setSoundOnApproval(notifications.soundOnApproval)
+      }
+    },
+    [project]
+  )
+
+  const handleAudioEnabledChange = useCallback(
+    (enabled: boolean) => {
+      setAudioEnabled(enabled)
+      updateNotificationSetting({ audioEnabled: enabled })
+    },
+    [updateNotificationSetting]
+  )
+
+  const handleSoundOnCompleteChange = useCallback(
+    (enabled: boolean) => {
+      setSoundOnComplete(enabled)
+      updateNotificationSetting({ soundOnComplete: enabled })
+    },
+    [updateNotificationSetting]
+  )
+
+  const handleSoundOnErrorChange = useCallback(
+    (enabled: boolean) => {
+      setSoundOnError(enabled)
+      updateNotificationSetting({ soundOnError: enabled })
+    },
+    [updateNotificationSetting]
+  )
+
+  const handleSoundOnApprovalChange = useCallback(
+    (enabled: boolean) => {
+      setSoundOnApproval(enabled)
+      updateNotificationSetting({ soundOnApproval: enabled })
+    },
+    [updateNotificationSetting]
+  )
+
   // AI Profiles handlers
   const loadAIProfiles = useCallback(async () => {
     setAiProfilesLoading(true)
@@ -1366,6 +1418,69 @@ export function SettingsDialog({
                       value={e2eTestCommand}
                       onChange={(e) => handleE2eTestCommandChange(e.target.value)}
                       onBlur={handleE2eTestCommandBlur}
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="grid gap-2">
+              <div className="flex items-center gap-2">
+                {audioEnabled ? (
+                  <Volume2 className="h-4 w-4 text-foreground/70" />
+                ) : (
+                  <VolumeX className="h-4 w-4 text-foreground/70" />
+                )}
+                <h3 className="text-sm font-medium">Audio Notifications</h3>
+              </div>
+              <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                <div className="flex-1">
+                  <div className="font-medium text-sm">Enable Audio Notifications</div>
+                  <div className="text-xs text-muted-foreground">
+                    Play sounds when tasks complete, fail, or need approval
+                  </div>
+                </div>
+                <Switch checked={audioEnabled} onCheckedChange={handleAudioEnabledChange} />
+              </div>
+
+              {audioEnabled && (
+                <>
+                  <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                    <div className="flex-1">
+                      <div className="font-medium text-sm">Sound on Completion</div>
+                      <div className="text-xs text-muted-foreground">
+                        Play a sound when a task completes successfully
+                      </div>
+                    </div>
+                    <Switch
+                      checked={soundOnComplete}
+                      onCheckedChange={handleSoundOnCompleteChange}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                    <div className="flex-1">
+                      <div className="font-medium text-sm">Sound on Error</div>
+                      <div className="text-xs text-muted-foreground">
+                        Play a sound when a task fails or encounters an error
+                      </div>
+                    </div>
+                    <Switch
+                      checked={soundOnError}
+                      onCheckedChange={handleSoundOnErrorChange}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                    <div className="flex-1">
+                      <div className="font-medium text-sm">Sound on Approval Needed</div>
+                      <div className="text-xs text-muted-foreground">
+                        Play a sound when a task requires your approval
+                      </div>
+                    </div>
+                    <Switch
+                      checked={soundOnApproval}
+                      onCheckedChange={handleSoundOnApprovalChange}
                     />
                   </div>
                 </>
