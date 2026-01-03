@@ -2,7 +2,9 @@
  * Event Database Operations
  */
 
-import { getDb } from './connection'
+import { desc, eq } from 'drizzle-orm'
+import { getDrizzle } from './drizzle'
+import { events } from './schema'
 import { generateId } from '@shared/utils'
 import type { Event, EventType } from '@shared/types'
 
@@ -12,20 +14,28 @@ export type { Event, EventType }
  * List events for a project.
  */
 export function listEvents(projectId: string, limit = 100): Event[] {
-  const d = getDb()
-  const stmt = d.prepare(
-    'SELECT * FROM events WHERE project_id = ? ORDER BY created_at DESC LIMIT ?'
-  )
-  return stmt.all(projectId, limit) as Event[]
+  const db = getDrizzle()
+  return db
+    .select()
+    .from(events)
+    .where(eq(events.project_id, projectId))
+    .orderBy(desc(events.created_at))
+    .limit(limit)
+    .all() as Event[]
 }
 
 /**
  * List events for a card.
  */
 export function listCardEvents(cardId: string, limit = 50): Event[] {
-  const d = getDb()
-  const stmt = d.prepare('SELECT * FROM events WHERE card_id = ? ORDER BY created_at DESC LIMIT ?')
-  return stmt.all(cardId, limit) as Event[]
+  const db = getDrizzle()
+  return db
+    .select()
+    .from(events)
+    .where(eq(events.card_id, cardId))
+    .orderBy(desc(events.created_at))
+    .limit(limit)
+    .all() as Event[]
 }
 
 /**
@@ -37,14 +47,18 @@ export function createEvent(
   cardId?: string,
   payload?: unknown
 ): Event {
-  const d = getDb()
+  const db = getDrizzle()
   const id = generateId()
   const now = new Date().toISOString()
-  d.prepare(
-    `
-    INSERT INTO events (id, project_id, card_id, type, payload_json, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `
-  ).run(id, projectId, cardId ?? null, type, payload ? JSON.stringify(payload) : null, now)
-  return d.prepare('SELECT * FROM events WHERE id = ?').get(id) as Event
+  db.insert(events)
+    .values({
+      id,
+      project_id: projectId,
+      card_id: cardId ?? null,
+      type,
+      payload_json: payload ? JSON.stringify(payload) : null,
+      created_at: now
+    })
+    .run()
+  return db.select().from(events).where(eq(events.id, id)).get() as Event
 }

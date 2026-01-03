@@ -4,7 +4,7 @@
  */
 
 import { ipcMain } from 'electron'
-import { spawn } from 'child_process'
+import { execFileSync, spawn } from 'child_process'
 import { mkdtemp, readFile, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -120,6 +120,28 @@ async function checkCommand(cmd: string): Promise<boolean> {
   })
 }
 
+function resolveWindowsSpawnCommand(command: string): string {
+  if (command.includes('\\') || command.includes('/') || /\.[A-Za-z0-9]+$/.test(command)) return command
+
+  try {
+    const raw = execFileSync('where', [command], { encoding: 'utf-8', windowsHide: true })
+    const matches = raw
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+    if (!matches.length) return command
+
+    const preferredExts = ['.exe', '.cmd', '.bat', '.com']
+    for (const ext of preferredExts) {
+      const hit = matches.find((m) => m.toLowerCase().endsWith(ext))
+      if (hit) return hit
+    }
+    return matches[0]
+  } catch {
+    return command
+  }
+}
+
 async function runClaudePlan(prompt: string, cwd: string, timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(
@@ -180,8 +202,10 @@ async function runCodexPlan(prompt: string, cwd: string, timeoutMs: number): Pro
 
   try {
     await new Promise<void>((resolve, reject) => {
+      const codexCommand =
+        process.platform === 'win32' ? resolveWindowsSpawnCommand('codex') : 'codex'
       const child = spawn(
-        'codex',
+        codexCommand,
         [
           'exec',
           '--sandbox',
@@ -191,10 +215,17 @@ async function runCodexPlan(prompt: string, cwd: string, timeoutMs: number): Pro
           'never',
           '--output-last-message',
           lastMessagePath,
-          prompt
+          '-'
         ],
-        { cwd, stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env } }
+        { cwd, stdio: ['pipe', 'ignore', 'pipe'], env: { ...process.env } }
       )
+
+      try {
+        child.stdin.write(prompt)
+        child.stdin.end()
+      } catch {
+        // ignore
+      }
 
       let stderr = ''
       const timeout = setTimeout(() => {

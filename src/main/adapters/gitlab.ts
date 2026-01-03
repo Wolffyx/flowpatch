@@ -290,7 +290,8 @@ export class GitlabAdapter {
       updated_remote_at: issue.updated_at,
       updated_local_at: new Date().toISOString(),
       sync_state: 'ok',
-      last_error: null
+      last_error: null,
+      has_conflicts: 0
     }
   }
 
@@ -321,7 +322,8 @@ export class GitlabAdapter {
       updated_remote_at: mr.updated_at,
       updated_local_at: new Date().toISOString(),
       sync_state: 'ok',
-      last_error: null
+      last_error: null,
+      has_conflicts: (mr as unknown as { has_conflicts?: boolean }).has_conflicts ? 1 : 0
     }
   }
 

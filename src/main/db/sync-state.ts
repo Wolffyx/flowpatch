@@ -2,7 +2,9 @@
  * Sync State Database Operations
  */
 
-import { getDb } from './connection'
+import { and, eq } from 'drizzle-orm'
+import { getDrizzle } from './drizzle'
+import { syncState } from './schema'
 
 /**
  * Get a sync cursor value.
@@ -12,12 +14,18 @@ export function getSyncCursor(
   provider: string,
   cursorType: string
 ): string | null {
-  const d = getDb()
-  const row = d
-    .prepare(
-      'SELECT cursor_value FROM sync_state WHERE project_id = ? AND provider = ? AND cursor_type = ?'
+  const db = getDrizzle()
+  const row = db
+    .select({ cursor_value: syncState.cursor_value })
+    .from(syncState)
+    .where(
+      and(
+        eq(syncState.project_id, projectId),
+        eq(syncState.provider, provider),
+        eq(syncState.cursor_type, cursorType)
+      )
     )
-    .get(projectId, provider, cursorType) as { cursor_value: string | null } | undefined
+    .get()
   return row?.cursor_value ?? null
 }
 
@@ -30,16 +38,21 @@ export function setSyncCursor(
   cursorType: string,
   value: string | null
 ): void {
-  const d = getDb()
+  const db = getDrizzle()
   const now = new Date().toISOString()
   const id = `${projectId}:${provider}:${cursorType}`
-  d.prepare(
-    `
-    INSERT INTO sync_state (id, project_id, provider, cursor_type, cursor_value, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(project_id, provider, cursor_type) DO UPDATE SET
-      cursor_value = excluded.cursor_value,
-      updated_at = excluded.updated_at
-  `
-  ).run(id, projectId, provider, cursorType, value, now)
+  db.insert(syncState)
+    .values({
+      id,
+      project_id: projectId,
+      provider,
+      cursor_type: cursorType,
+      cursor_value: value,
+      updated_at: now
+    })
+    .onConflictDoUpdate({
+      target: [syncState.project_id, syncState.provider, syncState.cursor_type],
+      set: { cursor_value: value, updated_at: now }
+    })
+    .run()
 }

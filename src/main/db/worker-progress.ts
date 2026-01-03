@@ -2,7 +2,9 @@
  * Worker Progress Database Operations
  */
 
-import { getDb } from './connection'
+import { desc, eq } from 'drizzle-orm'
+import { getDrizzle } from './drizzle'
+import { workerProgress } from './schema'
 import { generateId } from '@shared/utils'
 import type { WorkerProgress } from '@shared/types'
 
@@ -18,39 +20,53 @@ export interface WorkerProgressCreate {
  * Get worker progress for a card.
  */
 export function getWorkerProgress(cardId: string): WorkerProgress | null {
-  const d = getDb()
-  const stmt = d.prepare(
-    'SELECT * FROM worker_progress WHERE card_id = ? ORDER BY created_at DESC LIMIT 1'
+  const db = getDrizzle()
+  return (
+    (db
+      .select()
+      .from(workerProgress)
+      .where(eq(workerProgress.card_id, cardId))
+      .orderBy(desc(workerProgress.created_at))
+      .limit(1)
+      .get() as WorkerProgress) ?? null
   )
-  return (stmt.get(cardId) as WorkerProgress) ?? null
 }
 
 /**
  * Get worker progress for a job.
  */
 export function getWorkerProgressByJob(jobId: string): WorkerProgress | null {
-  const d = getDb()
-  const stmt = d.prepare('SELECT * FROM worker_progress WHERE job_id = ?')
-  return (stmt.get(jobId) as WorkerProgress) ?? null
+  const db = getDrizzle()
+  return (
+    (db.select().from(workerProgress).where(eq(workerProgress.job_id, jobId)).get() as WorkerProgress) ??
+    null
+  )
 }
 
 /**
  * Create worker progress.
  */
 export function createWorkerProgress(data: WorkerProgressCreate): WorkerProgress {
-  const d = getDb()
+  const db = getDrizzle()
   const id = generateId()
   const now = new Date().toISOString()
 
-  d.prepare(
-    `INSERT INTO worker_progress (
-      id, card_id, job_id, iteration, total_iterations,
-      subtask_index, subtasks_completed, last_checkpoint,
-      created_at, updated_at
-    ) VALUES (?, ?, ?, 1, ?, 0, 0, ?, ?, ?)`
-  ).run(id, data.cardId, data.jobId ?? null, data.totalIterations ?? 5, now, now, now)
+  db.insert(workerProgress)
+    .values({
+      id,
+      card_id: data.cardId,
+      job_id: data.jobId ?? null,
+      iteration: 1,
+      total_iterations: data.totalIterations ?? 5,
+      subtask_index: 0,
+      subtasks_completed: 0,
+      last_checkpoint: now,
+      created_at: now,
+      updated_at: now
+    })
+    .run()
 
-  return d.prepare('SELECT * FROM worker_progress WHERE id = ?').get(id) as WorkerProgress
+  return db.select().from(workerProgress).where(eq(workerProgress.id, id)).get() as WorkerProgress
 }
 
 /**
@@ -67,43 +83,36 @@ export function updateWorkerProgress(
     progressFilePath?: string
   }
 ): WorkerProgress | null {
-  const d = getDb()
+  const db = getDrizzle()
   const now = new Date().toISOString()
-  const existing = d.prepare('SELECT * FROM worker_progress WHERE id = ?').get(id) as
+  const existing = db.select().from(workerProgress).where(eq(workerProgress.id, id)).get() as
     | WorkerProgress
     | undefined
   if (!existing) return null
 
-  d.prepare(
-    `UPDATE worker_progress SET
-      iteration = ?,
-      subtask_index = ?,
-      subtasks_completed = ?,
-      files_modified_json = ?,
-      context_summary = ?,
-      progress_file_path = ?,
-      last_checkpoint = ?,
-      updated_at = ?
-     WHERE id = ?`
-  ).run(
-    data.iteration ?? existing.iteration,
-    data.subtaskIndex ?? existing.subtask_index,
-    data.subtasksCompleted ?? existing.subtasks_completed,
-    data.filesModified ? JSON.stringify(data.filesModified) : existing.files_modified_json,
-    data.contextSummary ?? existing.context_summary,
-    data.progressFilePath ?? existing.progress_file_path,
-    now,
-    now,
-    id
-  )
+  db.update(workerProgress)
+    .set({
+      iteration: data.iteration ?? existing.iteration,
+      subtask_index: data.subtaskIndex ?? existing.subtask_index,
+      subtasks_completed: data.subtasksCompleted ?? existing.subtasks_completed,
+      files_modified_json: data.filesModified
+        ? JSON.stringify(data.filesModified)
+        : existing.files_modified_json,
+      context_summary: data.contextSummary ?? existing.context_summary,
+      progress_file_path: data.progressFilePath ?? existing.progress_file_path,
+      last_checkpoint: now,
+      updated_at: now
+    })
+    .where(eq(workerProgress.id, id))
+    .run()
 
-  return d.prepare('SELECT * FROM worker_progress WHERE id = ?').get(id) as WorkerProgress
+  return db.select().from(workerProgress).where(eq(workerProgress.id, id)).get() as WorkerProgress
 }
 
 /**
  * Clear worker progress for a card.
  */
 export function clearWorkerProgress(cardId: string): void {
-  const d = getDb()
-  d.prepare('DELETE FROM worker_progress WHERE card_id = ?').run(cardId)
+  const db = getDrizzle()
+  db.delete(workerProgress).where(eq(workerProgress.card_id, cardId)).run()
 }

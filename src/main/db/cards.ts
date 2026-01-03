@@ -2,7 +2,9 @@
  * Card Database Operations
  */
 
-import { getDb } from './connection'
+import { and, asc, desc, eq, gt, inArray, isNotNull, lte, ne, notExists, sql } from 'drizzle-orm'
+import { getDrizzle } from './drizzle'
+import { cards, jobs } from './schema'
 import { generateId } from '@shared/utils'
 import type { Card, CardStatus, PolicyConfig } from '@shared/types'
 
@@ -12,18 +14,21 @@ export type { Card, CardStatus }
  * List all cards for a project.
  */
 export function listCards(projectId: string): Card[] {
-  const d = getDb()
-  const stmt = d.prepare('SELECT * FROM cards WHERE project_id = ? ORDER BY updated_local_at DESC')
-  return stmt.all(projectId) as Card[]
+  const db = getDrizzle()
+  return db
+    .select()
+    .from(cards)
+    .where(eq(cards.project_id, projectId))
+    .orderBy(desc(cards.updated_local_at))
+    .all() as Card[]
 }
 
 /**
  * Get a card by ID.
  */
 export function getCard(id: string): Card | null {
-  const d = getDb()
-  const stmt = d.prepare('SELECT * FROM cards WHERE id = ?')
-  return (stmt.get(id) as Card) ?? null
+  const db = getDrizzle()
+  return (db.select().from(cards).where(eq(cards.id, id)).get() as Card) ?? null
 }
 
 /**
@@ -34,96 +39,79 @@ export function getCardByRemote(
   remoteRepoKey: string,
   remoteNumberOrIid: string
 ): Card | null {
-  const d = getDb()
-  const stmt = d.prepare(
-    'SELECT * FROM cards WHERE project_id = ? AND remote_repo_key = ? AND remote_number_or_iid = ?'
+  const db = getDrizzle()
+  return (
+    (db
+      .select()
+      .from(cards)
+      .where(
+        and(
+          eq(cards.project_id, projectId),
+          eq(cards.remote_repo_key, remoteRepoKey),
+          eq(cards.remote_number_or_iid, remoteNumberOrIid)
+        )
+      )
+      .get() as Card) ?? null
   )
-  return (stmt.get(projectId, remoteRepoKey, remoteNumberOrIid) as Card) ?? null
 }
 
 /**
  * Create or update a card.
  */
-export function upsertCard(
-  c: Omit<Card, 'updated_local_at'> & { updated_local_at?: string }
-): Card {
-  const d = getDb()
+export function upsertCard(c: Omit<Card, 'updated_local_at'> & { updated_local_at?: string }): Card {
+  const db = getDrizzle()
   const now = new Date().toISOString()
-  const existing = d.prepare('SELECT * FROM cards WHERE id = ?').get(c.id) as Card | undefined
+  const existing = db.select().from(cards).where(eq(cards.id, c.id)).get() as Card | undefined
+
   if (existing) {
-    d.prepare(
-      `
-      UPDATE cards SET
-        project_id = ?,
-        provider = ?,
-        type = ?,
-        title = ?,
-        body = ?,
-        status = ?,
-        ready_eligible = ?,
-        assignees_json = ?,
-        labels_json = ?,
-        remote_url = ?,
-        remote_repo_key = ?,
-        remote_number_or_iid = ?,
-        remote_node_id = ?,
-        updated_remote_at = ?,
-        updated_local_at = ?,
-        sync_state = ?,
-        last_error = ?
-      WHERE id = ?
-    `
-    ).run(
-      c.project_id,
-      c.provider,
-      c.type,
-      c.title,
-      c.body,
-      c.status,
-      c.ready_eligible,
-      c.assignees_json,
-      c.labels_json,
-      c.remote_url,
-      c.remote_repo_key,
-      c.remote_number_or_iid,
-      c.remote_node_id ?? null,
-      c.updated_remote_at,
-      c.updated_local_at ?? now,
-      c.sync_state,
-      c.last_error,
-      c.id
-    )
+    db.update(cards)
+      .set({
+        project_id: c.project_id,
+        provider: c.provider,
+        type: c.type,
+        title: c.title,
+        body: c.body,
+        status: c.status,
+        ready_eligible: c.ready_eligible,
+        assignees_json: c.assignees_json,
+        labels_json: c.labels_json,
+        remote_url: c.remote_url,
+        remote_repo_key: c.remote_repo_key,
+        remote_number_or_iid: c.remote_number_or_iid,
+        remote_node_id: c.remote_node_id ?? null,
+        updated_remote_at: c.updated_remote_at,
+        updated_local_at: c.updated_local_at ?? now,
+        sync_state: c.sync_state,
+        last_error: c.last_error
+      })
+      .where(eq(cards.id, c.id))
+      .run()
     return { ...existing, ...c, updated_local_at: c.updated_local_at ?? now }
   }
-  d.prepare(
-    `
-    INSERT INTO cards (
-      id, project_id, provider, type, title, body, status, ready_eligible,
-      assignees_json, labels_json, remote_url, remote_repo_key, remote_number_or_iid,
-      remote_node_id, updated_remote_at, updated_local_at, sync_state, last_error
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `
-  ).run(
-    c.id,
-    c.project_id,
-    c.provider,
-    c.type,
-    c.title,
-    c.body,
-    c.status,
-    c.ready_eligible,
-    c.assignees_json,
-    c.labels_json,
-    c.remote_url,
-    c.remote_repo_key,
-    c.remote_number_or_iid,
-    c.remote_node_id ?? null,
-    c.updated_remote_at,
-    c.updated_local_at ?? now,
-    c.sync_state,
-    c.last_error
-  )
-  return d.prepare('SELECT * FROM cards WHERE id = ?').get(c.id) as Card
+
+  db.insert(cards)
+    .values({
+      id: c.id,
+      project_id: c.project_id,
+      provider: c.provider,
+      type: c.type,
+      title: c.title,
+      body: c.body,
+      status: c.status,
+      ready_eligible: c.ready_eligible,
+      assignees_json: c.assignees_json,
+      labels_json: c.labels_json,
+      remote_url: c.remote_url,
+      remote_repo_key: c.remote_repo_key,
+      remote_number_or_iid: c.remote_number_or_iid,
+      remote_node_id: c.remote_node_id ?? null,
+      updated_remote_at: c.updated_remote_at,
+      updated_local_at: c.updated_local_at ?? now,
+      sync_state: c.sync_state,
+      last_error: c.last_error
+    })
+    .run()
+  return db.select().from(cards).where(eq(cards.id, c.id)).get() as Card
 }
 
 /**
@@ -148,7 +136,8 @@ export function createLocalTestCard(projectId: string, title: string): Card {
     remote_node_id: null,
     updated_remote_at: null,
     sync_state: 'ok',
-    last_error: null
+    last_error: null,
+    has_conflicts: 0
   })
 }
 
@@ -156,12 +145,18 @@ export function createLocalTestCard(projectId: string, title: string): Card {
  * Update card status.
  */
 export function updateCardStatus(cardId: string, status: CardStatus): Card | null {
-  const d = getDb()
+  const db = getDrizzle()
   const now = new Date().toISOString()
   const readyEligible = status === 'ready' ? 1 : 0
-  d.prepare(
-    'UPDATE cards SET status = ?, ready_eligible = ?, updated_local_at = ?, sync_state = ? WHERE id = ?'
-  ).run(status, readyEligible, now, 'pending', cardId)
+  db.update(cards)
+    .set({
+      status,
+      ready_eligible: readyEligible,
+      updated_local_at: now,
+      sync_state: 'pending'
+    })
+    .where(eq(cards.id, cardId))
+    .run()
   return getCard(cardId)
 }
 
@@ -169,13 +164,15 @@ export function updateCardStatus(cardId: string, status: CardStatus): Card | nul
  * Update card labels.
  */
 export function updateCardLabels(cardId: string, labelsJson: string | null): void {
-  const d = getDb()
+  const db = getDrizzle()
   const now = new Date().toISOString()
-  d.prepare('UPDATE cards SET labels_json = ?, updated_local_at = ? WHERE id = ?').run(
-    labelsJson,
-    now,
-    cardId
-  )
+  db.update(cards)
+    .set({
+      labels_json: labelsJson,
+      updated_local_at: now
+    })
+    .where(eq(cards.id, cardId))
+    .run()
 }
 
 /**
@@ -225,19 +222,46 @@ export function updateCardSyncState(
   syncState: 'ok' | 'pending' | 'error',
   error?: string
 ): void {
-  const d = getDb()
+  const db = getDrizzle()
   const now = new Date().toISOString()
-  d.prepare(
-    'UPDATE cards SET sync_state = ?, last_error = ?, updated_local_at = ? WHERE id = ?'
-  ).run(syncState, error ?? null, now, cardId)
+  db.update(cards)
+    .set({
+      sync_state: syncState,
+      last_error: error ?? null,
+      updated_local_at: now
+    })
+    .where(eq(cards.id, cardId))
+    .run()
+}
+
+/**
+ * Update card conflict status.
+ */
+export function updateCardConflictStatus(cardId: string, hasConflicts: boolean): void {
+  const db = getDrizzle()
+  const now = new Date().toISOString()
+  db.update(cards)
+    .set({
+      has_conflicts: hasConflicts ? 1 : 0,
+      updated_local_at: now
+    })
+    .where(eq(cards.id, cardId))
+    .run()
+}
+
+/**
+ * Clear conflict status on a card.
+ */
+export function clearCardConflictStatus(cardId: string): void {
+  updateCardConflictStatus(cardId, false)
 }
 
 /**
  * Delete a card.
  */
 export function deleteCard(id: string): boolean {
-  const d = getDb()
-  const result = d.prepare('DELETE FROM cards WHERE id = ?').run(id)
+  const db = getDrizzle()
+  const result = db.delete(cards).where(eq(cards.id, id)).run()
   return result.changes > 0
 }
 
@@ -245,33 +269,53 @@ export function deleteCard(id: string): boolean {
  * Get the next ready card for worker processing.
  */
 export function getNextReadyCard(projectId: string, retryCooldownMinutes = 30): Card | null {
-  const d = getDb()
+  const db = getDrizzle()
   const cooldownTime = new Date(Date.now() - retryCooldownMinutes * 60 * 1000).toISOString()
 
-  const stmt = d.prepare(`
-    SELECT c.* FROM cards c
-    WHERE c.project_id = ?
-      AND c.status = 'ready'
-      AND c.provider != 'local'
-      AND c.remote_repo_key IS NOT NULL
-      AND NOT EXISTS (
-        SELECT 1 FROM jobs j
-        WHERE j.card_id = c.id
-          AND j.type = 'worker_run'
-          AND j.state IN ('queued', 'running')
+  // Subquery to check for active jobs
+  const activeJobSubquery = db
+    .select({ _: sql`1` })
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.card_id, cards.id),
+        eq(jobs.type, 'worker_run'),
+        inArray(jobs.state, ['queued', 'running'])
       )
-      AND NOT EXISTS (
-        SELECT 1 FROM jobs j
-        WHERE j.card_id = c.id
-          AND j.type = 'worker_run'
-          AND j.state = 'failed'
-          AND j.updated_at > ?
-      )
-    ORDER BY c.updated_local_at ASC
-    LIMIT 1
-  `)
+    )
 
-  return (stmt.get(projectId, cooldownTime) as Card) ?? null
+  // Subquery to check for recently failed jobs
+  const failedJobSubquery = db
+    .select({ _: sql`1` })
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.card_id, cards.id),
+        eq(jobs.type, 'worker_run'),
+        eq(jobs.state, 'failed'),
+        gt(jobs.updated_at, cooldownTime),
+        lte(cards.updated_local_at, jobs.updated_at)
+      )
+    )
+
+  return (
+    (db
+      .select()
+      .from(cards)
+      .where(
+        and(
+          eq(cards.project_id, projectId),
+          eq(cards.status, 'ready'),
+          ne(cards.provider, 'local'),
+          isNotNull(cards.remote_repo_key),
+          notExists(activeJobSubquery),
+          notExists(failedJobSubquery)
+        )
+      )
+      .orderBy(asc(cards.updated_local_at))
+      .limit(1)
+      .get() as Card) ?? null
+  )
 }
 
 /**
@@ -282,31 +326,49 @@ export function getNextReadyCards(
   limit: number,
   retryCooldownMinutes = 30
 ): Card[] {
-  const d = getDb()
+  const db = getDrizzle()
   const cooldownTime = new Date(Date.now() - retryCooldownMinutes * 60 * 1000).toISOString()
 
-  const stmt = d.prepare(`
-    SELECT c.* FROM cards c
-    WHERE c.project_id = ?
-      AND c.status = 'ready'
-      AND c.provider != 'local'
-      AND c.remote_repo_key IS NOT NULL
-      AND NOT EXISTS (
-        SELECT 1 FROM jobs j
-        WHERE j.card_id = c.id
-          AND j.type = 'worker_run'
-          AND j.state IN ('queued', 'running')
+  // Subquery to check for active jobs
+  const activeJobSubquery = db
+    .select({ _: sql`1` })
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.card_id, cards.id),
+        eq(jobs.type, 'worker_run'),
+        inArray(jobs.state, ['queued', 'running'])
       )
-      AND NOT EXISTS (
-        SELECT 1 FROM jobs j
-        WHERE j.card_id = c.id
-          AND j.type = 'worker_run'
-          AND j.state = 'failed'
-          AND j.updated_at > ?
-      )
-    ORDER BY c.updated_local_at ASC
-    LIMIT ?
-  `)
+    )
 
-  return stmt.all(projectId, cooldownTime, limit) as Card[]
+  // Subquery to check for recently failed jobs
+  const failedJobSubquery = db
+    .select({ _: sql`1` })
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.card_id, cards.id),
+        eq(jobs.type, 'worker_run'),
+        eq(jobs.state, 'failed'),
+        gt(jobs.updated_at, cooldownTime),
+        lte(cards.updated_local_at, jobs.updated_at)
+      )
+    )
+
+  return db
+    .select()
+    .from(cards)
+    .where(
+      and(
+        eq(cards.project_id, projectId),
+        eq(cards.status, 'ready'),
+        ne(cards.provider, 'local'),
+        isNotNull(cards.remote_repo_key),
+        notExists(activeJobSubquery),
+        notExists(failedJobSubquery)
+      )
+    )
+    .orderBy(asc(cards.updated_local_at))
+    .limit(limit)
+    .all() as Card[]
 }

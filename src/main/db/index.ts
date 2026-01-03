@@ -32,6 +32,8 @@ export {
   getStatusLabelFromPolicy,
   getAllStatusLabelsFromPolicy,
   updateCardSyncState,
+  updateCardConflictStatus,
+  clearCardConflictStatus,
   deleteCard,
   getNextReadyCard,
   getNextReadyCards

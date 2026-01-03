@@ -219,26 +219,18 @@ export async function runCodex(
 ): Promise<void> {
   log('Invoking Codex CLI...')
 
-  // Write prompt to a temp file
-  const promptPath = join(cwd, '.patchwork-prompt.md')
-  writeFileSync(promptPath, prompt)
-
   try {
     await runProcessStreaming({
       command: 'codex',
-      args: ['exec', '--full-auto', prompt],
+      args: ['exec', '--full-auto', '-'],
       cwd,
       timeoutMs,
       source: 'codex',
+      stdin: prompt,
       onLog: (message, meta) => log(message, meta),
       isCanceled
     })
   } finally {
-    try {
-      unlinkSync(promptPath)
-    } catch {
-      // Ignore cleanup errors
-    }
   }
 }
 

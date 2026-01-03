@@ -706,7 +706,8 @@ export class GithubAdapter {
             updated_remote_at: content.updatedAt ?? null,
             updated_local_at: new Date().toISOString(),
             sync_state: 'ok',
-            last_error: null
+            last_error: null,
+            has_conflicts: 0
           })
         }
 
@@ -1454,7 +1455,8 @@ export class GithubAdapter {
       updated_remote_at: issue.updatedAt || issue.updated_at || null,
       updated_local_at: new Date().toISOString(),
       sync_state: 'ok',
-      last_error: null
+      last_error: null,
+      has_conflicts: 0
     }
   }
 
@@ -1492,7 +1494,8 @@ export class GithubAdapter {
       updated_remote_at: pr.updatedAt || pr.updated_at || null,
       updated_local_at: new Date().toISOString(),
       sync_state: 'ok',
-      last_error: null
+      last_error: null,
+      has_conflicts: 0
     }
   }
 

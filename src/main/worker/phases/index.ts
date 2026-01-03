@@ -10,6 +10,10 @@ export * from './types'
 // AI execution
 export { checkCommand, isClaudeRetryableLimitError, buildAIPrompt, runAI } from './ai'
 
+// Branch synchronization
+export { runBranchSyncPhase } from './branch-sync'
+export type { BranchSyncResult } from './branch-sync'
+
 // Verification checks
 export { runChecks } from './checks'
 

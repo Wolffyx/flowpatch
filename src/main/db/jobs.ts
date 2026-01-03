@@ -2,7 +2,9 @@
  * Job Database Operations
  */
 
-import { getDb } from './connection'
+import { and, asc, count, desc, eq, inArray } from 'drizzle-orm'
+import { getDrizzle } from './drizzle'
+import { jobs } from './schema'
 import { generateId } from '@shared/utils'
 import type { Job, JobState, JobType } from '@shared/types'
 
@@ -12,26 +14,30 @@ export type { Job, JobState, JobType }
  * List jobs for a project.
  */
 export function listJobs(projectId: string, limit = 50): Job[] {
-  const d = getDb()
-  const stmt = d.prepare('SELECT * FROM jobs WHERE project_id = ? ORDER BY created_at DESC LIMIT ?')
-  return stmt.all(projectId, limit) as Job[]
+  const db = getDrizzle()
+  return db
+    .select()
+    .from(jobs)
+    .where(eq(jobs.project_id, projectId))
+    .orderBy(desc(jobs.created_at))
+    .limit(limit)
+    .all() as Job[]
 }
 
 /**
  * List recent jobs across all projects.
  */
 export function listRecentJobs(limit = 200): Job[] {
-  const d = getDb()
-  const stmt = d.prepare('SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?')
-  return stmt.all(limit) as Job[]
+  const db = getDrizzle()
+  return db.select().from(jobs).orderBy(desc(jobs.created_at)).limit(limit).all() as Job[]
 }
 
 /**
  * Get a job by ID.
  */
 export function getJob(id: string): Job | null {
-  const d = getDb()
-  return (d.prepare('SELECT * FROM jobs WHERE id = ?').get(id) as Job) ?? null
+  const db = getDrizzle()
+  return (db.select().from(jobs).where(eq(jobs.id, id)).get() as Job) ?? null
 }
 
 /**
@@ -43,16 +49,23 @@ export function createJob(
   cardId?: string,
   payload?: unknown
 ): Job {
-  const d = getDb()
+  const db = getDrizzle()
   const id = generateId()
   const now = new Date().toISOString()
-  d.prepare(
-    `
-    INSERT INTO jobs (id, project_id, card_id, type, state, attempts, payload_json, created_at, updated_at)
-    VALUES (?, ?, ?, ?, 'queued', 0, ?, ?, ?)
-  `
-  ).run(id, projectId, cardId ?? null, type, payload ? JSON.stringify(payload) : null, now, now)
-  return d.prepare('SELECT * FROM jobs WHERE id = ?').get(id) as Job
+  db.insert(jobs)
+    .values({
+      id,
+      project_id: projectId,
+      card_id: cardId ?? null,
+      type,
+      state: 'queued',
+      attempts: 0,
+      payload_json: payload ? JSON.stringify(payload) : null,
+      created_at: now,
+      updated_at: now
+    })
+    .run()
+  return db.select().from(jobs).where(eq(jobs.id, id)).get() as Job
 }
 
 /**
@@ -64,18 +77,17 @@ export function updateJobState(
   result?: unknown,
   error?: string
 ): Job | null {
-  const d = getDb()
+  const db = getDrizzle()
   const now = new Date().toISOString()
-  d.prepare(
-    `
-    UPDATE jobs SET
-      state = ?,
-      result_json = ?,
-      last_error = ?,
-      updated_at = ?
-    WHERE id = ?
-  `
-  ).run(state, result ? JSON.stringify(result) : null, error ?? null, now, jobId)
+  db.update(jobs)
+    .set({
+      state,
+      result_json: result ? JSON.stringify(result) : null,
+      last_error: error ?? null,
+      updated_at: now
+    })
+    .where(eq(jobs.id, jobId))
+    .run()
   return getJob(jobId)
 }
 
@@ -83,16 +95,15 @@ export function updateJobState(
  * Update job result.
  */
 export function updateJobResult(jobId: string, result?: unknown): Job | null {
-  const d = getDb()
+  const db = getDrizzle()
   const now = new Date().toISOString()
-  d.prepare(
-    `
-    UPDATE jobs SET
-      result_json = ?,
-      updated_at = ?
-    WHERE id = ?
-  `
-  ).run(result ? JSON.stringify(result) : null, now, jobId)
+  db.update(jobs)
+    .set({
+      result_json: result ? JSON.stringify(result) : null,
+      updated_at: now
+    })
+    .where(eq(jobs.id, jobId))
+    .run()
   return getJob(jobId)
 }
 
@@ -100,21 +111,33 @@ export function updateJobResult(jobId: string, result?: unknown): Job | null {
  * Acquire a lease on a job.
  */
 export function acquireJobLease(jobId: string, leaseSeconds = 300): boolean {
-  const d = getDb()
+  const db = getDrizzle()
   const now = new Date()
   const leaseUntil = new Date(now.getTime() + leaseSeconds * 1000).toISOString()
-  const result = d
-    .prepare(
-      `
-    UPDATE jobs SET
-      state = 'running',
-      lease_until = ?,
-      attempts = attempts + 1,
-      updated_at = ?
-    WHERE id = ? AND (state = 'queued' OR (state = 'running' AND lease_until < ?))
-  `
-    )
-    .run(leaseUntil, now.toISOString(), jobId, now.toISOString())
+  const nowIso = now.toISOString()
+
+  // Check if can acquire the job
+  const job = db.select().from(jobs).where(eq(jobs.id, jobId)).get() as Job | undefined
+  if (!job) return false
+
+  // Job must be queued, or running with expired lease
+  const canAcquire =
+    job.state === 'queued' ||
+    (job.state === 'running' && job.lease_until && job.lease_until < nowIso)
+
+  if (!canAcquire) return false
+
+  const result = db
+    .update(jobs)
+    .set({
+      state: 'running',
+      lease_until: leaseUntil,
+      attempts: job.attempts + 1,
+      updated_at: nowIso
+    })
+    .where(eq(jobs.id, jobId))
+    .run()
+
   return result.changes > 0
 }
 
@@ -122,12 +145,17 @@ export function acquireJobLease(jobId: string, leaseSeconds = 300): boolean {
  * Renew a job lease.
  */
 export function renewJobLease(jobId: string, leaseSeconds = 300): boolean {
-  const d = getDb()
+  const db = getDrizzle()
   const now = new Date()
   const leaseUntil = new Date(now.getTime() + leaseSeconds * 1000).toISOString()
-  const result = d
-    .prepare('UPDATE jobs SET lease_until = ?, updated_at = ? WHERE id = ? AND state = ?')
-    .run(leaseUntil, now.toISOString(), jobId, 'running')
+  const result = db
+    .update(jobs)
+    .set({
+      lease_until: leaseUntil,
+      updated_at: now.toISOString()
+    })
+    .where(and(eq(jobs.id, jobId), eq(jobs.state, 'running')))
+    .run()
   return result.changes > 0
 }
 
@@ -135,22 +163,26 @@ export function renewJobLease(jobId: string, leaseSeconds = 300): boolean {
  * Get next queued job for a project.
  */
 export function getNextQueuedJob(projectId: string, type?: JobType): Job | null {
-  const d = getDb()
+  const db = getDrizzle()
   if (type) {
     return (
-      (d
-        .prepare(
-          'SELECT * FROM jobs WHERE project_id = ? AND type = ? AND state = ? ORDER BY created_at ASC LIMIT 1'
-        )
-        .get(projectId, type, 'queued') as Job) ?? null
+      (db
+        .select()
+        .from(jobs)
+        .where(and(eq(jobs.project_id, projectId), eq(jobs.type, type), eq(jobs.state, 'queued')))
+        .orderBy(asc(jobs.created_at))
+        .limit(1)
+        .get() as Job) ?? null
     )
   }
   return (
-    (d
-      .prepare(
-        'SELECT * FROM jobs WHERE project_id = ? AND state = ? ORDER BY created_at ASC LIMIT 1'
-      )
-      .get(projectId, 'queued') as Job) ?? null
+    (db
+      .select()
+      .from(jobs)
+      .where(and(eq(jobs.project_id, projectId), eq(jobs.state, 'queued')))
+      .orderBy(asc(jobs.created_at))
+      .limit(1)
+      .get() as Job) ?? null
   )
 }
 
@@ -158,92 +190,112 @@ export function getNextQueuedJob(projectId: string, type?: JobType): Job | null 
  * Get running jobs for a project.
  */
 export function getRunningJobs(projectId: string): Job[] {
-  const d = getDb()
-  return d
-    .prepare('SELECT * FROM jobs WHERE project_id = ? AND state = ?')
-    .all(projectId, 'running') as Job[]
+  const db = getDrizzle()
+  return db
+    .select()
+    .from(jobs)
+    .where(and(eq(jobs.project_id, projectId), eq(jobs.state, 'running')))
+    .all() as Job[]
 }
 
 /**
  * Check if a project has an active worker job.
  */
 export function hasActiveWorkerJob(projectId: string): boolean {
-  const d = getDb()
-  const stmt = d.prepare(`
-    SELECT 1 FROM jobs
-    WHERE project_id = ?
-      AND type = 'worker_run'
-      AND state IN ('queued', 'running')
-    LIMIT 1
-  `)
-  return stmt.get(projectId) !== undefined
+  const db = getDrizzle()
+  const result = db
+    .select({ _: jobs.id })
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.project_id, projectId),
+        eq(jobs.type, 'worker_run'),
+        inArray(jobs.state, ['queued', 'running'])
+      )
+    )
+    .limit(1)
+    .get()
+  return result !== undefined
 }
 
 /**
  * Get active worker job for a project.
  */
 export function getActiveWorkerJob(projectId: string): Job | null {
-  const d = getDb()
-  const stmt = d.prepare(`
-    SELECT * FROM jobs
-    WHERE project_id = ?
-      AND type = 'worker_run'
-      AND state IN ('queued', 'running')
-    ORDER BY created_at DESC
-    LIMIT 1
-  `)
-  return (stmt.get(projectId) as Job) ?? null
+  const db = getDrizzle()
+  return (
+    (db
+      .select()
+      .from(jobs)
+      .where(
+        and(
+          eq(jobs.project_id, projectId),
+          eq(jobs.type, 'worker_run'),
+          inArray(jobs.state, ['queued', 'running'])
+        )
+      )
+      .orderBy(desc(jobs.created_at))
+      .limit(1)
+      .get() as Job) ?? null
+  )
 }
 
 /**
  * Get active worker job for a card.
  */
 export function getActiveWorkerJobForCard(cardId: string): Job | null {
-  const d = getDb()
-  const stmt = d.prepare(`
-    SELECT * FROM jobs
-    WHERE card_id = ?
-      AND type = 'worker_run'
-      AND state IN ('queued', 'running')
-    ORDER BY created_at DESC
-    LIMIT 1
-  `)
-  return (stmt.get(cardId) as Job) ?? null
+  const db = getDrizzle()
+  return (
+    (db
+      .select()
+      .from(jobs)
+      .where(
+        and(
+          eq(jobs.card_id, cardId),
+          eq(jobs.type, 'worker_run'),
+          inArray(jobs.state, ['queued', 'running'])
+        )
+      )
+      .orderBy(desc(jobs.created_at))
+      .limit(1)
+      .get() as Job) ?? null
+  )
 }
 
 /**
  * Cancel a job.
  */
 export function cancelJob(jobId: string, error?: string): boolean {
-  const d = getDb()
+  const db = getDrizzle()
   const now = new Date().toISOString()
-  const res = d
-    .prepare(
-      `
-      UPDATE jobs SET
-        state = 'canceled',
-        lease_until = NULL,
-        last_error = ?,
-        updated_at = ?
-      WHERE id = ? AND state IN ('queued', 'running')
-    `
-    )
-    .run(error ?? 'Canceled', now, jobId)
-  return res.changes > 0
+  const result = db
+    .update(jobs)
+    .set({
+      state: 'canceled',
+      lease_until: null,
+      last_error: error ?? 'Canceled',
+      updated_at: now
+    })
+    .where(and(eq(jobs.id, jobId), inArray(jobs.state, ['queued', 'running'])))
+    .run()
+  return result.changes > 0
 }
 
 /**
  * Get count of active worker jobs for a project.
  */
 export function getActiveWorkerJobCount(projectId: string): number {
-  const d = getDb()
-  const result = d
-    .prepare(
-      `SELECT COUNT(*) as count FROM jobs
-       WHERE project_id = ?
-         AND type = 'worker_run'
-         AND state IN ('queued', 'running')`
+  const db = getDrizzle()
+  const result = db
+    .select({ count: count() })
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.project_id, projectId),
+        eq(jobs.type, 'worker_run'),
+        inArray(jobs.state, ['queued', 'running'])
+      )
     )
-    .get(projectId) as { count: number }
-  return result.count
+    .get()
+  return result?.count ?? 0
 }

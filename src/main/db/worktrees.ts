@@ -2,7 +2,9 @@
  * Worktree Database Operations
  */
 
-import { getDb } from './connection'
+import { and, count, desc, eq, gt, inArray, isNotNull, isNull, lt, notInArray, or } from 'drizzle-orm'
+import { getDrizzle } from './drizzle'
+import { worktrees } from './schema'
 import { generateId } from '@shared/utils'
 import type { Worktree, WorktreeStatus } from '@shared/types'
 
@@ -24,100 +26,110 @@ export interface WorktreeCreate {
  * List worktrees for a project.
  */
 export function listWorktrees(projectId: string): Worktree[] {
-  const d = getDb()
-  const stmt = d.prepare('SELECT * FROM worktrees WHERE project_id = ? ORDER BY created_at DESC')
-  return stmt.all(projectId) as Worktree[]
+  const db = getDrizzle()
+  return db
+    .select()
+    .from(worktrees)
+    .where(eq(worktrees.project_id, projectId))
+    .orderBy(desc(worktrees.created_at))
+    .all() as Worktree[]
 }
 
 /**
  * List worktrees by status.
  */
 export function listWorktreesByStatus(projectId: string, status: WorktreeStatus): Worktree[] {
-  const d = getDb()
-  const stmt = d.prepare(
-    'SELECT * FROM worktrees WHERE project_id = ? AND status = ? ORDER BY created_at DESC'
-  )
-  return stmt.all(projectId, status) as Worktree[]
+  const db = getDrizzle()
+  return db
+    .select()
+    .from(worktrees)
+    .where(and(eq(worktrees.project_id, projectId), eq(worktrees.status, status)))
+    .orderBy(desc(worktrees.created_at))
+    .all() as Worktree[]
 }
 
 /**
  * Get a worktree by ID.
  */
 export function getWorktree(id: string): Worktree | null {
-  const d = getDb()
-  const stmt = d.prepare('SELECT * FROM worktrees WHERE id = ?')
-  return (stmt.get(id) as Worktree) ?? null
+  const db = getDrizzle()
+  return (db.select().from(worktrees).where(eq(worktrees.id, id)).get() as Worktree) ?? null
 }
 
 /**
  * Get a worktree by path.
  */
 export function getWorktreeByPath(worktreePath: string): Worktree | null {
-  const d = getDb()
-  const stmt = d.prepare('SELECT * FROM worktrees WHERE worktree_path = ?')
-  return (stmt.get(worktreePath) as Worktree) ?? null
+  const db = getDrizzle()
+  return (
+    (db.select().from(worktrees).where(eq(worktrees.worktree_path, worktreePath)).get() as Worktree) ?? null
+  )
 }
 
 /**
  * Get a worktree by branch.
  */
 export function getWorktreeByBranch(projectId: string, branchName: string): Worktree | null {
-  const d = getDb()
-  const stmt = d.prepare('SELECT * FROM worktrees WHERE project_id = ? AND branch_name = ?')
-  return (stmt.get(projectId, branchName) as Worktree) ?? null
+  const db = getDrizzle()
+  return (
+    (db
+      .select()
+      .from(worktrees)
+      .where(and(eq(worktrees.project_id, projectId), eq(worktrees.branch_name, branchName)))
+      .get() as Worktree) ?? null
+  )
 }
 
 /**
  * Get a worktree by card.
  */
 export function getWorktreeByCard(cardId: string): Worktree | null {
-  const d = getDb()
-  const stmt = d.prepare(
-    "SELECT * FROM worktrees WHERE card_id = ? AND status NOT IN ('cleaned', 'error') ORDER BY created_at DESC LIMIT 1"
+  const db = getDrizzle()
+  return (
+    (db
+      .select()
+      .from(worktrees)
+      .where(and(eq(worktrees.card_id, cardId), notInArray(worktrees.status, ['cleaned', 'error'])))
+      .orderBy(desc(worktrees.created_at))
+      .limit(1)
+      .get() as Worktree) ?? null
   )
-  return (stmt.get(cardId) as Worktree) ?? null
 }
 
 /**
  * Get a worktree by job.
  */
 export function getWorktreeByJob(jobId: string): Worktree | null {
-  const d = getDb()
-  const stmt = d.prepare('SELECT * FROM worktrees WHERE job_id = ?')
-  return (stmt.get(jobId) as Worktree) ?? null
+  const db = getDrizzle()
+  return (db.select().from(worktrees).where(eq(worktrees.job_id, jobId)).get() as Worktree) ?? null
 }
 
 /**
  * Create a worktree.
  */
 export function createWorktree(data: WorktreeCreate): Worktree {
-  const d = getDb()
+  const db = getDrizzle()
   const id = generateId()
   const now = new Date().toISOString()
 
-  d.prepare(
-    `
-    INSERT INTO worktrees (
-      id, project_id, card_id, job_id, worktree_path, branch_name, base_ref,
-      status, locked_by, lock_expires_at, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `
-  ).run(
-    id,
-    data.projectId,
-    data.cardId,
-    data.jobId ?? null,
-    data.worktreePath,
-    data.branchName,
-    data.baseRef,
-    data.status ?? 'creating',
-    data.lockedBy ?? null,
-    data.lockExpiresAt ?? null,
-    now,
-    now
-  )
+  db.insert(worktrees)
+    .values({
+      id,
+      project_id: data.projectId,
+      card_id: data.cardId,
+      job_id: data.jobId ?? null,
+      worktree_path: data.worktreePath,
+      branch_name: data.branchName,
+      base_ref: data.baseRef,
+      status: data.status ?? 'creating',
+      locked_by: data.lockedBy ?? null,
+      lock_expires_at: data.lockExpiresAt ?? null,
+      created_at: now,
+      updated_at: now
+    })
+    .run()
 
-  return d.prepare('SELECT * FROM worktrees WHERE id = ?').get(id) as Worktree
+  return db.select().from(worktrees).where(eq(worktrees.id, id)).get() as Worktree
 }
 
 /**
@@ -128,21 +140,29 @@ export function updateWorktreeStatus(
   status: WorktreeStatus,
   error?: string
 ): Worktree | null {
-  const d = getDb()
+  const db = getDrizzle()
   const now = new Date().toISOString()
 
   // Set cleanup_requested_at when transitioning to cleanup_pending
   if (status === 'cleanup_pending') {
-    d.prepare(
-      'UPDATE worktrees SET status = ?, last_error = ?, cleanup_requested_at = ?, updated_at = ? WHERE id = ?'
-    ).run(status, error ?? null, now, now, id)
+    db.update(worktrees)
+      .set({
+        status,
+        last_error: error ?? null,
+        cleanup_requested_at: now,
+        updated_at: now
+      })
+      .where(eq(worktrees.id, id))
+      .run()
   } else {
-    d.prepare('UPDATE worktrees SET status = ?, last_error = ?, updated_at = ? WHERE id = ?').run(
-      status,
-      error ?? null,
-      now,
-      id
-    )
+    db.update(worktrees)
+      .set({
+        status,
+        last_error: error ?? null,
+        updated_at: now
+      })
+      .where(eq(worktrees.id, id))
+      .run()
   }
   return getWorktree(id)
 }
@@ -151,9 +171,12 @@ export function updateWorktreeStatus(
  * Update worktree job.
  */
 export function updateWorktreeJob(id: string, jobId: string | null): Worktree | null {
-  const d = getDb()
+  const db = getDrizzle()
   const now = new Date().toISOString()
-  d.prepare('UPDATE worktrees SET job_id = ?, updated_at = ? WHERE id = ?').run(jobId, now, id)
+  db.update(worktrees)
+    .set({ job_id: jobId, updated_at: now })
+    .where(eq(worktrees.id, id))
+    .run()
   return getWorktree(id)
 }
 
@@ -161,34 +184,34 @@ export function updateWorktreeJob(id: string, jobId: string | null): Worktree | 
  * Delete a worktree.
  */
 export function deleteWorktree(id: string): boolean {
-  const d = getDb()
-  const result = d.prepare('DELETE FROM worktrees WHERE id = ?').run(id)
+  const db = getDrizzle()
+  const result = db.delete(worktrees).where(eq(worktrees.id, id)).run()
   return result.changes > 0
 }
 
 /**
  * Acquire a lock on a worktree.
  */
-export function acquireWorktreeLock(
-  id: string,
-  lockedBy: string,
-  ttlMinutes: number = 10
-): boolean {
-  const d = getDb()
+export function acquireWorktreeLock(id: string, lockedBy: string, ttlMinutes: number = 10): boolean {
+  const db = getDrizzle()
   const now = new Date()
   const lockExpiresAt = new Date(now.getTime() + ttlMinutes * 60 * 1000).toISOString()
+  const nowIso = now.toISOString()
 
-  const result = d
-    .prepare(
-      `
-    UPDATE worktrees SET
-      locked_by = ?,
-      lock_expires_at = ?,
-      updated_at = ?
-    WHERE id = ? AND (locked_by IS NULL OR lock_expires_at < ?)
-  `
+  const result = db
+    .update(worktrees)
+    .set({
+      locked_by: lockedBy,
+      lock_expires_at: lockExpiresAt,
+      updated_at: nowIso
+    })
+    .where(
+      and(
+        eq(worktrees.id, id),
+        or(isNull(worktrees.locked_by), lt(worktrees.lock_expires_at, nowIso))
+      )
     )
-    .run(lockedBy, lockExpiresAt, now.toISOString(), id, now.toISOString())
+    .run()
 
   return result.changes > 0
 }
@@ -197,15 +220,18 @@ export function acquireWorktreeLock(
  * Renew a worktree lock.
  */
 export function renewWorktreeLock(id: string, lockedBy: string, ttlMinutes: number = 10): boolean {
-  const d = getDb()
+  const db = getDrizzle()
   const now = new Date()
   const lockExpiresAt = new Date(now.getTime() + ttlMinutes * 60 * 1000).toISOString()
 
-  const result = d
-    .prepare(
-      'UPDATE worktrees SET lock_expires_at = ?, updated_at = ? WHERE id = ? AND locked_by = ?'
-    )
-    .run(lockExpiresAt, now.toISOString(), id, lockedBy)
+  const result = db
+    .update(worktrees)
+    .set({
+      lock_expires_at: lockExpiresAt,
+      updated_at: now.toISOString()
+    })
+    .where(and(eq(worktrees.id, id), eq(worktrees.locked_by, lockedBy)))
+    .run()
 
   return result.changes > 0
 }
@@ -214,22 +240,30 @@ export function renewWorktreeLock(id: string, lockedBy: string, ttlMinutes: numb
  * Release a worktree lock.
  */
 export function releaseWorktreeLock(id: string, lockedBy?: string | null): boolean {
-  const d = getDb()
+  const db = getDrizzle()
   const now = new Date().toISOString()
 
   if (lockedBy) {
-    const result = d
-      .prepare(
-        'UPDATE worktrees SET locked_by = NULL, lock_expires_at = NULL, updated_at = ? WHERE id = ? AND locked_by = ?'
-      )
-      .run(now, id, lockedBy)
+    const result = db
+      .update(worktrees)
+      .set({
+        locked_by: null,
+        lock_expires_at: null,
+        updated_at: now
+      })
+      .where(and(eq(worktrees.id, id), eq(worktrees.locked_by, lockedBy)))
+      .run()
     return result.changes > 0
   } else {
-    const result = d
-      .prepare(
-        'UPDATE worktrees SET locked_by = NULL, lock_expires_at = NULL, updated_at = ? WHERE id = ?'
-      )
-      .run(now, id)
+    const result = db
+      .update(worktrees)
+      .set({
+        locked_by: null,
+        lock_expires_at: null,
+        updated_at: now
+      })
+      .where(eq(worktrees.id, id))
+      .run()
     return result.changes > 0
   }
 }
@@ -238,31 +272,32 @@ export function releaseWorktreeLock(id: string, lockedBy?: string | null): boole
  * Get expired worktree locks.
  */
 export function getExpiredWorktreeLocks(): Worktree[] {
-  const d = getDb()
+  const db = getDrizzle()
   const now = new Date().toISOString()
-  const stmt = d.prepare(
-    'SELECT * FROM worktrees WHERE locked_by IS NOT NULL AND lock_expires_at < ?'
-  )
-  return stmt.all(now) as Worktree[]
+  return db
+    .select()
+    .from(worktrees)
+    .where(and(isNotNull(worktrees.locked_by), lt(worktrees.lock_expires_at, now)))
+    .all() as Worktree[]
 }
 
 /**
  * Count active worktrees for a project.
  */
 export function countActiveWorktrees(projectId: string): number {
-  const d = getDb()
+  const db = getDrizzle()
   const now = new Date().toISOString()
-  const result = d
-    .prepare(
-      `
-      SELECT COUNT(*) as count
-      FROM worktrees
-      WHERE project_id = ?
-        AND status IN ('creating', 'running')
-        AND locked_by IS NOT NULL
-        AND (lock_expires_at IS NULL OR lock_expires_at > ?)
-    `
+  const result = db
+    .select({ count: count() })
+    .from(worktrees)
+    .where(
+      and(
+        eq(worktrees.project_id, projectId),
+        inArray(worktrees.status, ['creating', 'running']),
+        isNotNull(worktrees.locked_by),
+        or(isNull(worktrees.lock_expires_at), gt(worktrees.lock_expires_at, now))
+      )
     )
-    .get(projectId, now) as { count: number }
-  return result.count
+    .get()
+  return result?.count ?? 0
 }

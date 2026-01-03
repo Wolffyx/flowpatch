@@ -4,51 +4,16 @@
  * CRUD operations for card dependency blocking.
  */
 
+import { asc, count, eq } from 'drizzle-orm'
+import { getDrizzle } from './drizzle'
+import { cardDependencies, cards } from './schema'
 import { generateId } from '@shared/utils'
-import { getDb } from './connection'
 import type {
   CardDependency,
   CardDependencyWithCard,
   CardStatus,
   DependencyCheckResult
 } from '@shared/types'
-
-// ============================================================================
-// Type Definitions
-// ============================================================================
-
-interface CardDependencyRow {
-  id: string
-  project_id: string
-  card_id: string
-  depends_on_card_id: string
-  blocking_statuses_json: string
-  required_status: string
-  is_active: number
-  created_at: string
-  updated_at: string
-}
-
-interface CardRow {
-  id: string
-  project_id: string
-  title: string
-  status: string
-}
-
-function rowToDependency(row: CardDependencyRow): CardDependency {
-  return {
-    id: row.id,
-    project_id: row.project_id,
-    card_id: row.card_id,
-    depends_on_card_id: row.depends_on_card_id,
-    blocking_statuses: JSON.parse(row.blocking_statuses_json) as CardStatus[],
-    required_status: row.required_status as CardStatus,
-    is_active: row.is_active,
-    created_at: row.created_at,
-    updated_at: row.updated_at
-  }
-}
 
 // ============================================================================
 // Create Operations
@@ -66,7 +31,7 @@ export interface CreateCardDependencyData {
  * Create a new card dependency.
  */
 export function createCardDependency(data: CreateCardDependencyData): CardDependency {
-  const db = getDb()
+  const db = getDrizzle()
   const id = generateId()
   const now = new Date().toISOString()
 
@@ -74,23 +39,19 @@ export function createCardDependency(data: CreateCardDependencyData): CardDepend
   const blockingStatuses = data.blockingStatuses ?? ['ready', 'in_progress']
   const requiredStatus = data.requiredStatus ?? 'done'
 
-  const stmt = db.prepare(`
-    INSERT INTO card_dependencies (
-      id, project_id, card_id, depends_on_card_id, blocking_statuses_json, required_status, is_active, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `)
-
-  stmt.run(
-    id,
-    data.projectId,
-    data.cardId,
-    data.dependsOnCardId,
-    JSON.stringify(blockingStatuses),
-    requiredStatus,
-    1, // is_active = true
-    now,
-    now
-  )
+  db.insert(cardDependencies)
+    .values({
+      id,
+      project_id: data.projectId,
+      card_id: data.cardId,
+      depends_on_card_id: data.dependsOnCardId,
+      blocking_statuses_json: JSON.stringify(blockingStatuses),
+      required_status: requiredStatus,
+      is_active: 1,
+      created_at: now,
+      updated_at: now
+    })
+    .run()
 
   return {
     id,
@@ -109,13 +70,36 @@ export function createCardDependency(data: CreateCardDependencyData): CardDepend
 // Read Operations
 // ============================================================================
 
+function rowToDependency(row: {
+  id: string
+  project_id: string
+  card_id: string
+  depends_on_card_id: string
+  blocking_statuses_json: string
+  required_status: string
+  is_active: number
+  created_at: string
+  updated_at: string
+}): CardDependency {
+  return {
+    id: row.id,
+    project_id: row.project_id,
+    card_id: row.card_id,
+    depends_on_card_id: row.depends_on_card_id,
+    blocking_statuses: JSON.parse(row.blocking_statuses_json) as CardStatus[],
+    required_status: row.required_status as CardStatus,
+    is_active: row.is_active,
+    created_at: row.created_at,
+    updated_at: row.updated_at
+  }
+}
+
 /**
  * Get a card dependency by ID.
  */
 export function getCardDependency(dependencyId: string): CardDependency | null {
-  const db = getDb()
-  const stmt = db.prepare('SELECT * FROM card_dependencies WHERE id = ?')
-  const row = stmt.get(dependencyId) as CardDependencyRow | undefined
+  const db = getDrizzle()
+  const row = db.select().from(cardDependencies).where(eq(cardDependencies.id, dependencyId)).get()
   return row ? rowToDependency(row) : null
 }
 
@@ -123,11 +107,13 @@ export function getCardDependency(dependencyId: string): CardDependency | null {
  * Get all dependencies for a card (what this card depends on).
  */
 export function getDependenciesForCard(cardId: string): CardDependency[] {
-  const db = getDb()
-  const stmt = db.prepare(
-    'SELECT * FROM card_dependencies WHERE card_id = ? ORDER BY created_at ASC'
-  )
-  const rows = stmt.all(cardId) as CardDependencyRow[]
+  const db = getDrizzle()
+  const rows = db
+    .select()
+    .from(cardDependencies)
+    .where(eq(cardDependencies.card_id, cardId))
+    .orderBy(asc(cardDependencies.created_at))
+    .all()
   return rows.map(rowToDependency)
 }
 
@@ -135,23 +121,28 @@ export function getDependenciesForCard(cardId: string): CardDependency[] {
  * Get all dependencies for a card with related card info.
  */
 export function getDependenciesForCardWithCards(cardId: string): CardDependencyWithCard[] {
-  const db = getDb()
-  const stmt = db.prepare(`
-    SELECT
-      d.*,
-      c.id as dep_card_id, c.project_id as dep_card_project_id, c.title as dep_card_title, c.status as dep_card_status
-    FROM card_dependencies d
-    LEFT JOIN cards c ON d.depends_on_card_id = c.id
-    WHERE d.card_id = ?
-    ORDER BY d.created_at ASC
-  `)
-
-  const rows = stmt.all(cardId) as (CardDependencyRow & {
-    dep_card_id: string | null
-    dep_card_project_id: string | null
-    dep_card_title: string | null
-    dep_card_status: string | null
-  })[]
+  const db = getDrizzle()
+  const rows = db
+    .select({
+      id: cardDependencies.id,
+      project_id: cardDependencies.project_id,
+      card_id: cardDependencies.card_id,
+      depends_on_card_id: cardDependencies.depends_on_card_id,
+      blocking_statuses_json: cardDependencies.blocking_statuses_json,
+      required_status: cardDependencies.required_status,
+      is_active: cardDependencies.is_active,
+      created_at: cardDependencies.created_at,
+      updated_at: cardDependencies.updated_at,
+      dep_card_id: cards.id,
+      dep_card_project_id: cards.project_id,
+      dep_card_title: cards.title,
+      dep_card_status: cards.status
+    })
+    .from(cardDependencies)
+    .leftJoin(cards, eq(cardDependencies.depends_on_card_id, cards.id))
+    .where(eq(cardDependencies.card_id, cardId))
+    .orderBy(asc(cardDependencies.created_at))
+    .all()
 
   return rows.map((row) => {
     const dep = rowToDependency(row)
@@ -174,11 +165,13 @@ export function getDependenciesForCardWithCards(cardId: string): CardDependencyW
  * Get all cards that depend on a given card (what depends on this card).
  */
 export function getDependentsOfCard(cardId: string): CardDependency[] {
-  const db = getDb()
-  const stmt = db.prepare(
-    'SELECT * FROM card_dependencies WHERE depends_on_card_id = ? ORDER BY created_at ASC'
-  )
-  const rows = stmt.all(cardId) as CardDependencyRow[]
+  const db = getDrizzle()
+  const rows = db
+    .select()
+    .from(cardDependencies)
+    .where(eq(cardDependencies.depends_on_card_id, cardId))
+    .orderBy(asc(cardDependencies.created_at))
+    .all()
   return rows.map(rowToDependency)
 }
 
@@ -186,11 +179,13 @@ export function getDependentsOfCard(cardId: string): CardDependency[] {
  * Get all dependencies for a project.
  */
 export function getDependenciesByProject(projectId: string): CardDependency[] {
-  const db = getDb()
-  const stmt = db.prepare(
-    'SELECT * FROM card_dependencies WHERE project_id = ? ORDER BY created_at ASC'
-  )
-  const rows = stmt.all(projectId) as CardDependencyRow[]
+  const db = getDrizzle()
+  const rows = db
+    .select()
+    .from(cardDependencies)
+    .where(eq(cardDependencies.project_id, projectId))
+    .orderBy(asc(cardDependencies.created_at))
+    .all()
   return rows.map(rowToDependency)
 }
 
@@ -198,22 +193,26 @@ export function getDependenciesByProject(projectId: string): CardDependency[] {
  * Count dependencies for a card.
  */
 export function countDependenciesForCard(cardId: string): number {
-  const db = getDb()
-  const stmt = db.prepare('SELECT COUNT(*) as count FROM card_dependencies WHERE card_id = ?')
-  const row = stmt.get(cardId) as { count: number }
-  return row.count
+  const db = getDrizzle()
+  const result = db
+    .select({ count: count() })
+    .from(cardDependencies)
+    .where(eq(cardDependencies.card_id, cardId))
+    .get()
+  return result?.count ?? 0
 }
 
 /**
  * Count cards that depend on a given card.
  */
 export function countDependentsOfCard(cardId: string): number {
-  const db = getDb()
-  const stmt = db.prepare(
-    'SELECT COUNT(*) as count FROM card_dependencies WHERE depends_on_card_id = ?'
-  )
-  const row = stmt.get(cardId) as { count: number }
-  return row.count
+  const db = getDrizzle()
+  const result = db
+    .select({ count: count() })
+    .from(cardDependencies)
+    .where(eq(cardDependencies.depends_on_card_id, cardId))
+    .get()
+  return result?.count ?? 0
 }
 
 // ============================================================================
@@ -227,7 +226,7 @@ export function checkCanMoveToStatus(
   cardId: string,
   targetStatus: CardStatus
 ): DependencyCheckResult {
-  const db = getDb()
+  const db = getDrizzle()
 
   // Get all active dependencies for this card
   const dependencies = getDependenciesForCard(cardId).filter((d) => d.is_active === 1)
@@ -245,8 +244,16 @@ export function checkCanMoveToStatus(
     }
 
     // Get the status of the dependency card
-    const depCardStmt = db.prepare('SELECT id, project_id, title, status FROM cards WHERE id = ?')
-    const depCard = depCardStmt.get(dep.depends_on_card_id) as CardRow | undefined
+    const depCard = db
+      .select({
+        id: cards.id,
+        project_id: cards.project_id,
+        title: cards.title,
+        status: cards.status
+      })
+      .from(cards)
+      .where(eq(cards.id, dep.depends_on_card_id))
+      .get()
 
     if (!depCard) {
       // Dependency card doesn't exist - skip
@@ -299,7 +306,7 @@ export function wouldCreateCycle(cardId: string, dependsOnCardId: string): boole
     return true // Self-dependency is a cycle
   }
 
-  const db = getDb()
+  const db = getDrizzle()
   const visited = new Set<string>()
   const stack = [dependsOnCardId]
 
@@ -316,8 +323,11 @@ export function wouldCreateCycle(cardId: string, dependsOnCardId: string): boole
     visited.add(currentId)
 
     // Get all cards that currentId depends on
-    const stmt = db.prepare('SELECT depends_on_card_id FROM card_dependencies WHERE card_id = ?')
-    const rows = stmt.all(currentId) as { depends_on_card_id: string }[]
+    const rows = db
+      .select({ depends_on_card_id: cardDependencies.depends_on_card_id })
+      .from(cardDependencies)
+      .where(eq(cardDependencies.card_id, currentId))
+      .all()
 
     for (const row of rows) {
       stack.push(row.depends_on_card_id)
@@ -344,28 +354,26 @@ export function updateCardDependency(
   dependencyId: string,
   data: UpdateCardDependencyData
 ): CardDependency | null {
-  const db = getDb()
+  const db = getDrizzle()
   const now = new Date().toISOString()
 
-  const updates: string[] = ['updated_at = ?']
-  const values: (string | number)[] = [now]
+  const updateData: Record<string, unknown> = { updated_at: now }
 
   if (data.blockingStatuses !== undefined) {
-    updates.push('blocking_statuses_json = ?')
-    values.push(JSON.stringify(data.blockingStatuses))
+    updateData.blocking_statuses_json = JSON.stringify(data.blockingStatuses)
   }
   if (data.requiredStatus !== undefined) {
-    updates.push('required_status = ?')
-    values.push(data.requiredStatus)
+    updateData.required_status = data.requiredStatus
   }
   if (data.isActive !== undefined) {
-    updates.push('is_active = ?')
-    values.push(data.isActive ? 1 : 0)
+    updateData.is_active = data.isActive ? 1 : 0
   }
 
-  values.push(dependencyId)
-  const stmt = db.prepare(`UPDATE card_dependencies SET ${updates.join(', ')} WHERE id = ?`)
-  const result = stmt.run(...values)
+  const result = db
+    .update(cardDependencies)
+    .set(updateData)
+    .where(eq(cardDependencies.id, dependencyId))
+    .run()
 
   if (result.changes === 0) return null
   return getCardDependency(dependencyId)
@@ -375,13 +383,14 @@ export function updateCardDependency(
  * Toggle a dependency's active state.
  */
 export function toggleDependency(dependencyId: string, isActive: boolean): boolean {
-  const db = getDb()
+  const db = getDrizzle()
   const now = new Date().toISOString()
 
-  const stmt = db.prepare(
-    'UPDATE card_dependencies SET is_active = ?, updated_at = ? WHERE id = ?'
-  )
-  const result = stmt.run(isActive ? 1 : 0, now, dependencyId)
+  const result = db
+    .update(cardDependencies)
+    .set({ is_active: isActive ? 1 : 0, updated_at: now })
+    .where(eq(cardDependencies.id, dependencyId))
+    .run()
   return result.changes > 0
 }
 
@@ -393,9 +402,8 @@ export function toggleDependency(dependencyId: string, isActive: boolean): boole
  * Delete a card dependency.
  */
 export function deleteCardDependency(dependencyId: string): boolean {
-  const db = getDb()
-  const stmt = db.prepare('DELETE FROM card_dependencies WHERE id = ?')
-  const result = stmt.run(dependencyId)
+  const db = getDrizzle()
+  const result = db.delete(cardDependencies).where(eq(cardDependencies.id, dependencyId)).run()
   return result.changes > 0
 }
 
@@ -403,9 +411,8 @@ export function deleteCardDependency(dependencyId: string): boolean {
  * Delete all dependencies for a card (dependencies where this card is the dependent).
  */
 export function deleteDependenciesForCard(cardId: string): number {
-  const db = getDb()
-  const stmt = db.prepare('DELETE FROM card_dependencies WHERE card_id = ?')
-  const result = stmt.run(cardId)
+  const db = getDrizzle()
+  const result = db.delete(cardDependencies).where(eq(cardDependencies.card_id, cardId)).run()
   return result.changes
 }
 
@@ -413,9 +420,11 @@ export function deleteDependenciesForCard(cardId: string): number {
  * Delete all dependencies where a card is the dependency (what depends on this card).
  */
 export function deleteDependentsOfCard(cardId: string): number {
-  const db = getDb()
-  const stmt = db.prepare('DELETE FROM card_dependencies WHERE depends_on_card_id = ?')
-  const result = stmt.run(cardId)
+  const db = getDrizzle()
+  const result = db
+    .delete(cardDependencies)
+    .where(eq(cardDependencies.depends_on_card_id, cardId))
+    .run()
   return result.changes
 }
 
@@ -423,9 +432,11 @@ export function deleteDependentsOfCard(cardId: string): number {
  * Delete all dependencies for a project.
  */
 export function deleteDependenciesByProject(projectId: string): number {
-  const db = getDb()
-  const stmt = db.prepare('DELETE FROM card_dependencies WHERE project_id = ?')
-  const result = stmt.run(projectId)
+  const db = getDrizzle()
+  const result = db
+    .delete(cardDependencies)
+    .where(eq(cardDependencies.project_id, projectId))
+    .run()
   return result.changes
 }
 
@@ -433,10 +444,17 @@ export function deleteDependenciesByProject(projectId: string): number {
  * Delete a specific dependency between two cards.
  */
 export function deleteDependencyBetweenCards(cardId: string, dependsOnCardId: string): boolean {
-  const db = getDb()
-  const stmt = db.prepare(
-    'DELETE FROM card_dependencies WHERE card_id = ? AND depends_on_card_id = ?'
-  )
-  const result = stmt.run(cardId, dependsOnCardId)
+  const db = getDrizzle()
+  // Get the dependency first
+  const rows = db
+    .select()
+    .from(cardDependencies)
+    .where(eq(cardDependencies.card_id, cardId))
+    .all()
+
+  const toDelete = rows.find((r) => r.depends_on_card_id === dependsOnCardId)
+  if (!toDelete) return false
+
+  const result = db.delete(cardDependencies).where(eq(cardDependencies.id, toDelete.id)).run()
   return result.changes > 0
 }

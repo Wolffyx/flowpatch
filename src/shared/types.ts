@@ -214,6 +214,7 @@ export interface Card {
   updated_local_at: string
   sync_state: SyncState
   last_error: string | null
+  has_conflicts: number
 }
 
 export interface CardLink {

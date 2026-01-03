@@ -4,7 +4,37 @@
  * Handles streaming process execution with timeout and cancellation support.
  */
 
-import { spawn, execFile } from 'child_process'
+import { spawn, execFile, execFileSync } from 'child_process'
+
+function resolveWindowsSpawnCommand(command: string, env: NodeJS.ProcessEnv): string {
+  // If the caller passed a path or explicit extension, don't try to resolve it.
+  if (command.includes('\\') || command.includes('/') || /\.[A-Za-z0-9]+$/.test(command)) return command
+
+  try {
+    const raw = execFileSync('where', [command], {
+      env,
+      encoding: 'utf-8',
+      windowsHide: true
+    })
+
+    const matches = raw
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+
+    if (!matches.length) return command
+
+    const preferredExts = ['.exe', '.cmd', '.bat', '.com']
+    for (const ext of preferredExts) {
+      const hit = matches.find((m) => m.toLowerCase().endsWith(ext))
+      if (hit) return hit
+    }
+
+    return matches[0]
+  } catch {
+    return command
+  }
+}
 
 export class WorkerCanceledError extends Error {
   constructor(message = 'Canceled') {
@@ -20,6 +50,7 @@ export interface ProcessStreamingOptions {
   timeoutMs: number
   source: string
   env?: NodeJS.ProcessEnv
+  stdin?: string
   onLog?: (message: string, meta: { source: string; stream: 'stdout' | 'stderr' }) => void
   isCanceled?: () => boolean
 }
@@ -28,14 +59,28 @@ export interface ProcessStreamingOptions {
  * Run a process with streaming output and timeout support.
  */
 export async function runProcessStreaming(options: ProcessStreamingOptions): Promise<void> {
-  const { command, args, cwd, timeoutMs, source, env, onLog, isCanceled } = options
+  const { command, args, cwd, timeoutMs, source, env, stdin, onLog, isCanceled } = options
 
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, {
+    const spawnCommand =
+      process.platform === 'win32'
+        ? resolveWindowsSpawnCommand(command, env ?? process.env)
+        : command
+
+    const child = spawn(spawnCommand, args, {
       cwd,
       env: env ?? process.env,
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: [stdin ? 'pipe' : 'ignore', 'pipe', 'pipe']
     })
+
+    if (stdin) {
+      try {
+        child.stdin?.write(stdin)
+        child.stdin?.end()
+      } catch {
+        // ignore
+      }
+    }
 
     let killedByTimeout = false
     const timer = setTimeout(() => {

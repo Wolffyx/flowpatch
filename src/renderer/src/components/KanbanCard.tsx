@@ -8,7 +8,8 @@ import {
   GitMerge,
   AlertCircle,
   Link2,
-  Clock
+  Clock,
+  GitBranch
 } from 'lucide-react'
 import { Badge } from './ui/badge'
 import { cn } from '../lib/utils'
@@ -63,6 +64,7 @@ export function KanbanCard({
   }
 
   const labels = parseLabels(card.labels_json)
+  const hasConflicts = card.has_conflicts === 1
 
   return (
     <div
@@ -74,7 +76,8 @@ export function KanbanCard({
         'rounded-lg border bg-card p-3 shadow-sm cursor-grab active:cursor-grabbing transition-all',
         isDragging && 'opacity-50 shadow-lg',
         isSelected && 'ring-2 ring-primary',
-        card.sync_state === 'error' && 'border-destructive',
+        hasConflicts && 'border-orange-500 border-2',
+        card.sync_state === 'error' && !hasConflicts && 'border-destructive',
         card.sync_state === 'pending' && 'border-chart-4'
       )}
       onClick={(e) => {
@@ -102,7 +105,12 @@ export function KanbanCard({
               {linkedPRs.length > 1 && <span>+{linkedPRs.length - 1}</span>}
             </Badge>
           )}
-          {card.sync_state === 'error' && (
+          {hasConflicts && (
+            <span title="Merge conflicts - needs resolution">
+              <GitBranch className="h-3 w-3 text-orange-500" />
+            </span>
+          )}
+          {card.sync_state === 'error' && !hasConflicts && (
             <span title={card.last_error || 'Error'}>
               <AlertCircle className="h-3 w-3 text-destructive" />
             </span>

@@ -287,3 +287,71 @@ export async function getModifiedFiles(cwd: string, baseRef: string): Promise<st
     .split('\n')
     .filter((f) => f.trim())
 }
+
+/**
+ * Merge a branch into the current branch.
+ * Returns true if merge succeeds, false if there are conflicts.
+ */
+export async function merge(cwd: string, branch: string): Promise<boolean> {
+  try {
+    await execFileAsync('git', ['merge', branch, '--no-edit'], { cwd, env: getGitEnv() })
+    return true
+  } catch {
+    // Check if it's a conflict or other error
+    const conflicted = await hasConflicts(cwd)
+    if (conflicted) {
+      return false
+    }
+    throw new Error(`Merge failed for branch ${branch}`)
+  }
+}
+
+/**
+ * Check if repository has merge conflicts.
+ */
+export async function hasConflicts(cwd: string): Promise<boolean> {
+  const status = await getWorkingTreeStatus(cwd)
+  // UU = both modified, AA = both added, DD = both deleted, UD/DU = one deleted
+  return /^(UU|AA|DD|UD|DU) /m.test(status)
+}
+
+/**
+ * Get list of files with conflicts.
+ */
+export async function getConflictFiles(cwd: string): Promise<string[]> {
+  const status = await getWorkingTreeStatus(cwd)
+  const lines = status.split('\n')
+  const conflicted: string[] = []
+  for (const line of lines) {
+    if (/^(UU|AA|DD|UD|DU) /.test(line)) {
+      // Format is "XY filename" where XY is the status code
+      conflicted.push(line.slice(3).trim())
+    }
+  }
+  return conflicted
+}
+
+/**
+ * Abort an in-progress merge.
+ */
+export async function abortMerge(cwd: string): Promise<void> {
+  try {
+    await execFileAsync('git', ['merge', '--abort'], { cwd })
+  } catch {
+    // Merge may not be in progress, ignore
+  }
+}
+
+/**
+ * Stage a single file.
+ */
+export async function stageFile(cwd: string, filePath: string): Promise<void> {
+  await execFileAsync('git', ['add', filePath], { cwd, env: getGitEnv() })
+}
+
+/**
+ * Complete a merge after resolving conflicts.
+ */
+export async function completeMerge(cwd: string, message: string): Promise<void> {
+  await execFileAsync('git', ['commit', '-m', message], { cwd, env: getGitEnv() })
+}

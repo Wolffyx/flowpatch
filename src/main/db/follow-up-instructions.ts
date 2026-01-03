@@ -5,7 +5,9 @@
  * Used for providing feedback to running or paused workers.
  */
 
-import { getDb } from './connection'
+import { and, asc, count, desc, eq } from 'drizzle-orm'
+import { getDrizzle } from './drizzle'
+import { followUpInstructions } from './schema'
 import { generateId } from '@shared/utils'
 import type {
   FollowUpInstruction,
@@ -24,122 +26,102 @@ export interface FollowUpInstructionCreate {
   priority?: number
 }
 
-interface DbRow {
-  id: string
-  job_id: string
-  card_id: string
-  project_id: string
-  instruction_type: string
-  content: string
-  status: string
-  priority: number
-  created_at: string
-  processed_at: string | null
-}
-
-function rowToInstruction(row: DbRow): FollowUpInstruction {
-  return {
-    id: row.id,
-    job_id: row.job_id,
-    card_id: row.card_id,
-    project_id: row.project_id,
-    instruction_type: row.instruction_type as FollowUpInstructionType,
-    content: row.content,
-    status: row.status as FollowUpInstructionStatus,
-    priority: row.priority,
-    created_at: row.created_at,
-    processed_at: row.processed_at ?? undefined
-  }
-}
-
 /**
  * Get a follow-up instruction by ID.
  */
 export function getFollowUpInstruction(id: string): FollowUpInstruction | null {
-  const db = getDb()
-  const row = db
-    .prepare(
-      `SELECT id, job_id, card_id, project_id, instruction_type, content, status, priority, created_at, processed_at
-       FROM follow_up_instructions WHERE id = ?`
-    )
-    .get(id) as DbRow | undefined
-
-  if (!row) return null
-  return rowToInstruction(row)
+  const db = getDrizzle()
+  return (
+    (db
+      .select()
+      .from(followUpInstructions)
+      .where(eq(followUpInstructions.id, id))
+      .get() as FollowUpInstruction) ?? null
+  )
 }
 
 /**
  * Get all follow-up instructions for a job.
  */
 export function getFollowUpInstructionsByJob(jobId: string): FollowUpInstruction[] {
-  const db = getDb()
-  const rows = db
-    .prepare(
-      `SELECT id, job_id, card_id, project_id, instruction_type, content, status, priority, created_at, processed_at
-       FROM follow_up_instructions WHERE job_id = ? ORDER BY priority DESC, created_at ASC`
-    )
-    .all(jobId) as DbRow[]
-
-  return rows.map(rowToInstruction)
+  const db = getDrizzle()
+  return db
+    .select()
+    .from(followUpInstructions)
+    .where(eq(followUpInstructions.job_id, jobId))
+    .orderBy(desc(followUpInstructions.priority), asc(followUpInstructions.created_at))
+    .all() as FollowUpInstruction[]
 }
 
 /**
  * Get pending follow-up instructions for a job.
  */
 export function getPendingFollowUpInstructions(jobId: string): FollowUpInstruction[] {
-  const db = getDb()
-  const rows = db
-    .prepare(
-      `SELECT id, job_id, card_id, project_id, instruction_type, content, status, priority, created_at, processed_at
-       FROM follow_up_instructions WHERE job_id = ? AND status = 'pending' ORDER BY priority DESC, created_at ASC`
+  const db = getDrizzle()
+  return db
+    .select()
+    .from(followUpInstructions)
+    .where(
+      and(eq(followUpInstructions.job_id, jobId), eq(followUpInstructions.status, 'pending'))
     )
-    .all(jobId) as DbRow[]
-
-  return rows.map(rowToInstruction)
+    .orderBy(desc(followUpInstructions.priority), asc(followUpInstructions.created_at))
+    .all() as FollowUpInstruction[]
 }
 
 /**
  * Get all pending follow-up instructions for a project.
  */
 export function getPendingInstructionsByProject(projectId: string): FollowUpInstruction[] {
-  const db = getDb()
-  const rows = db
-    .prepare(
-      `SELECT id, job_id, card_id, project_id, instruction_type, content, status, priority, created_at, processed_at
-       FROM follow_up_instructions WHERE project_id = ? AND status = 'pending' ORDER BY priority DESC, created_at ASC`
+  const db = getDrizzle()
+  return db
+    .select()
+    .from(followUpInstructions)
+    .where(
+      and(
+        eq(followUpInstructions.project_id, projectId),
+        eq(followUpInstructions.status, 'pending')
+      )
     )
-    .all(projectId) as DbRow[]
-
-  return rows.map(rowToInstruction)
+    .orderBy(desc(followUpInstructions.priority), asc(followUpInstructions.created_at))
+    .all() as FollowUpInstruction[]
 }
 
 /**
  * Get all pending follow-up instructions for a card.
  */
 export function getPendingInstructionsByCard(cardId: string): FollowUpInstruction[] {
-  const db = getDb()
-  const rows = db
-    .prepare(
-      `SELECT id, job_id, card_id, project_id, instruction_type, content, status, priority, created_at, processed_at
-       FROM follow_up_instructions WHERE card_id = ? AND status = 'pending' ORDER BY priority DESC, created_at ASC`
+  const db = getDrizzle()
+  return db
+    .select()
+    .from(followUpInstructions)
+    .where(
+      and(eq(followUpInstructions.card_id, cardId), eq(followUpInstructions.status, 'pending'))
     )
-    .all(cardId) as DbRow[]
-
-  return rows.map(rowToInstruction)
+    .orderBy(desc(followUpInstructions.priority), asc(followUpInstructions.created_at))
+    .all() as FollowUpInstruction[]
 }
 
 /**
  * Create a new follow-up instruction.
  */
 export function createFollowUpInstruction(data: FollowUpInstructionCreate): FollowUpInstruction {
-  const db = getDb()
+  const db = getDrizzle()
   const id = generateId()
   const now = new Date().toISOString()
 
-  db.prepare(
-    `INSERT INTO follow_up_instructions (id, job_id, card_id, project_id, instruction_type, content, status, priority, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`
-  ).run(id, data.jobId, data.cardId, data.projectId, data.instructionType, data.content, data.priority ?? 0, now)
+  db.insert(followUpInstructions)
+    .values({
+      id,
+      job_id: data.jobId,
+      card_id: data.cardId,
+      project_id: data.projectId,
+      instruction_type: data.instructionType,
+      content: data.content,
+      status: 'pending',
+      priority: data.priority ?? 0,
+      created_at: now
+    })
+    .run()
 
   return {
     id,
@@ -158,8 +140,11 @@ export function createFollowUpInstruction(data: FollowUpInstructionCreate): Foll
  * Mark an instruction as processing.
  */
 export function markInstructionProcessing(id: string): FollowUpInstruction | null {
-  const db = getDb()
-  db.prepare(`UPDATE follow_up_instructions SET status = 'processing' WHERE id = ?`).run(id)
+  const db = getDrizzle()
+  db.update(followUpInstructions)
+    .set({ status: 'processing' })
+    .where(eq(followUpInstructions.id, id))
+    .run()
   return getFollowUpInstruction(id)
 }
 
@@ -167,9 +152,12 @@ export function markInstructionProcessing(id: string): FollowUpInstruction | nul
  * Mark an instruction as applied.
  */
 export function markInstructionApplied(id: string): FollowUpInstruction | null {
-  const db = getDb()
+  const db = getDrizzle()
   const now = new Date().toISOString()
-  db.prepare(`UPDATE follow_up_instructions SET status = 'applied', processed_at = ? WHERE id = ?`).run(now, id)
+  db.update(followUpInstructions)
+    .set({ status: 'applied', processed_at: now })
+    .where(eq(followUpInstructions.id, id))
+    .run()
   return getFollowUpInstruction(id)
 }
 
@@ -177,9 +165,12 @@ export function markInstructionApplied(id: string): FollowUpInstruction | null {
  * Mark an instruction as rejected.
  */
 export function markInstructionRejected(id: string): FollowUpInstruction | null {
-  const db = getDb()
+  const db = getDrizzle()
   const now = new Date().toISOString()
-  db.prepare(`UPDATE follow_up_instructions SET status = 'rejected', processed_at = ? WHERE id = ?`).run(now, id)
+  db.update(followUpInstructions)
+    .set({ status: 'rejected', processed_at: now })
+    .where(eq(followUpInstructions.id, id))
+    .run()
   return getFollowUpInstruction(id)
 }
 
@@ -187,41 +178,47 @@ export function markInstructionRejected(id: string): FollowUpInstruction | null 
  * Delete a follow-up instruction.
  */
 export function deleteFollowUpInstruction(id: string): void {
-  const db = getDb()
-  db.prepare('DELETE FROM follow_up_instructions WHERE id = ?').run(id)
+  const db = getDrizzle()
+  db.delete(followUpInstructions).where(eq(followUpInstructions.id, id)).run()
 }
 
 /**
  * Delete all follow-up instructions for a job.
  */
 export function deleteFollowUpInstructionsByJob(jobId: string): void {
-  const db = getDb()
-  db.prepare('DELETE FROM follow_up_instructions WHERE job_id = ?').run(jobId)
+  const db = getDrizzle()
+  db.delete(followUpInstructions).where(eq(followUpInstructions.job_id, jobId)).run()
 }
 
 /**
  * Count pending instructions for a job.
  */
 export function countPendingInstructions(jobId: string): number {
-  const db = getDb()
+  const db = getDrizzle()
   const result = db
-    .prepare(`SELECT COUNT(*) as count FROM follow_up_instructions WHERE job_id = ? AND status = 'pending'`)
-    .get(jobId) as { count: number }
-  return result.count
+    .select({ count: count() })
+    .from(followUpInstructions)
+    .where(
+      and(eq(followUpInstructions.job_id, jobId), eq(followUpInstructions.status, 'pending'))
+    )
+    .get()
+  return result?.count ?? 0
 }
 
 /**
  * Get the next pending instruction for a job (by priority and creation time).
  */
 export function getNextPendingInstruction(jobId: string): FollowUpInstruction | null {
-  const db = getDb()
-  const row = db
-    .prepare(
-      `SELECT id, job_id, card_id, project_id, instruction_type, content, status, priority, created_at, processed_at
-       FROM follow_up_instructions WHERE job_id = ? AND status = 'pending' ORDER BY priority DESC, created_at ASC LIMIT 1`
-    )
-    .get(jobId) as DbRow | undefined
-
-  if (!row) return null
-  return rowToInstruction(row)
+  const db = getDrizzle()
+  return (
+    (db
+      .select()
+      .from(followUpInstructions)
+      .where(
+        and(eq(followUpInstructions.job_id, jobId), eq(followUpInstructions.status, 'pending'))
+      )
+      .orderBy(desc(followUpInstructions.priority), asc(followUpInstructions.created_at))
+      .limit(1)
+      .get() as FollowUpInstruction) ?? null
+  )
 }

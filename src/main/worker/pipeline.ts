@@ -1,4 +1,4 @@
-import { execFile, spawn } from 'child_process'
+import { execFile, execFileSync, spawn } from 'child_process'
 import { promisify } from 'util'
 import { writeFileSync } from 'fs'
 import { join, resolve } from 'path'
@@ -8,6 +8,7 @@ import {
   getProject,
   getCard,
   updateCardStatus,
+  updateCardConflictStatus,
   createEvent,
   ensureCardLink,
   listCardLinks,
@@ -21,6 +22,7 @@ import {
   updateWorktreeStatus,
   updateWorktreeJob,
   getWorktreeByCard,
+  getWorktreeByBranch,
   acquireWorktreeLock,
   releaseWorktreeLock,
   renewWorktreeLock,
@@ -60,8 +62,39 @@ import { GitWorktreeManager, WorktreeConfig } from '../services/git-worktree-man
 import { buildContextBundle, buildPromptContext } from '../services/patchwork-context'
 import { writeCheckpoint, readCheckpoint, ensureRunDir } from '../services/patchwork-runs'
 import { runE2EPhase as runE2EPhaseImpl, type E2EResult } from './phases/e2e'
+import { runBranchSyncPhase, type BranchSyncResult } from './phases/branch-sync'
 
 const execFileAsync = promisify(execFile)
+
+function resolveWindowsSpawnCommand(command: string, env: NodeJS.ProcessEnv): string {
+  // If the caller passed a path or explicit extension, don't try to resolve it.
+  if (command.includes('\\') || command.includes('/') || /\.[A-Za-z0-9]+$/.test(command)) return command
+
+  try {
+    const raw = execFileSync('where', [command], {
+      env,
+      encoding: 'utf-8',
+      windowsHide: true
+    })
+
+    const matches = raw
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+
+    if (!matches.length) return command
+
+    const preferredExts = ['.exe', '.cmd', '.bat', '.com']
+    for (const ext of preferredExts) {
+      const hit = matches.find((m) => m.toLowerCase().endsWith(ext))
+      if (hit) return hit
+    }
+
+    return matches[0]
+  } catch {
+    return command
+  }
+}
 
 interface WorkerResult {
   success: boolean
@@ -507,6 +540,7 @@ export class WorkerPipeline {
   async run(jobId: string): Promise<WorkerResult> {
     this.jobId = jobId
     this.setPhase('init')
+    let outcome: 'succeeded' | 'failed' | 'canceled' | 'pending_approval' = 'failed'
 
     // Start lease renewal
     this.leaseInterval = setInterval(() => {
@@ -516,6 +550,7 @@ export class WorkerPipeline {
     try {
       const initialized = await this.initialize()
       if (!initialized) {
+        outcome = 'failed'
         return { success: false, phase: 'init', error: 'Failed to initialize', logs: this.logs }
       }
 
@@ -536,6 +571,7 @@ export class WorkerPipeline {
         this.log('Setting up worktree')
         const worktreeSetup = await this.setupWorktree()
         if (!worktreeSetup) {
+          outcome = 'failed'
           return {
             success: false,
             phase: 'working_tree',
@@ -558,6 +594,7 @@ export class WorkerPipeline {
         this.log('Checking working tree')
         const cleanTree = await this.checkWorkingTree()
         if (!cleanTree) {
+          outcome = 'failed'
           return {
             success: false,
             phase: 'working_tree',
@@ -593,6 +630,48 @@ export class WorkerPipeline {
       this.ensureNotCanceled()
       this.ensureCardStatusAllowed(['in_progress'])
 
+      // Phase 4.2: Branch Sync (sync existing branch with main)
+      this.setPhase('branch_sync')
+      this.log('Checking if branch needs sync with main')
+      const syncResult = await this.runBranchSync(branchName)
+
+      this.ensureNotCanceled()
+      this.ensureCardStatusAllowed(['in_progress'])
+
+      if (!syncResult.success) {
+        // Failed to sync/resolve conflicts - move to In Review with conflict marker
+        this.log(`Branch sync failed: ${syncResult.error}`)
+
+        // Mark card as having conflicts
+        updateCardConflictStatus(this.cardId, true)
+
+        // Create conflict event
+        createEvent(this.projectId, 'error', this.cardId, {
+          phase: 'branch_sync',
+          hasConflicts: true,
+          unresolvedFiles: syncResult.unresolvedFiles,
+          error: syncResult.error
+        })
+
+        // Move to In Review with error
+        updateCardStatus(this.cardId, 'in_review')
+        broadcastToRenderers('card-updated', { cardId: this.cardId })
+
+        outcome = 'failed'
+        return {
+          success: false,
+          phase: 'branch_sync',
+          error: syncResult.error || 'Failed to sync branch with main',
+          logs: this.logs
+        }
+      }
+
+      // Clear any previous conflict status on success
+      if (syncResult.hadConflicts && syncResult.conflictsResolved) {
+        updateCardConflictStatus(this.cardId, false)
+        this.log('Conflicts resolved successfully')
+      }
+
       // Phase 4.5: Task Decomposition (if enabled)
       if (this.taskDecomposer && this.card) {
         this.setPhase('decomposition')
@@ -616,6 +695,7 @@ export class WorkerPipeline {
         this.log(`Generating implementation plan (mode: ${planningMode})`)
         plan = await this.generatePlan(planningMode)
         if (!plan) {
+          outcome = 'failed'
           return {
             success: false,
             phase: 'plan',
@@ -653,6 +733,7 @@ export class WorkerPipeline {
       this.ensureNotCanceled()
       this.ensureCardStatusAllowed(['in_progress'])
       if (!aiSuccess) {
+        outcome = 'failed'
         return {
           success: false,
           phase: 'ai',
@@ -703,6 +784,7 @@ export class WorkerPipeline {
       this.ensureNotCanceled()
       this.ensureCardStatusAllowed(['in_progress'])
       if (!prResult) {
+        outcome = 'failed'
         return {
           success: false,
           phase: 'pr',
@@ -718,6 +800,7 @@ export class WorkerPipeline {
       await this.moveToInReview(prResult.url, !prResult.existing)
 
       this.setPhase('done')
+      outcome = 'succeeded'
       return {
         success: true,
         phase: 'complete',
@@ -729,6 +812,7 @@ export class WorkerPipeline {
       if (err instanceof WorkerCanceledError) {
         this.setPhase('canceled')
         this.log('Worker run canceled')
+        outcome = 'canceled'
         return {
           success: false,
           phase: 'canceled',
@@ -740,6 +824,7 @@ export class WorkerPipeline {
       if (err instanceof WorkerPendingApprovalError) {
         this.setPhase('pending_approval')
         this.log('Waiting for plan approval')
+        outcome = 'pending_approval'
         return {
           success: false,
           phase: 'pending_approval',
@@ -770,6 +855,22 @@ export class WorkerPipeline {
         // Restore any stashed changes
         await this.restoreStash()
       }
+
+      if (outcome === 'failed') {
+        try {
+          const current = getCard(this.cardId)
+          if (current?.status === 'in_progress') {
+            this.log('Worker failed; moving card back to Ready so it can be retried.')
+            await this.moveToReady('worker_failed')
+          }
+        } catch (error) {
+          this.log(
+            `Failed to move card back to Ready after error: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          )
+        }
+      }
     }
   }
 
@@ -789,20 +890,9 @@ export class WorkerPipeline {
       const baseBranch = await this.getBaseBranch()
       this.baseBranch = baseBranch
 
-      // Generate branch name using worktree naming convention
-      const branchName = generateWorktreeBranchName(
-        this.card.provider,
-        this.card.remote_number_or_iid,
-        this.card.title,
-        this.policy.worker?.worktree?.branchPrefix ?? 'patchwork/'
-      )
-
-      // Compute worktree path
-      const worktreePath = this.worktreeManager.computeWorktreePath(branchName, config)
-
       // Check if there's an existing worktree for this card
       const existingWorktree = getWorktreeByCard(this.cardId)
-      if (existingWorktree && existingWorktree.status === 'ready') {
+      if (existingWorktree) {
         // Verify the existing worktree is healthy before reusing
         const health = this.worktreeManager.verifyWorktree(
           existingWorktree.worktree_path,
@@ -811,7 +901,7 @@ export class WorkerPipeline {
 
         if (!health.healthy) {
           this.log(`Existing worktree is unhealthy: ${health.error}. Will recreate.`)
-          // Mark as error and continue to create a new one
+          // Mark as error and continue with recreate logic below.
           updateWorktreeStatus(existingWorktree.id, 'error', health.error)
         } else {
           // Acquire lock to ensure exclusive use
@@ -831,22 +921,71 @@ export class WorkerPipeline {
         }
       }
 
-      // Create DB record with lock already acquired (prevents race condition)
-      // By setting lockedBy and lockExpiresAt during creation, we atomically claim the record
-      const now = new Date()
-      const lockExpiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString()
+      // Generate branch name using worktree naming convention
+      let branchName = generateWorktreeBranchName(
+        this.card.provider,
+        this.card.remote_number_or_iid,
+        this.card.title,
+        this.policy.worker?.worktree?.branchPrefix ?? 'patchwork/'
+      )
 
-      this.worktreeRecord = createWorktree({
-        projectId: this.projectId,
-        cardId: this.cardId,
-        jobId: this.jobId ?? undefined,
-        worktreePath,
-        branchName,
-        baseRef: `origin/${baseBranch}`,
-        status: 'creating',
-        lockedBy: this.workerId,
-        lockExpiresAt
-      })
+      // If a record already exists for this branch name, reuse it instead of creating a duplicate.
+      // This avoids SQLITE UNIQUE constraint failures when a prior run crashed or left an errored record.
+      const existingByBranch = getWorktreeByBranch(this.projectId, branchName)
+      if (existingByBranch && existingByBranch.card_id === this.cardId) {
+        const health = this.worktreeManager.verifyWorktree(
+          existingByBranch.worktree_path,
+          existingByBranch.branch_name
+        )
+
+        // Acquire lock to ensure exclusive use (even if we're going to recreate).
+        const locked = acquireWorktreeLock(existingByBranch.id, this.workerId, 10)
+        if (!locked) {
+          this.log(`Worktree is locked by another worker: ${existingByBranch.worktree_path}`)
+          return false
+        }
+
+        if (health.healthy) {
+          this.log(`Reusing existing worktree: ${existingByBranch.worktree_path}`)
+          this.worktreeRecord = existingByBranch
+          this.worktreePath = existingByBranch.worktree_path
+          this.workerBranch = existingByBranch.branch_name
+          updateWorktreeJob(existingByBranch.id, this.jobId)
+          updateWorktreeStatus(existingByBranch.id, 'running')
+          return true
+        }
+
+        this.log(`Existing worktree is unhealthy: ${health.error}. Attempting to recreate.`)
+        this.worktreeRecord = existingByBranch
+        updateWorktreeJob(existingByBranch.id, this.jobId)
+        updateWorktreeStatus(existingByBranch.id, 'creating')
+      } else if (existingByBranch && existingByBranch.card_id !== this.cardId) {
+        // Extremely defensive: if another card already uses this branch, avoid the UNIQUE constraint by
+        // creating a deterministic suffix for this card.
+        branchName = `${branchName}-${this.cardId.slice(0, 6)}`
+      }
+
+      // Compute worktree path (after any branch name adjustments)
+      const worktreePath = this.worktreeManager.computeWorktreePath(branchName, config)
+
+      if (!this.worktreeRecord) {
+        // Create DB record with lock already acquired (prevents race condition)
+        // By setting lockedBy and lockExpiresAt during creation, we atomically claim the record
+        const now = new Date()
+        const lockExpiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString()
+
+        this.worktreeRecord = createWorktree({
+          projectId: this.projectId,
+          cardId: this.cardId,
+          jobId: this.jobId ?? undefined,
+          worktreePath,
+          branchName,
+          baseRef: `origin/${baseBranch}`,
+          status: 'creating',
+          lockedBy: this.workerId,
+          lockExpiresAt
+        })
+      }
 
       this.log(`Creating worktree at: ${worktreePath}`)
 
@@ -957,15 +1096,30 @@ export class WorkerPipeline {
     timeoutMs: number
     source: string
     env?: NodeJS.ProcessEnv
+    stdin?: string
   }): Promise<void> {
-    const { command, args, cwd, timeoutMs, source, env } = options
+    const { command, args, cwd, timeoutMs, source, env, stdin } = options
 
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(command, args, {
+      const spawnCommand =
+        process.platform === 'win32'
+          ? resolveWindowsSpawnCommand(command, env ?? process.env)
+          : command
+
+      const child = spawn(spawnCommand, args, {
         cwd,
         env: env ?? process.env,
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: [stdin ? 'pipe' : 'ignore', 'pipe', 'pipe']
       })
+
+      if (stdin) {
+        try {
+          child.stdin?.write(stdin)
+          child.stdin?.end()
+        } catch {
+          // ignore
+        }
+      }
 
       let killedByTimeout = false
       const timer = setTimeout(() => {
@@ -1080,6 +1234,32 @@ export class WorkerPipeline {
     if (this.adapter && this.card?.remote_number_or_iid) {
       const issueNumber = parseInt(this.card.remote_number_or_iid, 10)
       const newLabel = this.adapter.getStatusLabel('in_progress')
+      const allLabels = this.adapter.getAllStatusLabels()
+      await this.adapter.updateLabels(
+        issueNumber,
+        [newLabel],
+        allLabels.filter((l) => l !== newLabel)
+      )
+    }
+  }
+
+  private async moveToReady(reason: string): Promise<void> {
+    const current = getCard(this.cardId)
+    if (!current) return
+    if (current.status === 'ready') return
+
+    updateCardStatus(this.cardId, 'ready')
+    createEvent(this.projectId, 'status_changed', this.cardId, {
+      from: current.status,
+      to: 'ready',
+      source: 'worker',
+      reason
+    })
+
+    // Update remote if adapter available
+    if (this.adapter && this.card?.remote_number_or_iid) {
+      const issueNumber = parseInt(this.card.remote_number_or_iid, 10)
+      const newLabel = this.adapter.getStatusLabel('ready')
       const allLabels = this.adapter.getAllStatusLabels()
       await this.adapter.updateLabels(
         issueNumber,
@@ -1969,10 +2149,11 @@ Please implement the changes now.`
     try {
       await this.runProcessStreaming({
         command: 'codex',
-        args: ['exec', '--full-auto', prompt],
+        args: ['exec', '--full-auto', '-'],
         cwd: workingDir,
         timeoutMs,
-        source: 'codex'
+        source: 'codex',
+        stdin: prompt
       })
     } finally {
       // Clean up prompt file
@@ -2211,6 +2392,46 @@ _Automated by Patchwork_
         )
       }
     }
+  }
+
+  /**
+   * Run branch synchronization phase.
+   * Syncs the card's branch with main and handles conflicts.
+   */
+  private async runBranchSync(branchName: string): Promise<BranchSyncResult> {
+    // Build pipeline context for branch sync phase
+    const ctx = {
+      projectId: this.projectId,
+      cardId: this.cardId,
+      jobId: this.jobId,
+      workerId: this.workerId,
+      project: this.project,
+      card: this.card,
+      policy: this.policy,
+      adapter: this.adapter,
+      startingBranch: this.startingBranch,
+      baseBranch: this.baseBranch,
+      baseHeadSha: null,
+      workerBranch: this.workerBranch,
+      useWorktree: this.useWorktree,
+      worktreeManager: this.worktreeManager,
+      worktreeRecord: this.worktreeRecord,
+      worktreePath: this.worktreePath,
+      taskDecomposer: this.taskDecomposer,
+      subtasks: this.subtasks,
+      progress: this.progress,
+      phase: 'branch_sync',
+      logs: this.logs,
+      lastPlan: undefined,
+      lastPersistMs: 0
+    }
+
+    return runBranchSyncPhase(
+      ctx,
+      branchName,
+      (msg, meta) => this.log(msg, meta),
+      () => this.isCanceled()
+    )
   }
 
   /**

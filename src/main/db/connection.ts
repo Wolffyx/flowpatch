@@ -1,15 +1,20 @@
 /**
  * Database Connection and Initialization
  *
- * Handles SQLite database setup, migrations, and connection management.
+ * This module provides backward compatibility with the old raw SQL interface
+ * while the codebase transitions to Drizzle ORM.
+ *
+ * For new code, use `getDrizzle()` from './drizzle' instead.
+ * The schema is defined in schema/*.ts files.
  */
 
 import Database from 'better-sqlite3'
 import { app } from 'electron'
 import { existsSync, mkdirSync } from 'fs'
 import { join } from 'path'
+import { initDrizzle, getSqlite } from './drizzle'
 
-let db: Database.Database | null = null
+let initialized = false
 
 function ensureDir(p: string): void {
   if (!existsSync(p)) mkdirSync(p, { recursive: true })
@@ -19,27 +24,30 @@ function ensureDir(p: string): void {
  * Initialize the database connection and run migrations.
  */
 export function initDb(): Database.Database {
-  const base = app.getPath('userData')
-  const dir = join(base, 'kanban')
-  ensureDir(dir)
-  const file = join(dir, 'kanban.db')
-  db = new Database(file)
-  db.pragma('journal_mode = WAL')
-  db.pragma('foreign_keys = ON')
+  if (!initialized) {
+    const base = app.getPath('userData')
+    const dir = join(base, 'kanban')
+    ensureDir(dir)
 
-  // Run table creation and migrations
-  createTables(db)
-  runMigrations(db)
+    // Initialize Drizzle (which creates the underlying better-sqlite3 connection)
+    initDrizzle()
 
-  return db
+    // Create tables and run migrations using raw sqlite
+    createTables(getSqlite())
+    runMigrations(getSqlite())
+
+    initialized = true
+  }
+  return getSqlite()
 }
 
 /**
  * Get the database connection. Initializes if not already done.
+ * @deprecated Use getDrizzle() from './drizzle' for new code
  */
 export function getDb(): Database.Database {
-  if (!db) return initDb()
-  return db
+  if (!initialized) return initDb()
+  return getSqlite()
 }
 
 /**
@@ -492,6 +500,9 @@ function runMigrations(database: Database.Database): void {
   const cardColumnNames = cardColumns.map((c) => c.name)
   if (!cardColumnNames.includes('remote_node_id')) {
     database.exec('ALTER TABLE cards ADD COLUMN remote_node_id TEXT')
+  }
+  if (!cardColumnNames.includes('has_conflicts')) {
+    database.exec('ALTER TABLE cards ADD COLUMN has_conflicts INTEGER NOT NULL DEFAULT 0')
   }
 
   // Migration: Add cleanup_requested_at column to worktrees

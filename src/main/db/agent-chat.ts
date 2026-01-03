@@ -4,8 +4,10 @@
  * CRUD operations for agent chat messages during worker execution.
  */
 
+import { and, asc, count, desc, eq, lt, ne } from 'drizzle-orm'
+import { getDrizzle } from './drizzle'
+import { agentChatMessages } from './schema'
 import { generateId } from '@shared/utils'
-import { getDb } from './connection'
 import type {
   AgentChatMessage,
   AgentChatRole,
@@ -28,26 +30,23 @@ export function createChatMessage(data: {
   content: string
   metadata?: Record<string, unknown>
 }): AgentChatMessage {
-  const db = getDb()
+  const db = getDrizzle()
   const id = generateId()
   const now = new Date().toISOString()
 
-  const stmt = db.prepare(`
-    INSERT INTO agent_chat_messages (id, job_id, card_id, project_id, role, content, status, metadata_json, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `)
-
-  stmt.run(
-    id,
-    data.jobId,
-    data.cardId,
-    data.projectId,
-    data.role,
-    data.content,
-    'sent',
-    data.metadata ? JSON.stringify(data.metadata) : null,
-    now
-  )
+  db.insert(agentChatMessages)
+    .values({
+      id,
+      job_id: data.jobId,
+      card_id: data.cardId,
+      project_id: data.projectId,
+      role: data.role,
+      content: data.content,
+      status: 'sent',
+      metadata_json: data.metadata ? JSON.stringify(data.metadata) : null,
+      created_at: now
+    })
+    .run()
 
   return {
     id,
@@ -70,66 +69,82 @@ export function createChatMessage(data: {
  * Get a chat message by ID.
  */
 export function getChatMessage(messageId: string): AgentChatMessage | null {
-  const db = getDb()
-  const stmt = db.prepare('SELECT * FROM agent_chat_messages WHERE id = ?')
-  const row = stmt.get(messageId) as AgentChatMessage | undefined
-  return row ?? null
+  const db = getDrizzle()
+  return (
+    (db
+      .select()
+      .from(agentChatMessages)
+      .where(eq(agentChatMessages.id, messageId))
+      .get() as AgentChatMessage) ?? null
+  )
 }
 
 /**
  * Get all chat messages for a job.
  */
 export function getChatMessagesByJob(jobId: string, limit?: number): AgentChatMessage[] {
-  const db = getDb()
-  const sql = limit
-    ? 'SELECT * FROM agent_chat_messages WHERE job_id = ? ORDER BY created_at ASC LIMIT ?'
-    : 'SELECT * FROM agent_chat_messages WHERE job_id = ? ORDER BY created_at ASC'
+  const db = getDrizzle()
+  let query = db
+    .select()
+    .from(agentChatMessages)
+    .where(eq(agentChatMessages.job_id, jobId))
+    .orderBy(asc(agentChatMessages.created_at))
 
-  const stmt = db.prepare(sql)
-  const rows = limit ? stmt.all(jobId, limit) : stmt.all(jobId)
-  return rows as AgentChatMessage[]
+  if (limit) {
+    query = query.limit(limit) as typeof query
+  }
+
+  return query.all() as AgentChatMessage[]
 }
 
 /**
  * Get all chat messages for a card (across all jobs).
  */
 export function getChatMessagesByCard(cardId: string, limit?: number): AgentChatMessage[] {
-  const db = getDb()
-  const sql = limit
-    ? 'SELECT * FROM agent_chat_messages WHERE card_id = ? ORDER BY created_at DESC LIMIT ?'
-    : 'SELECT * FROM agent_chat_messages WHERE card_id = ? ORDER BY created_at DESC'
+  const db = getDrizzle()
+  let query = db
+    .select()
+    .from(agentChatMessages)
+    .where(eq(agentChatMessages.card_id, cardId))
+    .orderBy(desc(agentChatMessages.created_at))
 
-  const stmt = db.prepare(sql)
-  const rows = limit ? stmt.all(cardId, limit) : stmt.all(cardId)
-  return rows as AgentChatMessage[]
+  if (limit) {
+    query = query.limit(limit) as typeof query
+  }
+
+  return query.all() as AgentChatMessage[]
 }
 
 /**
  * Get all chat messages for a project.
  */
 export function getChatMessagesByProject(projectId: string, limit?: number): AgentChatMessage[] {
-  const db = getDb()
-  const sql = limit
-    ? 'SELECT * FROM agent_chat_messages WHERE project_id = ? ORDER BY created_at DESC LIMIT ?'
-    : 'SELECT * FROM agent_chat_messages WHERE project_id = ? ORDER BY created_at DESC'
+  const db = getDrizzle()
+  let query = db
+    .select()
+    .from(agentChatMessages)
+    .where(eq(agentChatMessages.project_id, projectId))
+    .orderBy(desc(agentChatMessages.created_at))
 
-  const stmt = db.prepare(sql)
-  const rows = limit ? stmt.all(projectId, limit) : stmt.all(projectId)
-  return rows as AgentChatMessage[]
+  if (limit) {
+    query = query.limit(limit) as typeof query
+  }
+
+  return query.all() as AgentChatMessage[]
 }
 
 /**
  * Get recent messages for a job (for context building).
  */
 export function getRecentChatContext(jobId: string, limit: number = 10): AgentChatMessage[] {
-  const db = getDb()
-  const stmt = db.prepare(`
-    SELECT * FROM agent_chat_messages
-    WHERE job_id = ?
-    ORDER BY created_at DESC
-    LIMIT ?
-  `)
-  const rows = stmt.all(jobId, limit) as AgentChatMessage[]
+  const db = getDrizzle()
+  const rows = db
+    .select()
+    .from(agentChatMessages)
+    .where(eq(agentChatMessages.job_id, jobId))
+    .orderBy(desc(agentChatMessages.created_at))
+    .limit(limit)
+    .all() as AgentChatMessage[]
   // Return in chronological order
   return rows.reverse()
 }
@@ -138,54 +153,68 @@ export function getRecentChatContext(jobId: string, limit: number = 10): AgentCh
  * Get unread message count for a job.
  */
 export function getUnreadCount(jobId: string): number {
-  const db = getDb()
-  const stmt = db.prepare(`
-    SELECT COUNT(*) as count
-    FROM agent_chat_messages
-    WHERE job_id = ? AND role = 'agent' AND status != 'read'
-  `)
-  const row = stmt.get(jobId) as { count: number }
-  return row.count
+  const db = getDrizzle()
+  const result = db
+    .select({ count: count() })
+    .from(agentChatMessages)
+    .where(
+      and(
+        eq(agentChatMessages.job_id, jobId),
+        eq(agentChatMessages.role, 'agent'),
+        ne(agentChatMessages.status, 'read')
+      )
+    )
+    .get()
+  return result?.count ?? 0
 }
 
 /**
  * Get chat summary for a job.
  */
 export function getChatSummary(jobId: string): AgentChatSummary {
-  const db = getDb()
+  const db = getDrizzle()
 
-  const countStmt = db.prepare(`
-    SELECT COUNT(*) as total FROM agent_chat_messages WHERE job_id = ?
-  `)
-  const countRow = countStmt.get(jobId) as { total: number }
+  const totalResult = db
+    .select({ total: count() })
+    .from(agentChatMessages)
+    .where(eq(agentChatMessages.job_id, jobId))
+    .get()
 
-  const unreadStmt = db.prepare(`
-    SELECT COUNT(*) as unread
-    FROM agent_chat_messages
-    WHERE job_id = ? AND role = 'agent' AND status != 'read'
-  `)
-  const unreadRow = unreadStmt.get(jobId) as { unread: number }
+  const unreadResult = db
+    .select({ unread: count() })
+    .from(agentChatMessages)
+    .where(
+      and(
+        eq(agentChatMessages.job_id, jobId),
+        eq(agentChatMessages.role, 'agent'),
+        ne(agentChatMessages.status, 'read')
+      )
+    )
+    .get()
 
-  const lastMsgStmt = db.prepare(`
-    SELECT created_at, content FROM agent_chat_messages
-    WHERE job_id = ?
-    ORDER BY created_at DESC
-    LIMIT 1
-  `)
-  const lastMsg = lastMsgStmt.get(jobId) as { created_at: string; content: string } | undefined
+  const lastMsg = db
+    .select({
+      created_at: agentChatMessages.created_at,
+      content: agentChatMessages.content
+    })
+    .from(agentChatMessages)
+    .where(eq(agentChatMessages.job_id, jobId))
+    .orderBy(desc(agentChatMessages.created_at))
+    .limit(1)
+    .get()
 
-  const lastAgentMsgStmt = db.prepare(`
-    SELECT content FROM agent_chat_messages
-    WHERE job_id = ? AND role = 'agent'
-    ORDER BY created_at DESC
-    LIMIT 1
-  `)
-  const lastAgentMsg = lastAgentMsgStmt.get(jobId) as { content: string } | undefined
+  const lastAgentMsg = db
+    .select({ content: agentChatMessages.content })
+    .from(agentChatMessages)
+    .where(and(eq(agentChatMessages.job_id, jobId), eq(agentChatMessages.role, 'agent')))
+    .orderBy(desc(agentChatMessages.created_at))
+    .limit(1)
+    .get()
 
   return {
     job_id: jobId,
-    total_messages: countRow.total,
-    unread_count: unreadRow.unread,
+    total_messages: totalResult?.total ?? 0,
+    unread_count: unreadResult?.unread ?? 0,
     last_message_at: lastMsg?.created_at,
     last_agent_message: lastAgentMsg?.content
   }
@@ -199,14 +228,13 @@ export function getChatSummary(jobId: string): AgentChatSummary {
  * Update message status.
  */
 export function updateMessageStatus(messageId: string, status: AgentChatMessageStatus): boolean {
-  const db = getDb()
+  const db = getDrizzle()
   const now = new Date().toISOString()
-  const stmt = db.prepare(`
-    UPDATE agent_chat_messages
-    SET status = ?, updated_at = ?
-    WHERE id = ?
-  `)
-  const result = stmt.run(status, now, messageId)
+  const result = db
+    .update(agentChatMessages)
+    .set({ status, updated_at: now })
+    .where(eq(agentChatMessages.id, messageId))
+    .run()
   return result.changes > 0
 }
 
@@ -214,14 +242,19 @@ export function updateMessageStatus(messageId: string, status: AgentChatMessageS
  * Mark all agent messages as read for a job.
  */
 export function markAllAsRead(jobId: string): number {
-  const db = getDb()
+  const db = getDrizzle()
   const now = new Date().toISOString()
-  const stmt = db.prepare(`
-    UPDATE agent_chat_messages
-    SET status = 'read', updated_at = ?
-    WHERE job_id = ? AND role = 'agent' AND status != 'read'
-  `)
-  const result = stmt.run(now, jobId)
+  const result = db
+    .update(agentChatMessages)
+    .set({ status: 'read', updated_at: now })
+    .where(
+      and(
+        eq(agentChatMessages.job_id, jobId),
+        eq(agentChatMessages.role, 'agent'),
+        ne(agentChatMessages.status, 'read')
+      )
+    )
+    .run()
   return result.changes
 }
 
@@ -229,14 +262,13 @@ export function markAllAsRead(jobId: string): number {
  * Update message content (for streaming updates).
  */
 export function updateMessageContent(messageId: string, content: string): boolean {
-  const db = getDb()
+  const db = getDrizzle()
   const now = new Date().toISOString()
-  const stmt = db.prepare(`
-    UPDATE agent_chat_messages
-    SET content = ?, updated_at = ?
-    WHERE id = ?
-  `)
-  const result = stmt.run(content, now, messageId)
+  const result = db
+    .update(agentChatMessages)
+    .set({ content, updated_at: now })
+    .where(eq(agentChatMessages.id, messageId))
+    .run()
   return result.changes > 0
 }
 
@@ -248,9 +280,11 @@ export function updateMessageContent(messageId: string, content: string): boolea
  * Delete a chat message.
  */
 export function deleteChatMessage(messageId: string): boolean {
-  const db = getDb()
-  const stmt = db.prepare('DELETE FROM agent_chat_messages WHERE id = ?')
-  const result = stmt.run(messageId)
+  const db = getDrizzle()
+  const result = db
+    .delete(agentChatMessages)
+    .where(eq(agentChatMessages.id, messageId))
+    .run()
   return result.changes > 0
 }
 
@@ -258,9 +292,11 @@ export function deleteChatMessage(messageId: string): boolean {
  * Delete all chat messages for a job.
  */
 export function deleteChatMessagesByJob(jobId: string): number {
-  const db = getDb()
-  const stmt = db.prepare('DELETE FROM agent_chat_messages WHERE job_id = ?')
-  const result = stmt.run(jobId)
+  const db = getDrizzle()
+  const result = db
+    .delete(agentChatMessages)
+    .where(eq(agentChatMessages.job_id, jobId))
+    .run()
   return result.changes
 }
 
@@ -268,15 +304,14 @@ export function deleteChatMessagesByJob(jobId: string): number {
  * Delete old chat messages (cleanup).
  */
 export function deleteOldChatMessages(daysOld: number = 30): number {
-  const db = getDb()
+  const db = getDrizzle()
   const cutoffDate = new Date()
   cutoffDate.setDate(cutoffDate.getDate() - daysOld)
 
-  const stmt = db.prepare(`
-    DELETE FROM agent_chat_messages
-    WHERE created_at < ?
-  `)
-  const result = stmt.run(cutoffDate.toISOString())
+  const result = db
+    .delete(agentChatMessages)
+    .where(lt(agentChatMessages.created_at, cutoffDate.toISOString()))
+    .run()
   return result.changes
 }
 

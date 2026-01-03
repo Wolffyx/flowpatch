@@ -9,7 +9,7 @@ declare global {
         id: string
         project_id: string
         provider: 'github' | 'gitlab' | 'local'
-        type: 'issue' | 'mr'
+        type: 'issue' | 'pr' | 'mr' | 'draft'
         title: string
         body: string | null
         status: 'draft' | 'ready' | 'in_progress' | 'in_review' | 'testing' | 'done'
@@ -24,6 +24,7 @@ declare global {
         updated_local_at: string
         sync_state: 'ok' | 'pending' | 'error'
         last_error: string | null
+        has_conflicts: number
       }[]>
 
       updateFeatureConfig: (
