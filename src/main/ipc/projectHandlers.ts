@@ -9,6 +9,8 @@
  *
  * Each project tab has its own WebContents, so we look up the project ID
  * from the sender's webContents ID.
+ * 
+ * Security: All worker-related handlers verify IPC origin to prevent unauthorized access.
  */
 
 import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron'
@@ -33,6 +35,7 @@ import {
   sendToTab
 } from '../tabManager'
 import { logAction } from '@shared/utils'
+import { verifySecureRequest } from '../security'
 import { runSync } from '../sync/engine'
 import {
   ensurePatchworkWorkspace,
@@ -70,6 +73,23 @@ function notifyRendererStateUpdated(): void {
     }
   }
   sendToAllTabs('stateUpdated')
+}
+
+/**
+ * Verify IPC request origin for security-sensitive operations.
+ * Returns error message if verification fails, null if successful.
+ */
+function verifyProjectRequest(event: IpcMainInvokeEvent, channel: string): string | null {
+  const result = verifySecureRequest(event, channel)
+  if (!result.valid) {
+    logAction('security:projectRequestRejected', {
+      channel,
+      error: result.error,
+      senderId: event.sender.id
+    })
+    return result.error ?? 'Security verification failed'
+  }
+  return null
 }
 
 // ============================================================================
@@ -159,6 +179,12 @@ export function registerProjectHandlers(): void {
   })
 
   ipcMain.handle('project:toggleWorker', (event, { enabled }: { enabled: boolean }) => {
+    // Security check
+    const securityError = verifyProjectRequest(event, 'project:toggleWorker')
+    if (securityError) {
+      return { error: `Security: ${securityError}` }
+    }
+
     const projectId = getProjectIdFromEvent(event)
     if (!projectId) {
       throw new Error('No project selected')
@@ -183,6 +209,12 @@ export function registerProjectHandlers(): void {
   })
 
   ipcMain.handle('project:runWorker', async (event, { cardId }: { cardId?: string }) => {
+    // Security check - this is a critical operation
+    const securityError = verifyProjectRequest(event, 'project:runWorker')
+    if (securityError) {
+      return { error: `Security: ${securityError}` }
+    }
+
     const projectId = getProjectIdFromEvent(event)
     if (!projectId) {
       throw new Error('No project selected')
@@ -209,7 +241,13 @@ export function registerProjectHandlers(): void {
     return { success: true, job }
   })
 
-  ipcMain.handle('project:cancelWorker', (_event, { jobId }: { jobId: string }) => {
+  ipcMain.handle('project:cancelWorker', (event, { jobId }: { jobId: string }) => {
+    // Security check
+    const securityError = verifyProjectRequest(event, 'project:cancelWorker')
+    if (securityError) {
+      return { error: `Security: ${securityError}` }
+    }
+
     logAction('project:cancelWorker', { jobId })
     // The actual cancel is handled by the existing cancelJob handler
   })

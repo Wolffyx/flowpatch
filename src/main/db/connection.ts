@@ -350,13 +350,27 @@ function createTables(database: Database.Database): void {
     CREATE TABLE IF NOT EXISTS ai_tool_limits (
       id TEXT PRIMARY KEY,
       tool_type TEXT NOT NULL UNIQUE,
+      hourly_token_limit INTEGER,
       daily_token_limit INTEGER,
       monthly_token_limit INTEGER,
+      hourly_cost_limit_usd REAL,
       daily_cost_limit_usd REAL,
       monthly_cost_limit_usd REAL,
       updated_at TEXT NOT NULL
     );
   `)
+
+  // Migration: Add hourly limit columns if they don't exist
+  try {
+    database.exec(`ALTER TABLE ai_tool_limits ADD COLUMN hourly_token_limit INTEGER`)
+  } catch {
+    // Column already exists
+  }
+  try {
+    database.exec(`ALTER TABLE ai_tool_limits ADD COLUMN hourly_cost_limit_usd REAL`)
+  } catch {
+    // Column already exists
+  }
 
   // Agent chat messages table (for interactive chat during worker execution)
   database.exec(`

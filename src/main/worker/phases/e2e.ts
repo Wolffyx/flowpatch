@@ -8,7 +8,8 @@ import { existsSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { runProcessStreaming, WorkerCanceledError } from '../process-runner'
 import { getWorkingDir, type PipelineContext, type LogFn } from './types'
-import { checkCommand, runClaudeCode, runCodex, isClaudeRetryableLimitError } from './ai'
+import { runClaudeCode, runCodex, isClaudeRetryableLimitError } from './ai'
+import { getAvailableAITools } from '../cache'
 
 /**
  * E2E phase result structure.
@@ -217,9 +218,10 @@ async function attemptE2EFix(
   // Build fix prompt
   const prompt = buildE2EFixPrompt(ctx, errorOutput, attempt, maxAttempts)
 
-  // Always try Claude first (as per user requirement)
-  const hasClaude = await checkCommand('claude')
-  const hasCodex = await checkCommand('codex')
+  // Always try Claude first (as per user requirement) - use cached check
+  const aiTools = await getAvailableAITools()
+  const hasClaude = aiTools.claude
+  const hasCodex = aiTools.codex
 
   // Get thinking mode configuration from policy
   const thinkingConfig = ctx.policy.features?.thinking
@@ -285,9 +287,10 @@ async function createE2ETests(
   // Build creation prompt
   const prompt = buildE2ECreationPrompt(ctx, changedFiles, testDirectory)
 
-  // Always try Claude first
-  const hasClaude = await checkCommand('claude')
-  const hasCodex = await checkCommand('codex')
+  // Always try Claude first - use cached check
+  const aiTools = await getAvailableAITools()
+  const hasClaude = aiTools.claude
+  const hasCodex = aiTools.codex
 
   // Get thinking mode configuration from policy
   const thinkingConfig = ctx.policy.features?.thinking

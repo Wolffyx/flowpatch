@@ -35,7 +35,7 @@ export function labelExists(labelName: string, existingLabels: RepoLabel[]): boo
 /**
  * Find a matching label in a list with fuzzy matching.
  * Handles variations like:
- * - "status::in-progress" vs "In progress" vs "in-progress"
+ * - "In Progress" vs "In progress" vs "in-progress"
  * - Case differences
  * - With or without "status::" prefix
  */

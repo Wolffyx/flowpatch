@@ -13,11 +13,11 @@ import {
   abortMerge,
   stageFile,
   completeMerge,
-  localBranchExists,
-  remoteBranchExists,
-  fetchOrigin
+  fetchOrigin,
+  fetchAndCheckBranch
 } from '../git-operations'
-import { runClaudeCode, runCodex, checkCommand, isClaudeRetryableLimitError } from './ai'
+import { runClaudeCode, runCodex, isClaudeRetryableLimitError } from './ai'
+import { getAvailableAITools } from '../cache'
 import { getWorkingDir, type PipelineContext, type LogFn } from './types'
 
 export interface BranchSyncResult {
@@ -92,17 +92,17 @@ export async function runBranchSyncPhase(
 
   // Check if this is an existing branch (for cards being re-processed)
   // A new branch won't exist locally or remotely yet, so no sync needed
-  const localExists = await localBranchExists(workingDir, branchName)
-  const remoteExists = await remoteBranchExists(workingDir, branchName)
+  // Use parallel fetch and check for efficiency
+  const branchState = await fetchAndCheckBranch(workingDir, branchName)
 
-  if (!localExists && !remoteExists) {
+  if (!branchState.localExists && !branchState.remoteExists) {
     log('Branch is new, no sync needed')
     return { success: true, hadConflicts: false, conflictsResolved: false }
   }
 
   log(`Syncing branch ${branchName} with ${mainBranch}`)
 
-  // Fetch latest from remote
+  // Fetch latest from remote (the main branch)
   try {
     await fetchOrigin(workingDir, mainBranch)
     log(`Fetched latest ${mainBranch} from origin`)
@@ -161,10 +161,11 @@ export async function runBranchSyncPhase(
     }
   }
 
-  // Check for AI tool availability - respect toolPreference from policy
+  // Check for AI tool availability (cached) - respect toolPreference from policy
   const toolPreference = ctx.policy.worker?.toolPreference || 'auto'
-  const hasClaude = await checkCommand('claude')
-  const hasCodex = await checkCommand('codex')
+  const aiTools = await getAvailableAITools()
+  const hasClaude = aiTools.claude
+  const hasCodex = aiTools.codex
 
   let tool: 'claude' | 'codex' | null = null
   if (toolPreference === 'claude' && hasClaude) tool = 'claude'

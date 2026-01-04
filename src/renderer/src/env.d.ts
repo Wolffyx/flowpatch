@@ -50,16 +50,43 @@ declare global {
           avg_duration_ms: number
           limits: {
             tool_type: string
+            hourly_token_limit: number | null
             daily_token_limit: number | null
             monthly_token_limit: number | null
+            hourly_cost_limit_usd: number | null
             daily_cost_limit_usd: number | null
             monthly_cost_limit_usd: number | null
           } | null
+          hourly_tokens_used: number
           daily_tokens_used: number
           monthly_tokens_used: number
+          hourly_cost_used: number
           daily_cost_used: number
           monthly_cost_used: number
         }[]
+      }>
+      setToolLimits: (
+        toolType: 'claude' | 'codex' | 'other',
+        limits: {
+          hourlyTokenLimit?: number | null
+          dailyTokenLimit?: number | null
+          monthlyTokenLimit?: number | null
+          hourlyCostLimitUsd?: number | null
+          dailyCostLimitUsd?: number | null
+          monthlyCostLimitUsd?: number | null
+        }
+      ) => Promise<{
+        success: boolean
+        limits: {
+          tool_type: string
+          hourly_token_limit: number | null
+          daily_token_limit: number | null
+          monthly_token_limit: number | null
+          hourly_cost_limit_usd: number | null
+          daily_cost_limit_usd: number | null
+          monthly_cost_limit_usd: number | null
+        }
+        error?: string
       }>
 
       // State updates

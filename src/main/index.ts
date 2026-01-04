@@ -16,6 +16,7 @@ import { startEnabledWorkerLoops, stopAllWorkerLoops } from './worker/loop'
 import { startCleanupScheduler, stopCleanupScheduler } from './services/worktree-cleanup-scheduler'
 import { startIndexScheduler, stopIndexScheduler } from './services/patchwork-index-scheduler'
 import { reconcileAllProjects } from './services/worktree-reconciler'
+import { initializeSecurity, cleanupSecurity } from './security'
 
 // ============================================================================
 // App Initialization
@@ -44,6 +45,9 @@ app.whenReady().then(() => {
 
   // Create main window
   const mainWindow = createWindow()
+
+  // Initialize security module (must be done before registering handlers)
+  initializeSecurity(mainWindow)
 
   // Register all IPC handlers
   registerAllHandlers(mainWindow)
@@ -83,4 +87,5 @@ app.on('before-quit', () => {
   stopAllWorkerLoops()
   stopCleanupScheduler()
   stopIndexScheduler()
+  cleanupSecurity()
 })

@@ -102,6 +102,116 @@ export async function remoteBranchExists(cwd: string, branchName: string): Promi
   }
 }
 
+// ==================== Batch/Parallel Operations ====================
+
+/**
+ * Check if both local and remote branches exist in parallel.
+ * More efficient than checking sequentially.
+ */
+export async function checkBranchExists(
+  cwd: string,
+  branchName: string
+): Promise<{ localExists: boolean; remoteExists: boolean }> {
+  const [localExists, remoteExists] = await Promise.all([
+    localBranchExists(cwd, branchName),
+    remoteBranchExists(cwd, branchName)
+  ])
+  return { localExists, remoteExists }
+}
+
+/**
+ * Fetch multiple branches from origin in parallel.
+ * Errors are caught per-branch and don't fail the entire operation.
+ */
+export async function fetchBranches(
+  cwd: string,
+  branches: string[]
+): Promise<Map<string, boolean>> {
+  const results = new Map<string, boolean>()
+
+  const fetches = branches.map(async (branch) => {
+    try {
+      await fetchOrigin(cwd, branch)
+      results.set(branch, true)
+    } catch {
+      results.set(branch, false)
+    }
+  })
+
+  await Promise.all(fetches)
+  return results
+}
+
+/**
+ * Perform multiple independent git operations in parallel.
+ * Each operation returns its result or error.
+ */
+export async function batchGitOperations<T>(
+  operations: Array<() => Promise<T>>
+): Promise<Array<{ success: boolean; result?: T; error?: string }>> {
+  const results = await Promise.allSettled(operations.map((op) => op()))
+
+  return results.map((result) => {
+    if (result.status === 'fulfilled') {
+      return { success: true, result: result.value }
+    } else {
+      return {
+        success: false,
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason)
+      }
+    }
+  })
+}
+
+/**
+ * Combined fetch and branch check for efficiency.
+ * Fetches the branch first, then checks local/remote existence.
+ */
+export async function fetchAndCheckBranch(
+  cwd: string,
+  branchName: string
+): Promise<{
+  fetchSuccess: boolean
+  localExists: boolean
+  remoteExists: boolean
+}> {
+  // Fetch first (best effort)
+  let fetchSuccess = false
+  try {
+    await fetchOrigin(cwd, branchName)
+    fetchSuccess = true
+  } catch {
+    // Ignore fetch errors - we'll still check local refs
+  }
+
+  // Check existence in parallel
+  const { localExists, remoteExists } = await checkBranchExists(cwd, branchName)
+
+  return { fetchSuccess, localExists, remoteExists }
+}
+
+/**
+ * Get repository state info in a single batch.
+ * More efficient than multiple sequential calls.
+ */
+export async function getRepoState(cwd: string): Promise<{
+  currentBranch: string | null
+  isClean: boolean
+  headSha: string | null
+}> {
+  const [currentBranch, status, headSha] = await Promise.all([
+    getCurrentBranch(cwd),
+    getWorkingTreeStatus(cwd),
+    getHeadSha(cwd)
+  ])
+
+  return {
+    currentBranch,
+    isClean: status === '',
+    headSha
+  }
+}
+
 /**
  * Get worktree path for a branch.
  */

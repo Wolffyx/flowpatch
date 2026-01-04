@@ -1,8 +1,7 @@
 import { spawn } from 'child_process'
 import type { Card, PolicyConfig, Subtask } from '../../shared/types'
 import { createSubtask, listSubtasks } from '../db'
-import { GithubAdapter } from '../adapters/github'
-import { GitlabAdapter } from '../adapters/gitlab'
+import type { IRepoAdapter } from '../adapters'
 import { logAction } from '../../shared/utils'
 
 export interface DecompositionResult {
@@ -26,9 +25,9 @@ export interface SubtaskCreationResult {
  */
 export class TaskDecomposer {
   private policy: PolicyConfig
-  private adapter: GithubAdapter | GitlabAdapter | null
+  private adapter: IRepoAdapter | null
 
-  constructor(policy: PolicyConfig, adapter: GithubAdapter | GitlabAdapter | null) {
+  constructor(policy: PolicyConfig, adapter: IRepoAdapter | null) {
     this.policy = policy
     this.adapter = adapter
   }
@@ -278,7 +277,7 @@ Respond with only the JSON, no markdown code blocks or other text.`
       let remoteIssueNumber: string | undefined
 
       // Optionally create as GitHub/GitLab sub-issue
-      if (config?.createSubIssues && this.adapter) {
+      if (config?.createSubIssues && this.adapter && !this.adapter.isLocal) {
         try {
           const issueResult = await this.createRemoteSubIssue(card, subtaskData, i + 1)
           if (issueResult) {
@@ -325,6 +324,10 @@ Respond with only the JSON, no markdown code blocks or other text.`
     subtask: { title: string; description: string },
     sequenceNum: number
   ): Promise<{ number: number; url: string } | null> {
+    if (!this.adapter || this.adapter.isLocal) {
+      return null
+    }
+
     const title = `[${parentCard.remote_number_or_iid}/${sequenceNum}] ${subtask.title}`
     const body = `## Parent Issue
 #${parentCard.remote_number_or_iid}: ${parentCard.title}
@@ -335,16 +338,10 @@ ${subtask.description}
 ---
 _Auto-generated subtask from Patchwork_`
 
-    if (this.adapter instanceof GithubAdapter) {
-      const result = await this.adapter.createIssue(title, body, ['subtask'])
-      if (result) {
-        return { number: result.number, url: result.url }
-      }
-      return null
-    } else if (this.adapter instanceof GitlabAdapter) {
-      // GitLab support would need createIssue method
-      // For now, return null
-      return null
+    // Use unified interface - works for both GitHub and GitLab
+    const result = await this.adapter.createIssue(title, body, ['subtask'])
+    if (result) {
+      return { number: result.number, url: result.url }
     }
 
     return null

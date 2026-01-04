@@ -3,8 +3,7 @@
  */
 
 import type { Card, PolicyConfig, Project, Subtask, Worktree, WorkerProgress } from '@shared/types'
-import type { GithubAdapter } from '../../adapters/github'
-import type { GitlabAdapter } from '../../adapters/gitlab'
+import type { IRepoAdapter } from '../../adapters'
 import type { GitWorktreeManager } from '../../services/git-worktree-manager'
 import type { TaskDecomposer } from '../../services/task-decomposer'
 
@@ -24,7 +23,7 @@ export interface PipelineContext {
   policy: PolicyConfig
 
   // Adapters
-  adapter: GithubAdapter | GitlabAdapter | null
+  adapter: IRepoAdapter | null
 
   // Git state
   startingBranch: string | null

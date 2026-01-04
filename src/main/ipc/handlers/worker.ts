@@ -1,9 +1,11 @@
 /**
  * IPC handlers for worker operations.
  * Handles: runWorker, toggleWorker, setWorkerToolPreference, setWorkerRollbackOnCancel
+ * 
+ * Security: All handlers verify IPC origin to prevent unauthorized access.
  */
 
-import { ipcMain } from 'electron'
+import { ipcMain, IpcMainInvokeEvent } from 'electron'
 import {
   getProject,
   updateProjectWorkerEnabled,
@@ -14,6 +16,28 @@ import {
 import { runWorker as executeWorkerPipeline } from '../../worker/pipeline'
 import { startWorkerLoop, stopWorkerLoop } from '../../worker/loop'
 import { parsePolicyJson, logAction } from '@shared/utils'
+import { verifySecureRequest } from '../../security'
+
+// ============================================================================
+// Security Helpers
+// ============================================================================
+
+/**
+ * Verify IPC request origin for worker operations.
+ * Returns error message if verification fails, null if successful.
+ */
+function verifyWorkerRequest(event: IpcMainInvokeEvent, channel: string): string | null {
+  const result = verifySecureRequest(event, channel)
+  if (!result.valid) {
+    logAction('security:workerRequestRejected', {
+      channel,
+      error: result.error,
+      senderId: event.sender.id
+    })
+    return result.error ?? 'Security verification failed'
+  }
+  return null
+}
 
 // ============================================================================
 // Handler Registration
@@ -21,7 +45,13 @@ import { parsePolicyJson, logAction } from '@shared/utils'
 
 export function registerWorkerHandlers(notifyRenderer: () => void): void {
   // Toggle worker
-  ipcMain.handle('toggleWorker', (_e, payload: { projectId: string; enabled: boolean }) => {
+  ipcMain.handle('toggleWorker', (event, payload: { projectId: string; enabled: boolean }) => {
+    // Security check
+    const securityError = verifyWorkerRequest(event, 'toggleWorker')
+    if (securityError) {
+      return { error: `Security: ${securityError}` }
+    }
+
     logAction('toggleWorker', payload)
     const project = updateProjectWorkerEnabled(payload.projectId, payload.enabled)
     if (project) {
@@ -45,7 +75,13 @@ export function registerWorkerHandlers(notifyRenderer: () => void): void {
   // Update worker tool preference (Claude Code vs Codex)
   ipcMain.handle(
     'setWorkerToolPreference',
-    (_e, payload: { projectId: string; toolPreference: 'auto' | 'claude' | 'codex' }) => {
+    (event, payload: { projectId: string; toolPreference: 'auto' | 'claude' | 'codex' }) => {
+      // Security check
+      const securityError = verifyWorkerRequest(event, 'setWorkerToolPreference')
+      if (securityError) {
+        return { error: `Security: ${securityError}` }
+      }
+
       logAction('setWorkerToolPreference', payload)
 
       const valid: Set<string> = new Set(['auto', 'claude', 'codex'])
@@ -76,7 +112,13 @@ export function registerWorkerHandlers(notifyRenderer: () => void): void {
   // Set worker rollback on cancel
   ipcMain.handle(
     'setWorkerRollbackOnCancel',
-    (_e, payload: { projectId: string; rollbackOnCancel: boolean }) => {
+    (event, payload: { projectId: string; rollbackOnCancel: boolean }) => {
+      // Security check
+      const securityError = verifyWorkerRequest(event, 'setWorkerRollbackOnCancel')
+      if (securityError) {
+        return { error: `Security: ${securityError}` }
+      }
+
       logAction('setWorkerRollbackOnCancel', payload)
 
       if (!payload?.projectId) return { error: 'Project not found' }
@@ -103,7 +145,13 @@ export function registerWorkerHandlers(notifyRenderer: () => void): void {
   )
 
   // Run worker
-  ipcMain.handle('runWorker', async (_e, payload: { projectId: string; cardId?: string }) => {
+  ipcMain.handle('runWorker', async (event, payload: { projectId: string; cardId?: string }) => {
+    // Security check - this is a critical operation
+    const securityError = verifyWorkerRequest(event, 'runWorker')
+    if (securityError) {
+      return { error: `Security: ${securityError}` }
+    }
+
     logAction('runWorker', payload)
     const project = getProject(payload.projectId)
     if (!project) return { error: 'Project not found' }

@@ -10,7 +10,8 @@ import {
   getUsageWithLimits,
   getToolLimits,
   setToolLimits,
-  createUsageRecord
+  createUsageRecord,
+  getResetTimes
 } from '../../db'
 import type { AIToolType } from '@shared/types'
 import { logAction } from '@shared/utils'
@@ -45,7 +46,8 @@ export function registerUsageHandlers(notifyRenderer: () => void): void {
   ipcMain.handle('usage:getWithLimits', () => {
     logAction('usage:getWithLimits')
     const usageWithLimits = getUsageWithLimits()
-    return { usageWithLimits }
+    const resetTimes = getResetTimes()
+    return { usageWithLimits, resetTimes }
   })
 
   // Get limits for a specific tool
@@ -62,8 +64,10 @@ export function registerUsageHandlers(notifyRenderer: () => void): void {
       _e,
       payload: {
         toolType: AIToolType
+        hourlyTokenLimit?: number | null
         dailyTokenLimit?: number | null
         monthlyTokenLimit?: number | null
+        hourlyCostLimitUsd?: number | null
         dailyCostLimitUsd?: number | null
         monthlyCostLimitUsd?: number | null
       }
@@ -71,8 +75,10 @@ export function registerUsageHandlers(notifyRenderer: () => void): void {
       logAction('usage:setToolLimits', payload)
 
       const limits = setToolLimits(payload.toolType, {
+        hourly_token_limit: payload.hourlyTokenLimit,
         daily_token_limit: payload.dailyTokenLimit,
         monthly_token_limit: payload.monthlyTokenLimit,
+        hourly_cost_limit_usd: payload.hourlyCostLimitUsd,
         daily_cost_limit_usd: payload.dailyCostLimitUsd,
         monthly_cost_limit_usd: payload.monthlyCostLimitUsd
       })

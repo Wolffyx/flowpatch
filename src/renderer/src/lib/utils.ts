@@ -46,7 +46,7 @@ export function parseLabels(labelsJson: string | null): string[] {
 }
 
 export function formatLabel(label: string): string {
-  // Handle status:: prefixed labels (e.g., "status::in-progress" -> "In Progress")
+  // Handle status:: prefixed labels (e.g., "In Progress" -> "In Progress")
   if (label.startsWith('status::')) {
     const status = label.replace('status::', '')
     return status

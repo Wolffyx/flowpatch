@@ -5,8 +5,7 @@
 
 import { ipcMain } from 'electron'
 import { getProject, getAppSetting, setAppSetting, updateProjectPolicyJson, listCards } from '../../db'
-import { GithubAdapter } from '../../adapters/github'
-import { GitlabAdapter } from '../../adapters/gitlab'
+import { AdapterRegistry } from '../../adapters'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { parsePolicyJson, labelExists } from '@shared/utils'
@@ -161,17 +160,17 @@ export function registerOnboardingHandlers(notifyRenderer: () => void): void {
 
       const policy = parsePolicyJson(project.policy_json)
       try {
-        if (project.remote_repo_key.startsWith('github:')) {
-          const adapter = new GithubAdapter(project.local_path, project.remote_repo_key, policy)
-          const labels = await adapter.listRepoLabels()
-          return { labels }
-        }
-        if (project.remote_repo_key.startsWith('gitlab:')) {
-          const adapter = new GitlabAdapter(project.local_path, project.remote_repo_key, policy)
-          const labels = await adapter.listRepoLabels()
-          return { labels }
-        }
-        return { labels: [], error: 'Unsupported provider' }
+        // Use adapter registry to create adapter
+        const adapter = AdapterRegistry.create({
+          repoKey: project.remote_repo_key,
+          providerHint: project.provider_hint,
+          repoPath: project.local_path,
+          policy
+        })
+
+        // LocalAdapter returns empty array, which is expected
+        const labels = await adapter.listRepoLabels()
+        return { labels }
       } catch (error) {
         return { labels: [], error: error instanceof Error ? error.message : String(error) }
       }
@@ -192,12 +191,19 @@ export function registerOnboardingHandlers(notifyRenderer: () => void): void {
       const labelsToCreate = (payload.labels || []).filter((l) => (l.name || '').trim().length > 0)
       if (labelsToCreate.length === 0) return { created: [], skipped: [] }
 
-      let existing: RepoLabel[] = []
-      if (project.remote_repo_key.startsWith('github:')) {
-        const adapter = new GithubAdapter(project.local_path, project.remote_repo_key, policy)
-        existing = await adapter.listRepoLabels()
+      try {
+        // Use adapter registry to create adapter
+        const adapter = AdapterRegistry.create({
+          repoKey: project.remote_repo_key,
+          providerHint: project.provider_hint,
+          repoPath: project.local_path,
+          policy
+        })
+
+        const existing = await adapter.listRepoLabels()
         const created: string[] = []
         const skipped: string[] = []
+
         for (const label of labelsToCreate) {
           if (labelExists(label.name, existing)) {
             skipped.push(label.name)
@@ -207,27 +213,11 @@ export function registerOnboardingHandlers(notifyRenderer: () => void): void {
           if (res.created) created.push(label.name)
           else skipped.push(label.name)
         }
-        return { created, skipped }
-      }
 
-      if (project.remote_repo_key.startsWith('gitlab:')) {
-        const adapter = new GitlabAdapter(project.local_path, project.remote_repo_key, policy)
-        existing = await adapter.listRepoLabels()
-        const created: string[] = []
-        const skipped: string[] = []
-        for (const label of labelsToCreate) {
-          if (labelExists(label.name, existing)) {
-            skipped.push(label.name)
-            continue
-          }
-          const res = await adapter.createRepoLabel(label)
-          if (res.created) created.push(label.name)
-          else skipped.push(label.name)
-        }
         return { created, skipped }
+      } catch (error) {
+        return { created: [], skipped: [], error: error instanceof Error ? error.message : String(error) }
       }
-
-      return { created: [], skipped: [], error: 'Unsupported provider' }
     }
   )
 
@@ -267,17 +257,23 @@ export function registerOnboardingHandlers(notifyRenderer: () => void): void {
         { name: statusLabels.done }
       ]
 
-      const adapter = project.remote_repo_key.startsWith('github:')
-        ? new GithubAdapter(project.local_path, project.remote_repo_key, policy)
-        : project.remote_repo_key.startsWith('gitlab:')
-          ? new GitlabAdapter(project.local_path, project.remote_repo_key, policy)
-          : null
-      if (adapter) {
+      try {
+        // Use adapter registry to create adapter
+        const adapter = AdapterRegistry.create({
+          repoKey: project.remote_repo_key,
+          providerHint: project.provider_hint,
+          repoPath: project.local_path,
+          policy
+        })
+
         const existing = await adapter.listRepoLabels()
         for (const label of requested) {
           if (labelExists(label.name, existing)) continue
           await adapter.createRepoLabel(label)
         }
+      } catch (error) {
+        // Log but don't fail - label creation is optional
+        console.warn('Failed to create missing labels:', error)
       }
     }
 

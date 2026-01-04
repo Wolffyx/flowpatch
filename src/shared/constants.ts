@@ -127,12 +127,12 @@ export const DEFAULT_STATUS_LABEL_PREFIX = 'status::'
  * Default status labels mapping.
  */
 export const DEFAULT_STATUS_LABELS = {
-  draft: 'status::draft',
-  ready: 'status::ready',
-  inProgress: 'status::in-progress',
-  inReview: 'status::in-review',
-  testing: 'status::testing',
-  done: 'status::done'
+  draft: 'Draft',
+  ready: 'Ready',
+  inProgress: 'In Progress',
+  inReview: 'In Review',
+  testing: 'Testing',
+  done: 'Done'
 } as const
 
 /**

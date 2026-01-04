@@ -12,6 +12,7 @@ import { BrowserWindow, WebContentsView, Menu } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { getAppSetting, setAppSetting } from './db'
+import { registerTrustedWebContents } from './security'
 
 // ============================================================================
 // Types
@@ -264,6 +265,9 @@ export async function createTab(
   view.webContents.on('did-finish-load', tab.didFinishLoadHandler)
 
   tabs.set(tabId, tab)
+
+  // Register this tab's WebContents as trusted for security
+  registerTrustedWebContents(view.webContents)
 
   // Add view to window
   mainWindowRef.contentView.addChildView(view)

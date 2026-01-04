@@ -1,9 +1,22 @@
+/**
+ * GitlabAdapter - Adapter for GitLab repositories.
+ *
+ * Implements IRepoAdapter interface, providing full GitLab API integration
+ * via the glab CLI tool.
+ */
+
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import type { Card, CardStatus, PolicyConfig, RepoLabel } from '../../shared/types'
+import type { Card, CardStatus, PolicyConfig, Provider, RepoLabel } from '../../shared/types'
 import { cryptoRandomId } from '../db'
+import { BaseAdapter } from './base'
+import type { AuthResult, IssueResult, LabelResult, PRResult } from './types'
 
 const execFileAsync = promisify(execFile)
+
+// ============================================================================
+// GitLab-specific Types
+// ============================================================================
 
 interface GitlabIssue {
   iid: number
@@ -28,23 +41,34 @@ interface GitlabMR {
   draft: boolean
 }
 
-export class GitlabAdapter {
-  private repoPath: string
+// ============================================================================
+// GitlabAdapter Class
+// ============================================================================
+
+export class GitlabAdapter extends BaseAdapter {
+  // IRepoAdapter properties
+  readonly provider: Provider = 'gitlab'
+  readonly providerKey = 'gitlab'
+  readonly isLocal = false
+
+  // GitLab-specific properties
   private host: string
   private projectPath: string
-  private policy: PolicyConfig
 
   constructor(repoPath: string, repoKey: string, policy: PolicyConfig) {
-    this.repoPath = repoPath
+    super(repoPath, repoKey, policy)
     // Parse repoKey like "gitlab:gitlab.com/group/repo"
     const keyWithoutPrefix = repoKey.replace(/^gitlab:/, '')
     const parts = keyWithoutPrefix.split('/')
     this.host = parts[0]
     this.projectPath = parts.slice(1).join('/')
-    this.policy = policy
   }
 
-  async checkAuth(): Promise<{ authenticated: boolean; username?: string; error?: string }> {
+  // ──────────────────────────────────────────────────────────────────────────
+  // Authentication
+  // ──────────────────────────────────────────────────────────────────────────
+
+  async checkAuth(): Promise<AuthResult> {
     try {
       const { stdout } = await execFileAsync('glab', ['auth', 'status'], {
         cwd: this.repoPath
@@ -63,37 +87,9 @@ export class GitlabAdapter {
     }
   }
 
-  async listRepoLabels(): Promise<RepoLabel[]> {
-    try {
-      const { stdout } = await execFileAsync('glab', ['label', 'list', '-F', 'json'], {
-        cwd: this.repoPath
-      })
-      const labels = JSON.parse(stdout) as Array<{
-        name: string
-        description?: string
-        color?: string
-      }>
-      return labels.map((l) => ({ name: l.name, description: l.description, color: l.color }))
-    } catch {
-      return []
-    }
-  }
-
-  async createRepoLabel(label: RepoLabel): Promise<{ created: boolean; error?: string }> {
-    const name = (label.name || '').trim()
-    if (!name) return { created: false, error: 'Label name is required' }
-
-    const args = ['label', 'create', '--name', name]
-    if (label.description) args.push('--description', label.description)
-    if (label.color) args.push('--color', label.color)
-
-    try {
-      await execFileAsync('glab', args, { cwd: this.repoPath })
-      return { created: true }
-    } catch (error) {
-      return { created: false, error: error instanceof Error ? error.message : String(error) }
-    }
-  }
+  // ──────────────────────────────────────────────────────────────────────────
+  // Issues
+  // ──────────────────────────────────────────────────────────────────────────
 
   async listIssues(): Promise<Card[]> {
     try {
@@ -111,10 +107,27 @@ export class GitlabAdapter {
     }
   }
 
+  async getIssue(issueIid: number): Promise<Card | null> {
+    try {
+      const { stdout } = await execFileAsync(
+        'glab',
+        ['issue', 'view', String(issueIid), '-F', 'json'],
+        { cwd: this.repoPath }
+      )
+
+      const issue: GitlabIssue = JSON.parse(stdout)
+      return this.issueToCard(issue)
+    } catch (error) {
+      console.error('Failed to get issue:', error)
+      return null
+    }
+  }
+
   async createIssue(
     title: string,
-    description?: string
-  ): Promise<{ iid: number; url: string; card: Card } | null> {
+    description?: string,
+    _labels?: string[]
+  ): Promise<IssueResult | null> {
     const trimmedTitle = (title || '').trim()
     if (!trimmedTitle) return null
 
@@ -133,7 +146,7 @@ export class GitlabAdapter {
       const card = await this.getIssue(iid)
       if (!card) return null
 
-      return { iid, url, card }
+      return { number: iid, url, card }
     } catch {
       // Fallback: parse URL from non-JSON output
     }
@@ -156,13 +169,27 @@ export class GitlabAdapter {
       const card = await this.getIssue(iid)
       if (!card) return null
 
-      return { iid, url, card }
+      return { number: iid, url, card }
     } catch (error) {
       console.error('Failed to create GitLab issue:', error)
       return null
     }
   }
 
+  // ──────────────────────────────────────────────────────────────────────────
+  // Merge Requests (Pull Requests)
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * List all merge requests (implements IRepoAdapter.listPullRequests)
+   */
+  async listPullRequests(): Promise<Card[]> {
+    return this.listMRs()
+  }
+
+  /**
+   * List all merge requests (legacy method name, kept for compatibility)
+   */
   async listMRs(): Promise<Card[]> {
     try {
       const { stdout } = await execFileAsync(
@@ -179,25 +206,113 @@ export class GitlabAdapter {
     }
   }
 
+  /**
+   * Create a merge request (implements IRepoAdapter.createPullRequest)
+   */
+  async createPullRequest(
+    title: string,
+    body: string,
+    branch: string,
+    baseBranch = 'main',
+    labels?: string[]
+  ): Promise<PRResult | null> {
+    return this.createMR(title, body, branch, baseBranch, labels)
+  }
+
+  /**
+   * Create a merge request (legacy method name, kept for compatibility)
+   */
+  async createMR(
+    title: string,
+    description: string,
+    sourceBranch: string,
+    targetBranch = 'main',
+    labels?: string[]
+  ): Promise<PRResult | null> {
+    try {
+      const args = [
+        'mr',
+        'create',
+        '--title',
+        title,
+        '--description',
+        description,
+        '--source-branch',
+        sourceBranch,
+        '--target-branch',
+        targetBranch
+      ]
+
+      // Add labels if provided
+      if (labels && labels.length > 0) {
+        args.push('--label', labels.join(','))
+      }
+
+      args.push('-F', 'json')
+
+      const { stdout } = await execFileAsync('glab', args, { cwd: this.repoPath })
+
+      const result = JSON.parse(stdout)
+      return { number: result.iid, url: result.web_url }
+    } catch (error) {
+      console.error('Failed to create MR:', error)
+      return null
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Labels
+  // ──────────────────────────────────────────────────────────────────────────
+
+  async listRepoLabels(): Promise<RepoLabel[]> {
+    try {
+      const { stdout } = await execFileAsync('glab', ['label', 'list', '-F', 'json'], {
+        cwd: this.repoPath
+      })
+      const labels = JSON.parse(stdout) as Array<{
+        name: string
+        description?: string
+        color?: string
+      }>
+      return labels.map((l) => ({ name: l.name, description: l.description, color: l.color }))
+    } catch {
+      return []
+    }
+  }
+
+  async createRepoLabel(label: RepoLabel): Promise<LabelResult> {
+    const name = (label.name || '').trim()
+    if (!name) return { created: false, error: 'Label name is required' }
+
+    const args = ['label', 'create', '--name', name]
+    if (label.description) args.push('--description', label.description)
+    if (label.color) args.push('--color', label.color)
+
+    try {
+      await execFileAsync('glab', args, { cwd: this.repoPath })
+      return { created: true }
+    } catch (error) {
+      return { created: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
   async updateLabels(
     issueIid: number,
     labelsToAdd: string[],
     labelsToRemove: string[]
   ): Promise<boolean> {
     try {
+      // Consolidate into a single call when both add and remove are needed
+      const args = ['issue', 'update', String(issueIid)]
       if (labelsToAdd.length > 0) {
-        await execFileAsync(
-          'glab',
-          ['issue', 'update', String(issueIid), '--label', labelsToAdd.join(',')],
-          { cwd: this.repoPath }
-        )
+        args.push('--label', labelsToAdd.join(','))
       }
       if (labelsToRemove.length > 0) {
-        await execFileAsync(
-          'glab',
-          ['issue', 'update', String(issueIid), '--unlabel', labelsToRemove.join(',')],
-          { cwd: this.repoPath }
-        )
+        args.push('--unlabel', labelsToRemove.join(','))
+      }
+      if (args.length > 3) {
+        // Only execute if there are labels to add or remove
+        await execFileAsync('glab', args, { cwd: this.repoPath })
       }
       return true
     } catch (error) {
@@ -206,39 +321,34 @@ export class GitlabAdapter {
     }
   }
 
-  async createMR(
-    title: string,
-    description: string,
-    sourceBranch: string,
-    targetBranch = 'main'
-  ): Promise<{ iid: number; url: string } | null> {
+  async updatePRLabels(
+    mrIid: number,
+    labelsToAdd: string[],
+    labelsToRemove: string[]
+  ): Promise<boolean> {
     try {
-      const { stdout } = await execFileAsync(
-        'glab',
-        [
-          'mr',
-          'create',
-          '--title',
-          title,
-          '--description',
-          description,
-          '--source-branch',
-          sourceBranch,
-          '--target-branch',
-          targetBranch,
-          '-F',
-          'json'
-        ],
-        { cwd: this.repoPath }
-      )
-
-      const result = JSON.parse(stdout)
-      return { iid: result.iid, url: result.web_url }
+      // Consolidate into a single call when both add and remove are needed
+      const args = ['mr', 'update', String(mrIid)]
+      if (labelsToAdd.length > 0) {
+        args.push('--label', labelsToAdd.join(','))
+      }
+      if (labelsToRemove.length > 0) {
+        args.push('--unlabel', labelsToRemove.join(','))
+      }
+      if (args.length > 3) {
+        // Only execute if there are labels to add or remove
+        await execFileAsync('glab', args, { cwd: this.repoPath })
+      }
+      return true
     } catch (error) {
-      console.error('Failed to create MR:', error)
-      return null
+      console.error('Failed to update MR labels:', error)
+      return false
     }
   }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Comments
+  // ──────────────────────────────────────────────────────────────────────────
 
   async commentOnIssue(issueIid: number, comment: string): Promise<boolean> {
     try {
@@ -252,22 +362,13 @@ export class GitlabAdapter {
     }
   }
 
-  async getIssue(issueIid: number): Promise<Card | null> {
-    try {
-      const { stdout } = await execFileAsync(
-        'glab',
-        ['issue', 'view', String(issueIid), '-F', 'json'],
-        { cwd: this.repoPath }
-      )
+  // ──────────────────────────────────────────────────────────────────────────
+  // Private Helper Methods
+  // ──────────────────────────────────────────────────────────────────────────
 
-      const issue: GitlabIssue = JSON.parse(stdout)
-      return this.issueToCard(issue)
-    } catch (error) {
-      console.error('Failed to get issue:', error)
-      return null
-    }
-  }
-
+  /**
+   * Convert a GitLab issue to a Card.
+   */
   private issueToCard(issue: GitlabIssue): Card {
     const labels = issue.labels || []
     const status = this.deriveStatus(labels, issue.state === 'closed')
@@ -295,6 +396,9 @@ export class GitlabAdapter {
     }
   }
 
+  /**
+   * Convert a GitLab MR to a Card.
+   */
   private mrToCard(mr: GitlabMR): Card {
     const labels = mr.labels || []
     let status = this.deriveStatus(labels, mr.state === 'closed' || mr.state === 'merged')
@@ -325,76 +429,5 @@ export class GitlabAdapter {
       last_error: null,
       has_conflicts: (mr as unknown as { has_conflicts?: boolean }).has_conflicts ? 1 : 0
     }
-  }
-
-  private deriveStatus(labels: string[], isClosed: boolean): CardStatus {
-    if (isClosed) return 'done'
-
-    const statusLabels = this.policy.sync?.statusLabels || {
-      draft: 'status::draft',
-      ready: 'status::ready',
-      inProgress: 'status::in-progress',
-      inReview: 'status::in-review',
-      testing: 'status::testing',
-      done: 'status::done'
-    }
-
-    // Normalize strings by lowercasing and removing spaces to handle:
-    // - CamelCase: "InProgress", "InReview"
-    // - Title case with spaces: "In Progress", "In Review"
-    // - Lowercase with spaces: "in progress", "in review"
-    const normalize = (s: string): string => s.toLowerCase().replace(/\s+/g, '')
-    const normalized = (labels || []).map(normalize)
-    const matches = (candidates: (string | undefined)[]): boolean =>
-      candidates.filter(Boolean).some((c) => normalized.includes(normalize(String(c))))
-
-    if (matches([statusLabels.done, 'done', 'indone'])) return 'done'
-    if (matches([statusLabels.testing, 'testing', 'qa'])) return 'testing'
-    if (matches([statusLabels.inReview, 'inreview', 'in review', 'review'])) return 'in_review'
-    if (matches([statusLabels.inProgress, 'inprogress', 'in progress', 'wip'])) return 'in_progress'
-    if (matches([statusLabels.ready, 'ready'])) return 'ready'
-
-    const readyLabel = this.policy.sync?.readyLabel || 'ready'
-    if (matches([readyLabel])) return 'ready'
-
-    return 'draft'
-  }
-
-  private isReadyEligible(labels: string[], status: CardStatus): boolean {
-    if (status === 'ready') return true
-    const readyLabel = this.policy.sync?.readyLabel || 'ready'
-    return labels.includes(readyLabel)
-  }
-
-  getStatusLabel(status: CardStatus): string {
-    const statusLabels = this.policy.sync?.statusLabels || {}
-    switch (status) {
-      case 'draft':
-        return statusLabels.draft || 'status::draft'
-      case 'ready':
-        return statusLabels.ready || 'status::ready'
-      case 'in_progress':
-        return statusLabels.inProgress || 'status::in-progress'
-      case 'in_review':
-        return statusLabels.inReview || 'status::in-review'
-      case 'testing':
-        return statusLabels.testing || 'status::testing'
-      case 'done':
-        return statusLabels.done || 'status::done'
-      default:
-        return 'status::draft'
-    }
-  }
-
-  getAllStatusLabels(): string[] {
-    const statusLabels = this.policy.sync?.statusLabels || {}
-    return [
-      statusLabels.draft || 'status::draft',
-      statusLabels.ready || 'status::ready',
-      statusLabels.inProgress || 'status::in-progress',
-      statusLabels.inReview || 'status::in-review',
-      statusLabels.testing || 'status::testing',
-      statusLabels.done || 'status::done'
-    ]
   }
 }

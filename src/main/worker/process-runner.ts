@@ -2,9 +2,20 @@
  * Process Runner
  *
  * Handles streaming process execution with timeout and cancellation support.
+ * 
+ * Security: All process execution goes through the command guard to prevent
+ * unauthorized or dangerous command execution.
  */
 
 import { spawn, execFile, execFileSync } from 'child_process'
+import {
+  validateCommand,
+  createCommandGuardConfig,
+  isBlockedCommand,
+  isCommandLineSafe
+} from '../security/command-guard'
+import type { ExecutionOrigin, CommandGuardConfig } from '../../shared/types'
+import { logAction } from '../../shared/utils'
 
 function resolveWindowsSpawnCommand(command: string, env: NodeJS.ProcessEnv): string {
   // If the caller passed a path or explicit extension, don't try to resolve it.
@@ -53,13 +64,69 @@ export interface ProcessStreamingOptions {
   stdin?: string
   onLog?: (message: string, meta: { source: string; stream: 'stdout' | 'stderr' }) => void
   isCanceled?: () => boolean
+  /** Execution origin for security validation */
+  origin?: ExecutionOrigin
+  /** Command guard configuration (from policy) */
+  guardConfig?: CommandGuardConfig
+  /** Skip security checks (only for internal trusted operations) */
+  skipSecurityCheck?: boolean
 }
 
 /**
  * Run a process with streaming output and timeout support.
+ * 
+ * Security: Commands are validated against the policy's allowlist before execution.
+ * Blocked commands (e.g., rm, sudo, curl) are always rejected regardless of policy.
  */
 export async function runProcessStreaming(options: ProcessStreamingOptions): Promise<void> {
-  const { command, args, cwd, timeoutMs, source, env, stdin, onLog, isCanceled } = options
+  const {
+    command,
+    args,
+    cwd,
+    timeoutMs,
+    source,
+    env,
+    stdin,
+    onLog,
+    isCanceled,
+    origin = 'worker_pipeline',
+    guardConfig,
+    skipSecurityCheck = false
+  } = options
+
+  // Security validation (unless explicitly skipped for internal operations)
+  if (!skipSecurityCheck) {
+    // Quick check for blocked commands
+    if (isBlockedCommand(command)) {
+      const error = `Security: Command '${command}' is blocked for security reasons`
+      logAction('security:commandBlocked', { command, args, source, reason: 'blocked_command' })
+      throw new Error(error)
+    }
+
+    // Full validation with guard config if provided
+    if (guardConfig) {
+      const validationResult = validateCommand(command, args, cwd, guardConfig, origin)
+      if (!validationResult.allowed) {
+        const error = `Security: ${validationResult.reason}`
+        logAction('security:commandRejected', {
+          command,
+          args,
+          source,
+          reason: validationResult.reason,
+          origin
+        })
+        throw new Error(error)
+      }
+    }
+
+    // Validate the full command line isn't doing anything sneaky
+    const fullCommandLine = [command, ...args].join(' ')
+    if (!isCommandLineSafe(fullCommandLine)) {
+      const error = `Security: Command line contains dangerous patterns`
+      logAction('security:commandLineUnsafe', { commandLine: fullCommandLine, source })
+      throw new Error(error)
+    }
+  }
 
   await new Promise<void>((resolve, reject) => {
     const spawnCommand =
@@ -184,3 +251,54 @@ export async function runProcessStreaming(options: ProcessStreamingOptions): Pro
     })
   })
 }
+
+// ============================================================================
+// Secure Process Execution Helpers
+// ============================================================================
+
+/**
+ * AI tools that are allowed to be executed (whitelisted).
+ * These are the only commands the worker should execute for AI operations.
+ */
+const ALLOWED_AI_TOOLS = ['claude', 'codex']
+
+/**
+ * Run an AI tool with security validation.
+ * Only allows execution of whitelisted AI tools (claude, codex).
+ */
+export async function runSecureAIProcess(options: ProcessStreamingOptions): Promise<void> {
+  const { command } = options
+  
+  // Extract base command name
+  const baseCommand = command.split(/[\\/]/).pop()?.toLowerCase().replace(/\.(exe|cmd|bat)$/i, '') ?? ''
+  
+  // Verify this is a whitelisted AI tool
+  if (!ALLOWED_AI_TOOLS.includes(baseCommand)) {
+    const error = `Security: '${command}' is not a recognized AI tool. Allowed: ${ALLOWED_AI_TOOLS.join(', ')}`
+    logAction('security:aiToolRejected', { command, baseCommand, allowed: ALLOWED_AI_TOOLS })
+    throw new Error(error)
+  }
+  
+  // Run with worker_pipeline origin (trusted internal operation)
+  return runProcessStreaming({
+    ...options,
+    origin: 'worker_pipeline',
+    skipSecurityCheck: true // AI tools are pre-validated above
+  })
+}
+
+/**
+ * Run a git command securely.
+ * Git commands are allowed for internal operations.
+ */
+export async function runSecureGitProcess(options: Omit<ProcessStreamingOptions, 'command'>): Promise<void> {
+  return runProcessStreaming({
+    ...options,
+    command: 'git',
+    origin: 'worker_pipeline',
+    skipSecurityCheck: true // Git is trusted for internal operations
+  })
+}
+
+// Re-export for convenience
+export { createCommandGuardConfig }

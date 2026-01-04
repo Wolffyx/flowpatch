@@ -1,5 +1,5 @@
-import { GithubAdapter } from '../adapters/github'
-import { GitlabAdapter } from '../adapters/gitlab'
+import { AdapterRegistry, isGithubAdapter } from '../adapters'
+import type { IRepoAdapter, IGithubAdapter } from '../adapters'
 import {
   getProject,
   listCards,
@@ -12,7 +12,8 @@ import {
   updateJobState,
   getJob,
   createEvent,
-  ensureCardLink
+  ensureCardLink,
+  listCardLinks
 } from '../db'
 import type { Project, Card, CardStatus, PolicyConfig } from '../../shared/types'
 
@@ -20,7 +21,7 @@ export class SyncEngine {
   private projectId: string
   private project: Project | null = null
   private policy: PolicyConfig
-  private adapter: GithubAdapter | GitlabAdapter | null = null
+  private adapter: IRepoAdapter | null = null
 
   constructor(projectId: string) {
     this.projectId = projectId
@@ -29,12 +30,12 @@ export class SyncEngine {
       sync: {
         readyLabel: 'ready',
         statusLabels: {
-          draft: 'status::draft',
-          ready: 'status::ready',
-          inProgress: 'status::in-progress',
-          inReview: 'status::in-review',
-          testing: 'status::testing',
-          done: 'status::done'
+          draft: 'Draft',
+          ready: 'Ready',
+          inProgress: 'In Progress',
+          inReview: 'In Review',
+          testing: 'Testing',
+          done: 'Done'
         }
       }
     }
@@ -62,33 +63,20 @@ export class SyncEngine {
       }
     }
 
-    // Initialize adapter based on provider
-    const provider = this.project.provider_hint || this.detectProvider(this.project.remote_repo_key)
-
-    if (provider === 'github') {
-      this.adapter = new GithubAdapter(
-        this.project.local_path,
-        this.project.remote_repo_key,
-        this.policy
-      )
-    } else if (provider === 'gitlab') {
-      this.adapter = new GitlabAdapter(
-        this.project.local_path,
-        this.project.remote_repo_key,
-        this.policy
-      )
-    } else {
-      console.error('Unknown provider for:', this.project.remote_repo_key)
+    // Initialize adapter via registry
+    try {
+      this.adapter = AdapterRegistry.create({
+        repoKey: this.project.remote_repo_key,
+        providerHint: this.project.provider_hint,
+        repoPath: this.project.local_path,
+        policy: this.policy
+      })
+    } catch (error) {
+      console.error('Failed to create adapter:', error)
       return false
     }
 
     return true
-  }
-
-  private detectProvider(repoKey: string): 'github' | 'gitlab' | 'unknown' {
-    if (repoKey.startsWith('github:')) return 'github'
-    if (repoKey.startsWith('gitlab:')) return 'gitlab'
-    return 'unknown'
   }
 
   async runPollSync(): Promise<{ success: boolean; cardsUpdated: number; error?: string }> {
@@ -108,12 +96,13 @@ export class SyncEngine {
       // Fetch all issues and PRs/MRs
       let remoteCards: Card[] = []
 
-      if (this.adapter instanceof GithubAdapter) {
+      if (isGithubAdapter(this.adapter)) {
+        const githubAdapter = this.adapter as IGithubAdapter
         // Persist auto-detected Projects V2 ID so we don't re-discover every sync.
         if (this.policy.sync?.githubProjectsV2?.enabled !== false) {
           const existingProjectId = this.policy.sync?.githubProjectsV2?.projectId
           if (!existingProjectId) {
-            const detectedId = await this.adapter.findRepositoryProject()
+            const detectedId = await githubAdapter.findRepositoryProject()
             if (detectedId) {
               this.policy.sync = this.policy.sync ?? {}
               this.policy.sync.githubProjectsV2 = this.policy.sync.githubProjectsV2 ?? {}
@@ -125,16 +114,20 @@ export class SyncEngine {
         }
 
         // Clear project status cache to ensure fresh data
-        this.adapter.clearProjectStatusCache()
+        githubAdapter.clearProjectStatusCache()
         const [issues, prs, drafts] = await Promise.all([
-          this.adapter.listIssues(),
-          this.adapter.listPRs(),
-          this.adapter.listProjectDrafts()
+          githubAdapter.listIssues(),
+          githubAdapter.listPullRequests(),
+          githubAdapter.listProjectDrafts()
         ])
         remoteCards = [...issues, ...prs, ...drafts]
-      } else if (this.adapter instanceof GitlabAdapter) {
-        const [issues, mrs] = await Promise.all([this.adapter.listIssues(), this.adapter.listMRs()])
-        remoteCards = [...issues, ...mrs]
+      } else {
+        // GitLab or other adapters
+        const [issues, prs] = await Promise.all([
+          this.adapter.listIssues(),
+          this.adapter.listPullRequests()
+        ])
+        remoteCards = [...issues, ...prs]
       }
 
       // Sync each card
@@ -145,8 +138,8 @@ export class SyncEngine {
       }
 
       // After cards are present locally, link issues to their related PRs (GitHub only)
-      if (this.adapter instanceof GithubAdapter) {
-        await this.syncGithubIssuePrLinks()
+      if (isGithubAdapter(this.adapter)) {
+        await this.syncGithubIssuePrLinks(this.adapter as IGithubAdapter)
       }
 
       // Update project sync time
@@ -233,12 +226,8 @@ export class SyncEngine {
     return true
   }
 
-  private async syncGithubIssuePrLinks(): Promise<void> {
-    if (
-      !this.adapter ||
-      !(this.adapter instanceof GithubAdapter) ||
-      !this.project?.remote_repo_key
-    ) {
+  private async syncGithubIssuePrLinks(githubAdapter: IGithubAdapter): Promise<void> {
+    if (!this.project?.remote_repo_key) {
       return
     }
 
@@ -255,7 +244,7 @@ export class SyncEngine {
 
       if (issueCardIdByNumber.size === 0) return
 
-      const links = await this.adapter.listPRIssueLinks()
+      const links = await githubAdapter.listPRIssueLinks()
       for (const link of links) {
         for (const issueNumber of link.issueNumbers) {
           const issueCardId = issueCardIdByNumber.get(issueNumber)
@@ -292,13 +281,14 @@ export class SyncEngine {
     const issueNumber = parseInt(card.remote_number_or_iid, 10)
     if (isNaN(issueNumber)) {
       if (
-        this.adapter instanceof GithubAdapter &&
+        isGithubAdapter(this.adapter) &&
         card.type === 'draft' &&
         this.policy.sync?.githubProjectsV2?.enabled !== false &&
         card.remote_node_id
       ) {
+        const githubAdapter = this.adapter as IGithubAdapter
         try {
-          const success = await this.adapter.updateProjectDraftStatus(
+          const success = await githubAdapter.updateProjectDraftStatus(
             card.remote_node_id,
             newStatus
           )
@@ -331,10 +321,11 @@ export class SyncEngine {
 
       // If GitHub Projects V2 is not explicitly disabled, try to update project status
       if (
-        this.adapter instanceof GithubAdapter &&
+        isGithubAdapter(this.adapter) &&
         this.policy.sync?.githubProjectsV2?.enabled !== false
       ) {
-        success = await this.adapter.updateProjectStatus(issueNumber, newStatus)
+        const githubAdapter = this.adapter as IGithubAdapter
+        success = await githubAdapter.updateProjectStatus(issueNumber, newStatus)
         if (success) {
           console.log(`[SyncEngine] pushStatusChange via Projects V2 success card=${cardId}`)
         } else {
@@ -355,6 +346,27 @@ export class SyncEngine {
         labelsToRemove
       )
       success = labelsUpdated
+
+      // Also update PR labels if card has a linked PR/MR
+      if (success) {
+        const cardLinks = listCardLinks(cardId)
+        const prLink = cardLinks.find((link) => link.linked_type === 'pr' || link.linked_type === 'mr')
+        if (prLink?.linked_number_or_iid) {
+          const prNumber = parseInt(prLink.linked_number_or_iid, 10)
+          if (!isNaN(prNumber)) {
+            const prLabelsUpdated = await this.adapter.updatePRLabels(
+              prNumber,
+              labelsToAdd,
+              labelsToRemove
+            )
+            if (prLabelsUpdated) {
+              console.log(`[SyncEngine] pushStatusChange PR labels updated prNumber=${prNumber}`)
+            } else {
+              console.warn(`[SyncEngine] pushStatusChange PR labels failed prNumber=${prNumber}`)
+            }
+          }
+        }
+      }
 
       if (success) {
         updateCardSyncState(cardId, 'ok')

@@ -7,6 +7,15 @@
 // Types
 export * from './types'
 
+// Cache utilities
+export {
+  hasCommand,
+  getAvailableAITools,
+  warmupAIToolsCache,
+  getGitVersionInfo,
+  clearAllCaches
+} from '../cache'
+
 // AI execution
 export { checkCommand, isClaudeRetryableLimitError, buildAIPrompt, runAI } from './ai'
 

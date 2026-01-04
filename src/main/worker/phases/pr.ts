@@ -5,8 +5,6 @@
  */
 
 import type { PipelineContext } from './types'
-import { GithubAdapter } from '../../adapters/github'
-import { GitlabAdapter } from '../../adapters/gitlab'
 import { updateCardStatus, createCardLink, createEvent } from '../../db'
 
 export interface PRResult {
@@ -43,14 +41,12 @@ Closes #${ctx.card.remote_number_or_iid}
 _Automated by Patchwork_
 `.trim()
 
-  if (ctx.adapter instanceof GithubAdapter) {
-    return ctx.adapter.createPR(title, body, branchName)
-  } else if (ctx.adapter instanceof GitlabAdapter) {
-    const result = await ctx.adapter.createMR(title, body, branchName)
-    return result ? { number: result.iid, url: result.url } : null
-  }
+  // Get status label to attach to PR on creation
+  const statusLabel = ctx.adapter.getStatusLabel('in_review')
 
-  return null
+  // Use unified interface - works for both GitHub and GitLab
+  const result = await ctx.adapter.createPullRequest(title, body, branchName, undefined, [statusLabel])
+  return result ? { number: result.number, url: result.url } : null
 }
 
 /**
@@ -59,8 +55,8 @@ _Automated by Patchwork_
 export async function moveToInReview(ctx: PipelineContext, prUrl: string): Promise<void> {
   updateCardStatus(ctx.cardId, 'in_review')
 
-  // Create card link
-  const linkedType = ctx.adapter instanceof GithubAdapter ? 'pr' : 'mr'
+  // Create card link - use providerKey instead of instanceof
+  const linkedType = ctx.adapter?.providerKey === 'github' ? 'pr' : 'mr'
   createCardLink(ctx.cardId, linkedType, prUrl)
 
   createEvent(ctx.projectId, 'pr_created', ctx.cardId, {

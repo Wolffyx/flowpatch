@@ -226,12 +226,12 @@ export function mergePolicyUpdate(
 export function getStatusLabelFromPolicy(status: CardStatus, policy: PolicyConfig): string {
   const statusLabels = policy.sync?.statusLabels || {}
   const defaults: Record<CardStatus, string> = {
-    draft: 'status::draft',
-    ready: 'status::ready',
-    in_progress: 'status::in-progress',
-    in_review: 'status::in-review',
-    testing: 'status::testing',
-    done: 'status::done'
+    draft: 'Draft',
+    ready: 'Ready',
+    in_progress: 'In Progress',
+    in_review: 'In Review',
+    testing: 'Testing',
+    done: 'Done'
   }
   const keyMap: Record<CardStatus, keyof NonNullable<typeof statusLabels>> = {
     draft: 'draft',
@@ -250,12 +250,12 @@ export function getStatusLabelFromPolicy(status: CardStatus, policy: PolicyConfi
 export function getAllStatusLabelsFromPolicy(policy: PolicyConfig): string[] {
   const statusLabels = policy.sync?.statusLabels || {}
   return [
-    statusLabels.draft || 'status::draft',
-    statusLabels.ready || 'status::ready',
-    statusLabels.inProgress || 'status::in-progress',
-    statusLabels.inReview || 'status::in-review',
-    statusLabels.testing || 'status::testing',
-    statusLabels.done || 'status::done'
+    statusLabels.draft || 'Draft',
+    statusLabels.ready || 'Ready',
+    statusLabels.inProgress || 'In Progress',
+    statusLabels.inReview || 'In Review',
+    statusLabels.testing || 'Testing',
+    statusLabels.done || 'Done'
   ]
 }
 

@@ -163,6 +163,29 @@ export function getUsageSummary(
 }
 
 /**
+ * Get hourly usage for a tool type.
+ */
+export function getHourlyUsage(toolType: AIToolType): { tokens: number; cost: number } {
+  const db = getDrizzle()
+  const now = new Date()
+  const startOfHour = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), 0, 0, 0).toISOString()
+
+  const result = db
+    .select({
+      tokens: sum(usageRecords.total_tokens),
+      cost: sql<number>`SUM(COALESCE(${usageRecords.cost_usd}, 0))`
+    })
+    .from(usageRecords)
+    .where(and(eq(usageRecords.tool_type, toolType), gte(usageRecords.created_at, startOfHour)))
+    .get()
+
+  return {
+    tokens: Number(result?.tokens) || 0,
+    cost: Number(result?.cost) || 0
+  }
+}
+
+/**
  * Get daily usage for a tool type.
  */
 export function getDailyUsage(toolType: AIToolType): { tokens: number; cost: number } {
@@ -251,8 +274,10 @@ export function getToolLimits(toolType: AIToolType): AIToolLimits | null {
 
   return {
     tool_type: row.tool_type as AIToolType,
+    hourly_token_limit: row.hourly_token_limit,
     daily_token_limit: row.daily_token_limit,
     monthly_token_limit: row.monthly_token_limit,
+    hourly_cost_limit_usd: row.hourly_cost_limit_usd,
     daily_cost_limit_usd: row.daily_cost_limit_usd,
     monthly_cost_limit_usd: row.monthly_cost_limit_usd
   }
@@ -267,8 +292,10 @@ export function getAllToolLimits(): AIToolLimits[] {
 
   return rows.map((row) => ({
     tool_type: row.tool_type as AIToolType,
+    hourly_token_limit: row.hourly_token_limit,
     daily_token_limit: row.daily_token_limit,
     monthly_token_limit: row.monthly_token_limit,
+    hourly_cost_limit_usd: row.hourly_cost_limit_usd,
     daily_cost_limit_usd: row.daily_cost_limit_usd,
     monthly_cost_limit_usd: row.monthly_cost_limit_usd
   }))
@@ -291,6 +318,10 @@ export function setToolLimits(
   if (existing) {
     db.update(aiToolLimits)
       .set({
+        hourly_token_limit:
+          limits.hourly_token_limit !== undefined
+            ? limits.hourly_token_limit
+            : existing.hourly_token_limit,
         daily_token_limit:
           limits.daily_token_limit !== undefined
             ? limits.daily_token_limit
@@ -299,6 +330,10 @@ export function setToolLimits(
           limits.monthly_token_limit !== undefined
             ? limits.monthly_token_limit
             : existing.monthly_token_limit,
+        hourly_cost_limit_usd:
+          limits.hourly_cost_limit_usd !== undefined
+            ? limits.hourly_cost_limit_usd
+            : existing.hourly_cost_limit_usd,
         daily_cost_limit_usd:
           limits.daily_cost_limit_usd !== undefined
             ? limits.daily_cost_limit_usd
@@ -316,8 +351,10 @@ export function setToolLimits(
       .values({
         id,
         tool_type: toolType,
+        hourly_token_limit: limits.hourly_token_limit ?? null,
         daily_token_limit: limits.daily_token_limit ?? null,
         monthly_token_limit: limits.monthly_token_limit ?? null,
+        hourly_cost_limit_usd: limits.hourly_cost_limit_usd ?? null,
         daily_cost_limit_usd: limits.daily_cost_limit_usd ?? null,
         monthly_cost_limit_usd: limits.monthly_cost_limit_usd ?? null,
         updated_at: now
@@ -328,8 +365,10 @@ export function setToolLimits(
   return (
     getToolLimits(toolType) || {
       tool_type: toolType,
+      hourly_token_limit: limits.hourly_token_limit ?? null,
       daily_token_limit: limits.daily_token_limit ?? null,
       monthly_token_limit: limits.monthly_token_limit ?? null,
+      hourly_cost_limit_usd: limits.hourly_cost_limit_usd ?? null,
       daily_cost_limit_usd: limits.daily_cost_limit_usd ?? null,
       monthly_cost_limit_usd: limits.monthly_cost_limit_usd ?? null
     }
@@ -347,6 +386,7 @@ export function getUsageWithLimits(): UsageWithLimits[] {
   const results: UsageWithLimits[] = []
 
   for (const toolType of toolTypes) {
+    const hourly = getHourlyUsage(toolType)
     const daily = getDailyUsage(toolType)
     const monthly = getMonthlyUsage(toolType)
     const limits = getToolLimits(toolType)
@@ -378,8 +418,10 @@ export function getUsageWithLimits(): UsageWithLimits[] {
         invocation_count: invocationCount,
         avg_duration_ms: Math.round(Number(stats?.avg_duration_ms) || 0),
         limits,
+        hourly_tokens_used: hourly.tokens,
         daily_tokens_used: daily.tokens,
         monthly_tokens_used: monthly.tokens,
+        hourly_cost_used: hourly.cost,
         daily_cost_used: daily.cost,
         monthly_cost_used: monthly.cost
       })
@@ -387,6 +429,32 @@ export function getUsageWithLimits(): UsageWithLimits[] {
   }
 
   return results
+}
+
+/**
+ * Calculate time until hourly, daily, and monthly limits reset.
+ * Returns seconds remaining until each period resets.
+ */
+export function getResetTimes(): { hourly_resets_in: number; daily_resets_in: number; monthly_resets_in: number } {
+  const now = new Date()
+  
+  // Hourly reset: next hour boundary
+  const nextHour = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours() + 1, 0, 0, 0)
+  const hourlyResetsIn = Math.max(0, Math.floor((nextHour.getTime() - now.getTime()) / 1000))
+  
+  // Daily reset: next midnight
+  const nextDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0)
+  const dailyResetsIn = Math.max(0, Math.floor((nextDay.getTime() - now.getTime()) / 1000))
+  
+  // Monthly reset: first of next month
+  const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0)
+  const monthlyResetsIn = Math.max(0, Math.floor((nextMonth.getTime() - now.getTime()) / 1000))
+  
+  return {
+    hourly_resets_in: hourlyResetsIn,
+    daily_resets_in: dailyResetsIn,
+    monthly_resets_in: monthlyResetsIn
+  }
 }
 
 /**

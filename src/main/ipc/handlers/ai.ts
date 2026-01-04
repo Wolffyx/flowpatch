@@ -1,14 +1,18 @@
 /**
  * IPC handlers for AI-assisted drafting.
  * Handles: generateCardDescription, generateCardList
+ * 
+ * Security: All AI handlers verify IPC origin to prevent unauthorized command execution.
  */
 
-import { ipcMain } from 'electron'
+import { ipcMain, IpcMainInvokeEvent } from 'electron'
 import { execFileSync, spawn } from 'child_process'
 import { mkdtemp, readFile, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { getProject } from '../../db'
+import { verifySecureRequest } from '../../security'
+import { logAction } from '@shared/utils'
 
 type DraftToolPreference = 'auto' | 'claude' | 'codex'
 
@@ -267,11 +271,36 @@ async function runCodexPlan(prompt: string, cwd: string, timeoutMs: number): Pro
   }
 }
 
+// ============================================================================
+// Security Helpers
+// ============================================================================
+
+/**
+ * Verify IPC request origin for AI operations.
+ * Returns error message if verification fails, null if successful.
+ */
+function verifyAIRequest(event: IpcMainInvokeEvent, channel: string): string | null {
+  const result = verifySecureRequest(event, channel)
+  if (!result.valid) {
+    logAction('security:aiRequestRejected', {
+      channel,
+      error: result.error,
+      senderId: event.sender.id
+    })
+    return result.error ?? 'Security verification failed'
+  }
+  return null
+}
+
+// ============================================================================
+// Handler Registration
+// ============================================================================
+
 export function registerAIHandlers(): void {
   ipcMain.handle(
     'generateCardDescription',
     async (
-      _e,
+      event,
       payload: {
         projectId: string
         title: string
@@ -279,6 +308,12 @@ export function registerAIHandlers(): void {
         messages?: ChatMessage[]
       }
     ) => {
+      // Security check - AI operations can execute commands
+      const securityError = verifyAIRequest(event, 'generateCardDescription')
+      if (securityError) {
+        return { error: `Security: ${securityError}` }
+      }
+
       try {
         const project = getProject(payload.projectId)
         if (!project) return { error: 'Project not found' }
@@ -317,7 +352,7 @@ export function registerAIHandlers(): void {
   ipcMain.handle(
     'generateCardList',
     async (
-      _e,
+      event,
       payload: {
         projectId: string
         description: string
@@ -325,6 +360,12 @@ export function registerAIHandlers(): void {
         toolPreference?: DraftToolPreference
       }
     ) => {
+      // Security check - AI operations can execute commands
+      const securityError = verifyAIRequest(event, 'generateCardList')
+      if (securityError) {
+        return { error: `Security: ${securityError}` }
+      }
+
       try {
         const project = getProject(payload.projectId)
         if (!project) return { error: 'Project not found' }

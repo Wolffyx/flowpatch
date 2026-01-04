@@ -1,10 +1,23 @@
+/**
+ * GithubAdapter - Adapter for GitHub repositories.
+ *
+ * Implements IRepoAdapter and IGithubAdapter interfaces, providing
+ * full GitHub API integration including GitHub Projects V2 support.
+ */
+
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import type { Card, CardStatus, PolicyConfig, RepoLabel } from '@shared/types'
+import type { Card, CardStatus, PolicyConfig, Provider, RepoLabel } from '@shared/types'
 import { cryptoRandomId } from '../db'
 import { logAction } from '@shared/utils'
+import { BaseAdapter } from './base'
+import type { AuthResult, IGithubAdapter, IssueResult, LabelResult, PRResult } from './types'
 
 const execFileAsync = promisify(execFile)
+
+// ============================================================================
+// GitHub-specific Types
+// ============================================================================
 
 interface GithubIssue {
   number: number
@@ -83,21 +96,278 @@ interface ProjectV2Response {
 // Map of issue/PR number to their project status
 type ProjectStatusMap = Map<number, string>
 
-export class GithubAdapter {
-  private repoPath: string
+// ============================================================================
+// GithubAdapter Class
+// ============================================================================
+
+export class GithubAdapter extends BaseAdapter implements IGithubAdapter {
+  // IRepoAdapter properties
+  readonly provider: Provider = 'github'
+  readonly providerKey = 'github'
+  readonly isLocal = false
+
+  // GitHub-specific properties
   private owner: string
   private repo: string
-  private policy: PolicyConfig
   private projectStatusCache: ProjectStatusMap | null = null
 
   constructor(repoPath: string, repoKey: string, policy: PolicyConfig) {
-    this.repoPath = repoPath
+    super(repoPath, repoKey, policy)
     // Parse repoKey like "github:owner/repo"
     const parts = repoKey.replace('github:', '').split('/')
     this.owner = parts[0]
     this.repo = parts[1]
-    this.policy = policy
   }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Authentication
+  // ──────────────────────────────────────────────────────────────────────────
+
+  async checkAuth(): Promise<AuthResult> {
+    try {
+      const { stdout } = await execFileAsync('gh', ['auth', 'status', '--hostname', 'github.com'], {
+        cwd: this.repoPath
+      })
+      const match = stdout.match(/Logged in to github.com account (\S+)/)
+      return {
+        authenticated: true,
+        username: match ? match[1] : undefined
+      }
+    } catch (error) {
+      return {
+        authenticated: false,
+        error: error instanceof Error ? error.message : 'Authentication failed'
+      }
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Issues
+  // ──────────────────────────────────────────────────────────────────────────
+
+  async listIssues(): Promise<Card[]> {
+    try {
+      // Pre-fetch project statuses once (auto-detects project if not explicitly disabled)
+      const projectConfig = this.policy.sync?.githubProjectsV2
+      if (projectConfig?.enabled !== false && !this.projectStatusCache) {
+        await this.fetchProjectStatusMap()
+      }
+
+      const { stdout } = await execFileAsync(
+        'gh',
+        [
+          'issue',
+          'list',
+          '--repo',
+          `${this.owner}/${this.repo}`,
+          '--state',
+          'all',
+          '--limit',
+          '1000',
+          '--json',
+          'number,title,body,state,url,labels,assignees,updatedAt,id'
+        ],
+        { cwd: this.repoPath }
+      )
+
+      const issues: GithubIssue[] = JSON.parse(stdout)
+      return issues.map((issue) => {
+        const projectStatus = this.projectStatusCache?.get(issue.number)
+        return this.issueToCard(issue, projectStatus)
+      })
+    } catch (error) {
+      console.error('Failed to list GitHub issues:', error)
+      return []
+    }
+  }
+
+  async getIssue(issueNumber: number): Promise<Card | null> {
+    try {
+      const { stdout } = await execFileAsync(
+        'gh',
+        [
+          'issue',
+          'view',
+          String(issueNumber),
+          '--repo',
+          `${this.owner}/${this.repo}`,
+          '--json',
+          'number,title,body,state,url,labels,assignees,updatedAt,id'
+        ],
+        { cwd: this.repoPath }
+      )
+
+      const issue: GithubIssue = JSON.parse(stdout)
+      return this.issueToCard(issue)
+    } catch (error) {
+      console.error('Failed to get issue:', error)
+      return null
+    }
+  }
+
+  async createIssue(
+    title: string,
+    body?: string,
+    labels?: string[]
+  ): Promise<IssueResult | null> {
+    try {
+      const args = ['issue', 'create', '--repo', `${this.owner}/${this.repo}`, '--title', title]
+
+      if (body) {
+        args.push('--body', body)
+      }
+
+      // Add labels if provided
+      if (labels && labels.length > 0) {
+        for (const label of labels) {
+          args.push('--label', label)
+        }
+      }
+
+      // gh issue create doesn't support --json, so we parse the output URL
+      const { stdout } = await execFileAsync('gh', args, { cwd: this.repoPath })
+
+      // Output is like: "https://github.com/owner/repo/issues/123\n"
+      const url = stdout.trim()
+      const issueNumberMatch = url.match(/\/issues\/(\d+)$/)
+      if (!issueNumberMatch) {
+        console.error('Failed to parse issue number from URL:', url)
+        return null
+      }
+
+      const issueNumber = parseInt(issueNumberMatch[1], 10)
+
+      // Fetch the full issue details to get all fields
+      const card = await this.getIssue(issueNumber)
+      if (!card) {
+        return null
+      }
+
+      return {
+        number: issueNumber,
+        url,
+        card
+      }
+    } catch (error) {
+      console.error('Failed to create GitHub issue:', error)
+      return null
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Pull Requests
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * List all pull requests (implements IRepoAdapter.listPullRequests)
+   */
+  async listPullRequests(): Promise<Card[]> {
+    return this.listPRs()
+  }
+
+  /**
+   * List all pull requests (legacy method name, kept for compatibility)
+   */
+  async listPRs(): Promise<Card[]> {
+    try {
+      // Pre-fetch project statuses if not already fetched (auto-detects project)
+      const projectConfig = this.policy.sync?.githubProjectsV2
+      if (projectConfig?.enabled !== false && !this.projectStatusCache) {
+        await this.fetchProjectStatusMap()
+      }
+
+      const { stdout } = await execFileAsync(
+        'gh',
+        [
+          'pr',
+          'list',
+          '--repo',
+          `${this.owner}/${this.repo}`,
+          '--state',
+          'all',
+          '--limit',
+          '1000',
+          '--json',
+          'number,title,body,state,url,labels,assignees,updatedAt,id,isDraft'
+        ],
+        { cwd: this.repoPath }
+      )
+
+      const prs: GithubPR[] = JSON.parse(stdout)
+      return prs.map((pr) => {
+        const projectStatus = this.projectStatusCache?.get(pr.number)
+        return this.prToCard(pr, projectStatus)
+      })
+    } catch (error) {
+      console.error('Failed to list GitHub PRs:', error)
+      return []
+    }
+  }
+
+  /**
+   * Create a pull request (implements IRepoAdapter.createPullRequest)
+   */
+  async createPullRequest(
+    title: string,
+    body: string,
+    branch: string,
+    baseBranch = 'main',
+    labels?: string[]
+  ): Promise<PRResult | null> {
+    return this.createPR(title, body, branch, baseBranch, labels)
+  }
+
+  /**
+   * Create a pull request (legacy method name, kept for compatibility)
+   */
+  async createPR(
+    title: string,
+    body: string,
+    branch: string,
+    baseBranch = 'main',
+    labels?: string[]
+  ): Promise<PRResult | null> {
+    try {
+      const args = [
+        'pr',
+        'create',
+        '--repo',
+        `${this.owner}/${this.repo}`,
+        '--title',
+        title,
+        '--body',
+        body,
+        '--head',
+        branch,
+        '--base',
+        baseBranch
+      ]
+
+      // Add labels if provided
+      if (labels && labels.length > 0) {
+        for (const label of labels) {
+          args.push('--label', label)
+        }
+      }
+
+      const { stdout } = await execFileAsync('gh', args, { cwd: this.repoPath })
+
+      // gh pr create outputs the PR URL on success
+      // e.g., "https://github.com/owner/repo/pull/123"
+      const url = stdout.trim()
+      const prNumberMatch = url.match(/\/pull\/(\d+)/)
+      const prNumber = prNumberMatch ? parseInt(prNumberMatch[1], 10) : 0
+
+      return { number: prNumber, url }
+    } catch (error) {
+      console.error('Failed to create PR:', error)
+      return null
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Labels
+  // ──────────────────────────────────────────────────────────────────────────
 
   async listRepoLabels(): Promise<RepoLabel[]> {
     try {
@@ -127,7 +397,7 @@ export class GithubAdapter {
     }
   }
 
-  async createRepoLabel(label: RepoLabel): Promise<{ created: boolean; error?: string }> {
+  async createRepoLabel(label: RepoLabel): Promise<LabelResult> {
     const name = (label.name || '').trim()
     if (!name) return { created: false, error: 'Label name is required' }
 
@@ -142,6 +412,260 @@ export class GithubAdapter {
       return { created: false, error: error instanceof Error ? error.message : String(error) }
     }
   }
+
+  async updateLabels(
+    issueNumber: number,
+    labelsToAdd: string[],
+    labelsToRemove: string[]
+  ): Promise<boolean> {
+    try {
+      // Fetch existing labels from the repository to match against
+      const repoLabels = await this.fetchRepoLabelsInternal()
+      logAction('updateLabels: fetched repo labels', { repoLabels, labelsToAdd, labelsToRemove })
+
+      const failedAdds: string[] = []
+      for (const label of labelsToAdd) {
+        // Find matching label in repo (handles case, spaces, dashes, prefixes)
+        let matchedLabel = this.findMatchingLabel(label, repoLabels)
+        logAction('updateLabels: matching result', { original: label, matched: matchedLabel })
+        if (!matchedLabel) {
+          // Try adding the label by name directly first (works if fetchRepoLabels failed or matching missed).
+          try {
+            await execFileAsync(
+              'gh',
+              [
+                'issue',
+                'edit',
+                String(issueNumber),
+                '--repo',
+                `${this.owner}/${this.repo}`,
+                '--add-label',
+                label
+              ],
+              { cwd: this.repoPath }
+            )
+            continue
+          } catch (error) {
+            logAction('updateLabels: Direct add failed, attempting to create label', {
+              label,
+              error: String(error)
+            })
+          }
+
+          const created = await this.createRepoLabel({ name: label })
+          if (!created.created) {
+            failedAdds.push(label)
+            logAction('updateLabels: Failed to create missing label', {
+              label,
+              error: created.error
+            })
+            continue
+          }
+
+          repoLabels.push(label)
+          matchedLabel = label
+        }
+
+        try {
+          await execFileAsync(
+            'gh',
+            [
+              'issue',
+              'edit',
+              String(issueNumber),
+              '--repo',
+              `${this.owner}/${this.repo}`,
+              '--add-label',
+              matchedLabel
+            ],
+            { cwd: this.repoPath }
+          )
+        } catch (error) {
+          failedAdds.push(label)
+          logAction('updateLabels: Failed to add label', {
+            label,
+            matchedLabel,
+            error: String(error)
+          })
+        }
+      }
+      for (const label of labelsToRemove) {
+        // Find matching label in repo
+        const matchedLabel = this.findMatchingLabel(label, repoLabels)
+        if (matchedLabel) {
+          try {
+            await execFileAsync(
+              'gh',
+              [
+                'issue',
+                'edit',
+                String(issueNumber),
+                '--repo',
+                `${this.owner}/${this.repo}`,
+                '--remove-label',
+                matchedLabel
+              ],
+              { cwd: this.repoPath }
+            )
+          } catch {
+            // Ignore errors when removing labels (label might not be on issue)
+          }
+        }
+      }
+
+      if (failedAdds.length > 0) {
+        logAction('updateLabels: One or more labels failed to add', { failedAdds })
+        return false
+      }
+
+      return true
+    } catch (error) {
+      console.error('Failed to update labels:', error)
+      return false
+    }
+  }
+
+  async updatePRLabels(
+    prNumber: number,
+    labelsToAdd: string[],
+    labelsToRemove: string[]
+  ): Promise<boolean> {
+    try {
+      // Fetch existing labels from the repository to match against
+      const repoLabels = await this.fetchRepoLabelsInternal()
+      logAction('updatePRLabels: fetched repo labels', { repoLabels, labelsToAdd, labelsToRemove })
+
+      const failedAdds: string[] = []
+      for (const label of labelsToAdd) {
+        // Find matching label in repo (handles case, spaces, dashes, prefixes)
+        let matchedLabel = this.findMatchingLabel(label, repoLabels)
+        logAction('updatePRLabels: matching result', { original: label, matched: matchedLabel })
+        if (!matchedLabel) {
+          // Try adding the label by name directly first (works if fetchRepoLabels failed or matching missed).
+          try {
+            await execFileAsync(
+              'gh',
+              [
+                'pr',
+                'edit',
+                String(prNumber),
+                '--repo',
+                `${this.owner}/${this.repo}`,
+                '--add-label',
+                label
+              ],
+              { cwd: this.repoPath }
+            )
+            continue
+          } catch (error) {
+            logAction('updatePRLabels: Direct add failed, attempting to create label', {
+              label,
+              error: String(error)
+            })
+          }
+
+          const created = await this.createRepoLabel({ name: label })
+          if (!created.created) {
+            failedAdds.push(label)
+            logAction('updatePRLabels: Failed to create missing label', {
+              label,
+              error: created.error
+            })
+            continue
+          }
+
+          repoLabels.push(label)
+          matchedLabel = label
+        }
+
+        try {
+          await execFileAsync(
+            'gh',
+            [
+              'pr',
+              'edit',
+              String(prNumber),
+              '--repo',
+              `${this.owner}/${this.repo}`,
+              '--add-label',
+              matchedLabel
+            ],
+            { cwd: this.repoPath }
+          )
+        } catch (error) {
+          failedAdds.push(label)
+          logAction('updatePRLabels: Failed to add label', {
+            label,
+            matchedLabel,
+            error: String(error)
+          })
+        }
+      }
+      for (const label of labelsToRemove) {
+        // Find matching label in repo
+        const matchedLabel = this.findMatchingLabel(label, repoLabels)
+        if (matchedLabel) {
+          try {
+            await execFileAsync(
+              'gh',
+              [
+                'pr',
+                'edit',
+                String(prNumber),
+                '--repo',
+                `${this.owner}/${this.repo}`,
+                '--remove-label',
+                matchedLabel
+              ],
+              { cwd: this.repoPath }
+            )
+          } catch {
+            // Ignore errors when removing labels (label might not be on PR)
+          }
+        }
+      }
+
+      if (failedAdds.length > 0) {
+        logAction('updatePRLabels: One or more labels failed to add', { failedAdds })
+        return false
+      }
+
+      return true
+    } catch (error) {
+      console.error('Failed to update PR labels:', error)
+      return false
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Comments
+  // ──────────────────────────────────────────────────────────────────────────
+
+  async commentOnIssue(issueNumber: number, comment: string): Promise<boolean> {
+    try {
+      await execFileAsync(
+        'gh',
+        [
+          'issue',
+          'comment',
+          String(issueNumber),
+          '--repo',
+          `${this.owner}/${this.repo}`,
+          '--body',
+          comment
+        ],
+        { cwd: this.repoPath }
+      )
+      return true
+    } catch (error) {
+      console.error('Failed to comment on issue:', error)
+      return false
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // GitHub Projects V2 (IGithubAdapter)
+  // ──────────────────────────────────────────────────────────────────────────
 
   /**
    * Find the GitHub Projects V2 associated with this repository.
@@ -338,52 +862,6 @@ export class GithubAdapter {
   }
 
   /**
-   * Derive card status from GitHub Projects V2 status field value.
-   * Returns undefined if no mapping is found (falls back to label-based).
-   */
-  private deriveStatusFromProjectField(projectStatus: string | undefined): CardStatus | undefined {
-    if (!projectStatus) return undefined
-
-    const statusValues = this.policy.sync?.githubProjectsV2?.statusValues
-    if (!statusValues) {
-      // Use default mappings if no custom values configured
-      const defaultMappings: Record<string, CardStatus> = {
-        backlog: 'draft',
-        draft: 'draft',
-        todo: 'draft',
-        ready: 'ready',
-        'in progress': 'in_progress',
-        inprogress: 'in_progress',
-        'in review': 'in_review',
-        inreview: 'in_review',
-        review: 'in_review',
-        testing: 'testing',
-        qa: 'testing',
-        done: 'done',
-        closed: 'done',
-        merged: 'done'
-      }
-      return defaultMappings[projectStatus.toLowerCase()]
-    }
-
-    // Match against configured status values
-    const normalize = (s: string): string => s.toLowerCase().trim()
-    const normalizedStatus = normalize(projectStatus)
-
-    if (statusValues.done && normalize(statusValues.done) === normalizedStatus) return 'done'
-    if (statusValues.testing && normalize(statusValues.testing) === normalizedStatus)
-      return 'testing'
-    if (statusValues.inReview && normalize(statusValues.inReview) === normalizedStatus)
-      return 'in_review'
-    if (statusValues.inProgress && normalize(statusValues.inProgress) === normalizedStatus)
-      return 'in_progress'
-    if (statusValues.ready && normalize(statusValues.ready) === normalizedStatus) return 'ready'
-    if (statusValues.draft && normalize(statusValues.draft) === normalizedStatus) return 'draft'
-
-    return undefined
-  }
-
-  /**
    * Clear the cached project status map (call before re-syncing)
    */
   clearProjectStatusCache(): void {
@@ -403,192 +881,6 @@ export class GithubAdapter {
     }
 
     return this.projectStatusCache?.get(issueNumber)
-  }
-
-  async checkAuth(): Promise<{ authenticated: boolean; username?: string; error?: string }> {
-    try {
-      const { stdout } = await execFileAsync('gh', ['auth', 'status', '--hostname', 'github.com'], {
-        cwd: this.repoPath
-      })
-      const match = stdout.match(/Logged in to github.com account (\S+)/)
-      return {
-        authenticated: true,
-        username: match ? match[1] : undefined
-      }
-    } catch (error) {
-      return {
-        authenticated: false,
-        error: error instanceof Error ? error.message : 'Authentication failed'
-      }
-    }
-  }
-
-  async listIssues(): Promise<Card[]> {
-    try {
-      // Pre-fetch project statuses once (auto-detects project if not explicitly disabled)
-      const projectConfig = this.policy.sync?.githubProjectsV2
-      if (projectConfig?.enabled !== false && !this.projectStatusCache) {
-        await this.fetchProjectStatusMap()
-      }
-
-      const { stdout } = await execFileAsync(
-        'gh',
-        [
-          'issue',
-          'list',
-          '--repo',
-          `${this.owner}/${this.repo}`,
-          '--state',
-          'all',
-          '--limit',
-          '1000',
-          '--json',
-          'number,title,body,state,url,labels,assignees,updatedAt,id'
-        ],
-        { cwd: this.repoPath }
-      )
-
-      const issues: GithubIssue[] = JSON.parse(stdout)
-      return issues.map((issue) => {
-        const projectStatus = this.projectStatusCache?.get(issue.number)
-        return this.issueToCard(issue, projectStatus)
-      })
-    } catch (error) {
-      console.error('Failed to list GitHub issues:', error)
-      return []
-    }
-  }
-
-  async listPRs(): Promise<Card[]> {
-    try {
-      // Pre-fetch project statuses if not already fetched (auto-detects project)
-      const projectConfig = this.policy.sync?.githubProjectsV2
-      if (projectConfig?.enabled !== false && !this.projectStatusCache) {
-        await this.fetchProjectStatusMap()
-      }
-
-      const { stdout } = await execFileAsync(
-        'gh',
-        [
-          'pr',
-          'list',
-          '--repo',
-          `${this.owner}/${this.repo}`,
-          '--state',
-          'all',
-          '--limit',
-          '1000',
-          '--json',
-          'number,title,body,state,url,labels,assignees,updatedAt,id,isDraft'
-        ],
-        { cwd: this.repoPath }
-      )
-
-      const prs: GithubPR[] = JSON.parse(stdout)
-      return prs.map((pr) => {
-        const projectStatus = this.projectStatusCache?.get(pr.number)
-        return this.prToCard(pr, projectStatus)
-      })
-    } catch (error) {
-      console.error('Failed to list GitHub PRs:', error)
-      return []
-    }
-  }
-
-  async listPRIssueLinks(): Promise<GithubPullRequestIssueLink[]> {
-    const results: GithubPullRequestIssueLink[] = []
-
-    try {
-      const query = `
-        query($owner: String!, $repo: String!, $cursor: String) {
-          repository(owner: $owner, name: $repo) {
-            pullRequests(
-              first: 100,
-              after: $cursor,
-              states: [OPEN, MERGED, CLOSED],
-              orderBy: { field: UPDATED_AT, direction: DESC }
-            ) {
-              nodes {
-                number
-                url
-                closingIssuesReferences(first: 25) {
-                  nodes {
-                    number
-                  }
-                }
-              }
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-            }
-          }
-        }
-      `
-
-      let cursor: string | null = null
-      let hasNextPage = true
-
-      while (hasNextPage) {
-        const args = [
-          'api',
-          'graphql',
-          '-f',
-          `query=${query}`,
-          '-F',
-          `owner=${this.owner}`,
-          '-F',
-          `repo=${this.repo}`
-        ]
-        if (cursor) args.push('-F', `cursor=${cursor}`)
-
-        const { stdout } = await execFileAsync('gh', args, { cwd: this.repoPath })
-        const response = JSON.parse(stdout) as {
-          data?: {
-            repository?: {
-              pullRequests?: {
-                nodes?: Array<{
-                  number?: number
-                  url?: string
-                  closingIssuesReferences?: { nodes?: Array<{ number?: number }> }
-                }>
-                pageInfo?: { hasNextPage?: boolean; endCursor?: string | null }
-              }
-            }
-          }
-          errors?: Array<{ message?: string }>
-        }
-
-        if (response.errors?.length) {
-          console.error('GraphQL errors fetching PR issue links:', response.errors)
-          break
-        }
-
-        const prConn = response.data?.repository?.pullRequests
-        const nodes = prConn?.nodes ?? []
-        for (const pr of nodes) {
-          const prNumber = pr.number
-          const prUrl = pr.url
-          if (!prNumber || !prUrl) continue
-
-          const issueNumbers = (pr.closingIssuesReferences?.nodes ?? [])
-            .map((n) => n.number)
-            .filter((n): n is number => typeof n === 'number')
-
-          if (issueNumbers.length === 0) continue
-
-          results.push({ prNumber, prUrl, issueNumbers })
-        }
-
-        hasNextPage = !!prConn?.pageInfo?.hasNextPage
-        cursor = prConn?.pageInfo?.endCursor ?? null
-      }
-    } catch (error) {
-      console.error('Failed to fetch PR issue links:', error)
-      return []
-    }
-
-    return results
   }
 
   /**
@@ -720,191 +1012,6 @@ export class GithubAdapter {
     }
 
     return drafts
-  }
-
-  async updateLabels(
-    issueNumber: number,
-    labelsToAdd: string[],
-    labelsToRemove: string[]
-  ): Promise<boolean> {
-    try {
-      // Fetch existing labels from the repository to match against
-      const repoLabels = await this.fetchRepoLabels()
-      logAction('updateLabels: fetched repo labels', { repoLabels, labelsToAdd, labelsToRemove })
-
-      const failedAdds: string[] = []
-      for (const label of labelsToAdd) {
-        // Find matching label in repo (handles case, spaces, dashes, prefixes)
-        let matchedLabel = this.findMatchingLabel(label, repoLabels)
-        logAction('updateLabels: matching result', { original: label, matched: matchedLabel })
-        if (!matchedLabel) {
-          // Try adding the label by name directly first (works if fetchRepoLabels failed or matching missed).
-          try {
-            await execFileAsync(
-              'gh',
-              [
-                'issue',
-                'edit',
-                String(issueNumber),
-                '--repo',
-                `${this.owner}/${this.repo}`,
-                '--add-label',
-                label
-              ],
-              { cwd: this.repoPath }
-            )
-            continue
-          } catch (error) {
-            logAction('updateLabels: Direct add failed, attempting to create label', {
-              label,
-              error: String(error)
-            })
-          }
-
-          const created = await this.createRepoLabel({ name: label })
-          if (!created.created) {
-            failedAdds.push(label)
-            logAction('updateLabels: Failed to create missing label', {
-              label,
-              error: created.error
-            })
-            continue
-          }
-
-          repoLabels.push(label)
-          matchedLabel = label
-        }
-
-        try {
-          await execFileAsync(
-            'gh',
-            [
-              'issue',
-              'edit',
-              String(issueNumber),
-              '--repo',
-              `${this.owner}/${this.repo}`,
-              '--add-label',
-              matchedLabel
-            ],
-            { cwd: this.repoPath }
-          )
-        } catch (error) {
-          failedAdds.push(label)
-          logAction('updateLabels: Failed to add label', {
-            label,
-            matchedLabel,
-            error: String(error)
-          })
-        }
-      }
-      for (const label of labelsToRemove) {
-        // Find matching label in repo
-        const matchedLabel = this.findMatchingLabel(label, repoLabels)
-        if (matchedLabel) {
-          try {
-            await execFileAsync(
-              'gh',
-              [
-                'issue',
-                'edit',
-                String(issueNumber),
-                '--repo',
-                `${this.owner}/${this.repo}`,
-                '--remove-label',
-                matchedLabel
-              ],
-              { cwd: this.repoPath }
-            )
-          } catch {
-            // Ignore errors when removing labels (label might not be on issue)
-          }
-        }
-      }
-
-      if (failedAdds.length > 0) {
-        logAction('updateLabels: One or more labels failed to add', { failedAdds })
-        return false
-      }
-
-      return true
-    } catch (error) {
-      console.error('Failed to update labels:', error)
-      return false
-    }
-  }
-
-  /**
-   * Fetch all labels from the GitHub repository.
-   */
-  private async fetchRepoLabels(): Promise<string[]> {
-    try {
-      const { stdout } = await execFileAsync(
-        'gh',
-        ['label', 'list', '--repo', `${this.owner}/${this.repo}`, '--json', 'name'],
-        { cwd: this.repoPath }
-      )
-      const labels = JSON.parse(stdout) as { name: string }[]
-      return labels.map((l) => l.name)
-    } catch (error) {
-      logAction('fetchRepoLabels: Failed to fetch labels', { error: String(error) })
-      return []
-    }
-  }
-
-  /**
-   * Find a matching label in the repository's label list.
-   * Handles variations like:
-   * - "status::in-progress" vs "In progress" vs "in-progress"
-   * - Case differences
-   * - With or without "status::" prefix
-   */
-  private findMatchingLabel(targetLabel: string, repoLabels: string[]): string | null {
-    // Normalize function: lowercase, remove dashes/spaces/colons, collapse to single form
-    const normalize = (s: string): string => {
-      return s
-        .toLowerCase()
-        .replace(/[-_\s]+/g, '') // Remove dashes, underscores, spaces
-        .replace(/:/g, '') // Remove colons too for matching
-    }
-
-    const normalizedTarget = normalize(targetLabel)
-
-    // First try exact match
-    const exactMatch = repoLabels.find((l) => l === targetLabel)
-    if (exactMatch) return exactMatch
-
-    // Then try normalized match (full label)
-    const normalizedMatch = repoLabels.find((l) => normalize(l) === normalizedTarget)
-    if (normalizedMatch) return normalizedMatch
-
-    // Try matching just the status part after "::" against all labels
-    // This handles "status::in-progress" matching "In progress" or "in-progress"
-    if (targetLabel.includes('::')) {
-      const statusPart = targetLabel.split('::')[1]
-      const normalizedStatus = normalize(statusPart)
-
-      // First check labels that also have "::" prefix
-      const prefixedMatch = repoLabels.find((l) => {
-        if (l.includes('::')) {
-          const labelStatus = l.split('::')[1]
-          return normalize(labelStatus) === normalizedStatus
-        }
-        return false
-      })
-      if (prefixedMatch) return prefixedMatch
-
-      // Then check labels WITHOUT "::" prefix (e.g., "In progress" matches "status::in-progress")
-      const unprefixedMatch = repoLabels.find((l) => {
-        if (!l.includes('::')) {
-          return normalize(l) === normalizedStatus
-        }
-        return false
-      })
-      if (unprefixedMatch) return unprefixedMatch
-    }
-
-    return null
   }
 
   /**
@@ -1069,6 +1176,155 @@ export class GithubAdapter {
       console.error('Failed to update project draft status:', error)
       return false
     }
+  }
+
+  /**
+   * List PR to issue links (implements IGithubAdapter)
+   */
+  async listPRIssueLinks(): Promise<GithubPullRequestIssueLink[]> {
+    const results: GithubPullRequestIssueLink[] = []
+
+    try {
+      const query = `
+        query($owner: String!, $repo: String!, $cursor: String) {
+          repository(owner: $owner, name: $repo) {
+            pullRequests(
+              first: 100,
+              after: $cursor,
+              states: [OPEN, MERGED, CLOSED],
+              orderBy: { field: UPDATED_AT, direction: DESC }
+            ) {
+              nodes {
+                number
+                url
+                closingIssuesReferences(first: 25) {
+                  nodes {
+                    number
+                  }
+                }
+              }
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+            }
+          }
+        }
+      `
+
+      let cursor: string | null = null
+      let hasNextPage = true
+
+      while (hasNextPage) {
+        const args = [
+          'api',
+          'graphql',
+          '-f',
+          `query=${query}`,
+          '-F',
+          `owner=${this.owner}`,
+          '-F',
+          `repo=${this.repo}`
+        ]
+        if (cursor) args.push('-F', `cursor=${cursor}`)
+
+        const { stdout } = await execFileAsync('gh', args, { cwd: this.repoPath })
+        const response = JSON.parse(stdout) as {
+          data?: {
+            repository?: {
+              pullRequests?: {
+                nodes?: Array<{
+                  number?: number
+                  url?: string
+                  closingIssuesReferences?: { nodes?: Array<{ number?: number }> }
+                }>
+                pageInfo?: { hasNextPage?: boolean; endCursor?: string | null }
+              }
+            }
+          }
+          errors?: Array<{ message?: string }>
+        }
+
+        if (response.errors?.length) {
+          console.error('GraphQL errors fetching PR issue links:', response.errors)
+          break
+        }
+
+        const prConn = response.data?.repository?.pullRequests
+        const nodes = prConn?.nodes ?? []
+        for (const pr of nodes) {
+          const prNumber = pr.number
+          const prUrl = pr.url
+          if (!prNumber || !prUrl) continue
+
+          const issueNumbers = (pr.closingIssuesReferences?.nodes ?? [])
+            .map((n) => n.number)
+            .filter((n): n is number => typeof n === 'number')
+
+          if (issueNumbers.length === 0) continue
+
+          results.push({ prNumber, prUrl, issueNumbers })
+        }
+
+        hasNextPage = !!prConn?.pageInfo?.hasNextPage
+        cursor = prConn?.pageInfo?.endCursor ?? null
+      }
+    } catch (error) {
+      console.error('Failed to fetch PR issue links:', error)
+      return []
+    }
+
+    return results
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Private Helper Methods
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Derive card status from GitHub Projects V2 status field value.
+   * Returns undefined if no mapping is found (falls back to label-based).
+   */
+  private deriveStatusFromProjectField(projectStatus: string | undefined): CardStatus | undefined {
+    if (!projectStatus) return undefined
+
+    const statusValues = this.policy.sync?.githubProjectsV2?.statusValues
+    if (!statusValues) {
+      // Use default mappings if no custom values configured
+      const defaultMappings: Record<string, CardStatus> = {
+        backlog: 'draft',
+        draft: 'draft',
+        todo: 'draft',
+        ready: 'ready',
+        'in progress': 'in_progress',
+        inprogress: 'in_progress',
+        'in review': 'in_review',
+        inreview: 'in_review',
+        review: 'in_review',
+        testing: 'testing',
+        qa: 'testing',
+        done: 'done',
+        closed: 'done',
+        merged: 'done'
+      }
+      return defaultMappings[projectStatus.toLowerCase()]
+    }
+
+    // Match against configured status values
+    const normalize = (s: string): string => s.toLowerCase().trim()
+    const normalizedStatus = normalize(projectStatus)
+
+    if (statusValues.done && normalize(statusValues.done) === normalizedStatus) return 'done'
+    if (statusValues.testing && normalize(statusValues.testing) === normalizedStatus)
+      return 'testing'
+    if (statusValues.inReview && normalize(statusValues.inReview) === normalizedStatus)
+      return 'in_review'
+    if (statusValues.inProgress && normalize(statusValues.inProgress) === normalizedStatus)
+      return 'in_progress'
+    if (statusValues.ready && normalize(statusValues.ready) === normalizedStatus) return 'ready'
+    if (statusValues.draft && normalize(statusValues.draft) === normalizedStatus) return 'draft'
+
+    return undefined
   }
 
   private async ghApiGraphql<T>(
@@ -1295,140 +1551,82 @@ export class GithubAdapter {
     }
   }
 
-  async createPR(
-    title: string,
-    body: string,
-    branch: string,
-    baseBranch = 'main'
-  ): Promise<{ number: number; url: string } | null> {
+  /**
+   * Fetch all labels from the GitHub repository (internal helper).
+   */
+  private async fetchRepoLabelsInternal(): Promise<string[]> {
     try {
       const { stdout } = await execFileAsync(
         'gh',
-        [
-          'pr',
-          'create',
-          '--repo',
-          `${this.owner}/${this.repo}`,
-          '--title',
-          title,
-          '--body',
-          body,
-          '--head',
-          branch,
-          '--base',
-          baseBranch
-        ],
+        ['label', 'list', '--repo', `${this.owner}/${this.repo}`, '--json', 'name'],
         { cwd: this.repoPath }
       )
-
-      // gh pr create outputs the PR URL on success
-      // e.g., "https://github.com/owner/repo/pull/123"
-      const url = stdout.trim()
-      const prNumberMatch = url.match(/\/pull\/(\d+)/)
-      const prNumber = prNumberMatch ? parseInt(prNumberMatch[1], 10) : 0
-
-      return { number: prNumber, url }
+      const labels = JSON.parse(stdout) as { name: string }[]
+      return labels.map((l) => l.name)
     } catch (error) {
-      console.error('Failed to create PR:', error)
-      return null
+      logAction('fetchRepoLabels: Failed to fetch labels', { error: String(error) })
+      return []
     }
   }
 
-  async commentOnIssue(issueNumber: number, comment: string): Promise<boolean> {
-    try {
-      await execFileAsync(
-        'gh',
-        [
-          'issue',
-          'comment',
-          String(issueNumber),
-          '--repo',
-          `${this.owner}/${this.repo}`,
-          '--body',
-          comment
-        ],
-        { cwd: this.repoPath }
-      )
-      return true
-    } catch (error) {
-      console.error('Failed to comment on issue:', error)
-      return false
+  /**
+   * Find a matching label in the repository's label list.
+   * Handles variations like:
+   * - "status::in-progress" vs "In progress" vs "in-progress"
+   * - Case differences
+   * - With or without "status::" prefix
+   */
+  private findMatchingLabel(targetLabel: string, repoLabels: string[]): string | null {
+    // Normalize function: lowercase, remove dashes/spaces/colons, collapse to single form
+    const normalize = (s: string): string => {
+      return s
+        .toLowerCase()
+        .replace(/[-_\s]+/g, '') // Remove dashes, underscores, spaces
+        .replace(/:/g, '') // Remove colons too for matching
     }
-  }
 
-  async getIssue(issueNumber: number): Promise<Card | null> {
-    try {
-      const { stdout } = await execFileAsync(
-        'gh',
-        [
-          'issue',
-          'view',
-          String(issueNumber),
-          '--repo',
-          `${this.owner}/${this.repo}`,
-          '--json',
-          'number,title,body,state,url,labels,assignees,updatedAt,id'
-        ],
-        { cwd: this.repoPath }
-      )
+    const normalizedTarget = normalize(targetLabel)
 
-      const issue: GithubIssue = JSON.parse(stdout)
-      return this.issueToCard(issue)
-    } catch (error) {
-      console.error('Failed to get issue:', error)
-      return null
-    }
-  }
+    // First try exact match
+    const exactMatch = repoLabels.find((l) => l === targetLabel)
+    if (exactMatch) return exactMatch
 
-  async createIssue(
-    title: string,
-    body?: string,
-    labels?: string[]
-  ): Promise<{ number: number; url: string; card: Card } | null> {
-    try {
-      const args = ['issue', 'create', '--repo', `${this.owner}/${this.repo}`, '--title', title]
+    // Then try normalized match (full label)
+    const normalizedMatch = repoLabels.find((l) => normalize(l) === normalizedTarget)
+    if (normalizedMatch) return normalizedMatch
 
-      if (body) {
-        args.push('--body', body)
-      }
+    // Try matching just the status part after "::" against all labels
+    // This handles "In Progress" matching "In progress" or "in-progress"
+    if (targetLabel.includes('::')) {
+      const statusPart = targetLabel.split('::')[1]
+      const normalizedStatus = normalize(statusPart)
 
-      // Add labels if provided
-      if (labels && labels.length > 0) {
-        for (const label of labels) {
-          args.push('--label', label)
+      // First check labels that also have "::" prefix
+      const prefixedMatch = repoLabels.find((l) => {
+        if (l.includes('::')) {
+          const labelStatus = l.split('::')[1]
+          return normalize(labelStatus) === normalizedStatus
         }
-      }
+        return false
+      })
+      if (prefixedMatch) return prefixedMatch
 
-      // gh issue create doesn't support --json, so we parse the output URL
-      const { stdout } = await execFileAsync('gh', args, { cwd: this.repoPath })
-
-      // Output is like: "https://github.com/owner/repo/issues/123\n"
-      const url = stdout.trim()
-      const issueNumberMatch = url.match(/\/issues\/(\d+)$/)
-      if (!issueNumberMatch) {
-        console.error('Failed to parse issue number from URL:', url)
-        return null
-      }
-
-      const issueNumber = parseInt(issueNumberMatch[1], 10)
-
-      // Fetch the full issue details to get all fields
-      const card = await this.getIssue(issueNumber)
-      if (!card) {
-        return null
-      }
-
-      return {
-        number: issueNumber,
-        url,
-        card
-      }
-    } catch (error) {
-      console.error('Failed to create GitHub issue:', error)
-      return null
+      // Then check labels WITHOUT "::" prefix (e.g., "In progress" matches "In Progress")
+      const unprefixedMatch = repoLabels.find((l) => {
+        if (!l.includes('::')) {
+          return normalize(l) === normalizedStatus
+        }
+        return false
+      })
+      if (unprefixedMatch) return unprefixedMatch
     }
+
+    return null
   }
 
+  /**
+   * Convert a GitHub issue to a Card.
+   */
   private issueToCard(issue: GithubIssue, projectStatus?: string): Card {
     const labels = issue.labels.map((l) => l.name)
     const isClosed = issue.state === 'closed'
@@ -1460,6 +1658,9 @@ export class GithubAdapter {
     }
   }
 
+  /**
+   * Convert a GitHub PR to a Card.
+   */
   private prToCard(pr: GithubPR, projectStatus?: string): Card {
     const labels = pr.labels.map((l) => l.name)
     const isDraft = pr.isDraft ?? pr.draft ?? false
@@ -1497,77 +1698,5 @@ export class GithubAdapter {
       last_error: null,
       has_conflicts: 0
     }
-  }
-
-  private deriveStatus(labels: string[], isClosed: boolean): CardStatus {
-    if (isClosed) return 'done'
-    const statusLabels = this.policy.sync?.statusLabels || {
-      draft: 'status::draft',
-      ready: 'status::ready',
-      inProgress: 'status::in-progress',
-      inReview: 'status::in-review',
-      testing: 'status::testing',
-      done: 'status::done'
-    }
-
-    // Normalize strings by lowercasing and removing spaces to handle:
-    // - CamelCase: "InProgress", "InReview"
-    // - Title case with spaces: "In Progress", "In Review"
-    // - Lowercase with spaces: "in progress", "in review"
-    const normalize = (s: string): string => s.toLowerCase().replace(/\s+/g, '')
-
-    const normalized = labels.map(normalize)
-    const matches = (candidates: (string | undefined)[]): boolean =>
-      candidates.filter(Boolean).some((c) => normalized.includes(normalize(String(c))))
-    logAction('deriveStatus', matches)
-
-    if (matches([statusLabels.done, 'done', 'indone'])) return 'done'
-    if (matches([statusLabels.testing, 'testing', 'qa'])) return 'testing'
-    if (matches([statusLabels.inReview, 'inreview', 'in review', 'review'])) return 'in_review'
-    if (matches([statusLabels.inProgress, 'inprogress', 'in progress', 'wip'])) return 'in_progress'
-    if (matches([statusLabels.ready, 'ready'])) return 'ready'
-
-    const readyLabel = this.policy.sync?.readyLabel || 'ready'
-    if (matches([readyLabel])) return 'ready'
-
-    return 'draft'
-  }
-
-  private isReadyEligible(labels: string[], status: CardStatus): boolean {
-    if (status === 'ready') return true
-    const readyLabel = this.policy.sync?.readyLabel || 'ready'
-    return labels.includes(readyLabel)
-  }
-
-  getStatusLabel(status: CardStatus): string {
-    const statusLabels = this.policy.sync?.statusLabels || {}
-    switch (status) {
-      case 'draft':
-        return statusLabels.draft || 'status::draft'
-      case 'ready':
-        return statusLabels.ready || 'status::ready'
-      case 'in_progress':
-        return statusLabels.inProgress || 'status::in-progress'
-      case 'in_review':
-        return statusLabels.inReview || 'status::in-review'
-      case 'testing':
-        return statusLabels.testing || 'status::testing'
-      case 'done':
-        return statusLabels.done || 'status::done'
-      default:
-        return 'status::draft'
-    }
-  }
-
-  getAllStatusLabels(): string[] {
-    const statusLabels = this.policy.sync?.statusLabels || {}
-    return [
-      statusLabels.draft || 'status::draft',
-      statusLabels.ready || 'status::ready',
-      statusLabels.inProgress || 'status::in-progress',
-      statusLabels.inReview || 'status::in-review',
-      statusLabels.testing || 'status::testing',
-      statusLabels.done || 'status::done'
-    ]
   }
 }

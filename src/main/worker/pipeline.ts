@@ -2,8 +2,8 @@ import { execFile, execFileSync, spawn } from 'child_process'
 import { promisify } from 'util'
 import { writeFileSync } from 'fs'
 import { join, resolve } from 'path'
-import { GithubAdapter } from '../adapters/github'
-import { GitlabAdapter } from '../adapters/gitlab'
+import { AdapterRegistry } from '../adapters'
+import type { IRepoAdapter } from '../adapters'
 import {
   getProject,
   getCard,
@@ -125,7 +125,7 @@ export class WorkerPipeline {
   private project: Project | null = null
   private card: Card | null = null
   private policy: PolicyConfig
-  private adapter: GithubAdapter | GitlabAdapter | null = null
+  private adapter: IRepoAdapter | null = null
   private logs: string[] = []
   private leaseInterval: NodeJS.Timeout | null = null
   private worktreeLockInterval: NodeJS.Timeout | null = null
@@ -155,6 +155,12 @@ export class WorkerPipeline {
 
   // Follow-up instructions state
   private followUpInstructions: FollowUpInstruction[] = []
+
+  // Log batching for reduced DB writes
+  private pendingLogCount = 0
+  private logFlushTimer: NodeJS.Timeout | null = null
+  private readonly logBatchSize = 50 // Flush after this many logs
+  private readonly logFlushIntervalMs = 2000 // Flush every 2 seconds
 
   constructor(projectId: string, cardId: string) {
     this.projectId = projectId
@@ -428,14 +434,64 @@ export class WorkerPipeline {
       stream: meta?.stream
     }
 
+    // Broadcast individual logs for real-time UI updates
     broadcastToRenderers('workerLog', payload)
-    this.persistPartialResult(false)
+    
+    // Use batched persistence to reduce DB writes
+    this.pendingLogCount++
+    this.scheduleLogFlush()
+    
+    // Force flush if we've accumulated too many logs
+    if (this.pendingLogCount >= this.logBatchSize) {
+      this.flushLogs()
+    }
+  }
+
+  /**
+   * Schedule a log flush if not already scheduled.
+   */
+  private scheduleLogFlush(): void {
+    if (this.logFlushTimer) return
+    
+    this.logFlushTimer = setTimeout(() => {
+      this.flushLogs()
+    }, this.logFlushIntervalMs)
+  }
+
+  /**
+   * Flush pending logs to DB.
+   */
+  private flushLogs(): void {
+    if (this.logFlushTimer) {
+      clearTimeout(this.logFlushTimer)
+      this.logFlushTimer = null
+    }
+    
+    if (this.pendingLogCount === 0) return
+    
+    this.pendingLogCount = 0
+    this.persistPartialResult(true)
+  }
+
+  /**
+   * Cancel any pending log flush timer.
+   * Call this during cleanup.
+   */
+  private cancelLogFlush(): void {
+    if (this.logFlushTimer) {
+      clearTimeout(this.logFlushTimer)
+      this.logFlushTimer = null
+    }
   }
 
   private persistPartialResult(force: boolean): void {
     if (!this.jobId) return
     const now = Date.now()
-    if (!force && now - this.lastPersistMs < 1000) return
+    
+    // Allow more aggressive throttling when not forced
+    // Previously: 1000ms, Now: 2000ms for non-forced writes
+    const throttleMs = force ? 500 : 2000
+    if (!force && now - this.lastPersistMs < throttleMs) return
     this.lastPersistMs = now
 
     updateJobResult(this.jobId, {
@@ -449,13 +505,20 @@ export class WorkerPipeline {
   }
 
   async initialize(): Promise<boolean> {
-    this.project = getProject(this.projectId)
+    // Phase 1: Load project and card in parallel (both are synchronous DB reads)
+    const [project, card] = await Promise.all([
+      Promise.resolve(getProject(this.projectId)),
+      Promise.resolve(getCard(this.cardId))
+    ])
+
+    this.project = project
+    this.card = card
+
     if (!this.project) {
       this.log('Project not found')
       return false
     }
 
-    this.card = getCard(this.cardId)
     if (!this.card) {
       this.log('Card not found')
       return false
@@ -487,33 +550,55 @@ export class WorkerPipeline {
       }
     }
 
-    // Initialize adapter
-    const provider = this.project.provider_hint || 'auto'
-    if (provider === 'github' || this.project.remote_repo_key.startsWith('github:')) {
-      this.adapter = new GithubAdapter(
-        this.project.local_path,
-        this.project.remote_repo_key,
-        this.policy
-      )
-    } else if (provider === 'gitlab' || this.project.remote_repo_key.startsWith('gitlab:')) {
-      this.adapter = new GitlabAdapter(
-        this.project.local_path,
-        this.project.remote_repo_key,
-        this.policy
+    // Phase 2: Initialize adapter and check features in parallel
+    // These are independent operations that can run concurrently
+    const initPromises: Promise<void>[] = []
+
+    // Initialize adapter (synchronous but wrapped for parallel execution)
+    let adapterError: Error | null = null
+    initPromises.push(
+      Promise.resolve().then(() => {
+        try {
+          this.adapter = AdapterRegistry.create({
+            repoKey: this.project!.remote_repo_key!,
+            providerHint: this.project!.provider_hint,
+            repoPath: this.project!.local_path,
+            policy: this.policy
+          })
+        } catch (error) {
+          adapterError = error instanceof Error ? error : new Error(String(error))
+        }
+      })
+    )
+
+    // Check worktree support in parallel if worktrees are enabled
+    let worktreeSupport = false
+    if (this.policy.worker?.worktree?.enabled) {
+      initPromises.push(
+        Promise.resolve().then(() => {
+          this.worktreeManager = new GitWorktreeManager(this.project!.local_path)
+          worktreeSupport = this.worktreeManager.checkWorktreeSupport()
+        })
       )
     }
 
-    // Initialize task decomposer if enabled
-    if (this.policy.worker?.decomposition?.enabled) {
+    // Wait for all parallel initialization to complete
+    await Promise.all(initPromises)
+
+    // Check for adapter error
+    if (adapterError) {
+      this.log(`Failed to create adapter: ${adapterError.message}`)
+      return false
+    }
+
+    // Initialize task decomposer if enabled (depends on adapter)
+    if (this.policy.worker?.decomposition?.enabled && this.adapter) {
       this.taskDecomposer = new TaskDecomposer(this.policy, this.adapter)
     }
 
-    // Initialize worktree manager if worktrees are enabled
-    if (this.policy.worker?.worktree?.enabled) {
-      this.worktreeManager = new GitWorktreeManager(this.project.local_path)
-
-      // Check git version supports worktrees
-      if (!this.worktreeManager.checkWorktreeSupport()) {
+    // Evaluate worktree mode (depends on worktreeManager being initialized)
+    if (this.policy.worker?.worktree?.enabled && this.worktreeManager) {
+      if (!worktreeSupport) {
         this.log(
           'Git version does not support worktrees (requires 2.17+), falling back to stash mode'
         )
@@ -844,6 +929,10 @@ export class WorkerPipeline {
       if (this.worktreeLockInterval) {
         clearInterval(this.worktreeLockInterval)
       }
+
+      // Flush any pending logs and cancel timer
+      this.flushLogs()
+      this.cancelLogFlush()
 
       // Handle worktree or traditional cleanup
       if (this.useWorktree && this.worktreeRecord) {
@@ -2317,7 +2406,7 @@ Please implement the changes now.`
   ): Promise<{ number: number; url: string; existing?: boolean } | null> {
     if (!this.adapter || !this.card) return null
 
-    const linkedType = this.adapter instanceof GithubAdapter ? 'pr' : 'mr'
+    const linkedType = this.adapter.providerKey === 'github' ? 'pr' : 'mr'
     const existingLink = listCardLinks(this.cardId).find((link) => link.linked_type === linkedType)
     if (existingLink?.linked_url) {
       const url = existingLink.linked_url
@@ -2349,22 +2438,19 @@ _Automated by Patchwork_
 
     const baseBranch = this.baseBranch ?? (await this.getBaseBranch())
 
-    if (this.adapter instanceof GithubAdapter) {
-      const result = await this.adapter.createPR(title, body, branchName, baseBranch)
-      return result ? { ...result, existing: false } : null
-    } else if (this.adapter instanceof GitlabAdapter) {
-      const result = await this.adapter.createMR(title, body, branchName, baseBranch)
-      return result ? { number: result.iid, url: result.url, existing: false } : null
-    }
+    // Get status label to attach to PR on creation
+    const statusLabel = this.adapter.getStatusLabel('in_review')
 
-    return null
+    // Use unified interface - works for both GitHub and GitLab
+    const result = await this.adapter.createPullRequest(title, body, branchName, baseBranch, [statusLabel])
+    return result ? { ...result, existing: false } : null
   }
 
   private async moveToInReview(prUrl: string, created = true): Promise<void> {
     updateCardStatus(this.cardId, 'in_review')
 
     // Create card link
-    const linkedType = this.adapter instanceof GithubAdapter ? 'pr' : 'mr'
+    const linkedType = this.adapter?.providerKey === 'github' ? 'pr' : 'mr'
     ensureCardLink(this.cardId, linkedType, prUrl)
 
     createEvent(this.projectId, 'pr_created', this.cardId, {

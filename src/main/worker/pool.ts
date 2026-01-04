@@ -13,36 +13,64 @@ import {
 import { runWorker } from './pipeline'
 import { logAction } from '../../shared/utils'
 import { broadcastToRenderers } from '../ipc/broadcast'
+import { warmupAIToolsCache, type AIToolAvailability } from './cache'
 import type { PolicyConfig } from '../../shared/types'
 
 export interface PoolConfig {
   maxWorkers: number
   pollIntervalMs: number
+  /** Minimum poll interval when using adaptive polling (default: 1000ms) */
+  minPollIntervalMs?: number
+  /** Maximum poll interval when using adaptive polling (default: 60000ms) */
+  maxPollIntervalMs?: number
+  /** Enable adaptive polling that backs off when idle (default: true) */
+  adaptivePolling?: boolean
 }
 
 /**
  * WorkerPool manages parallel worker execution for a project.
  * It maintains a pool of worker slots and assigns ready cards to available slots.
+ * 
+ * Features adaptive polling that backs off when idle and speeds up when active.
  */
 export class WorkerPool {
   private projectId: string
   private config: PoolConfig
   private activeWorkers: Map<string, Promise<void>> = new Map()
-  private pollInterval: NodeJS.Timeout | null = null
+  private pollTimeout: NodeJS.Timeout | null = null
   private isShuttingDown = false
   private isPolling = false
+  
+  // Adaptive polling state
+  private currentPollInterval: number
+  private readonly minPollInterval: number
+  private readonly maxPollInterval: number
+  private readonly adaptivePolling: boolean
+  private consecutiveEmptyPolls = 0
+  
+  // Cached AI tool availability (detected at startup)
+  private aiTools: AIToolAvailability | null = null
 
   constructor(projectId: string, config: PoolConfig) {
     this.projectId = projectId
     this.config = config
+    
+    // Initialize adaptive polling settings
+    this.adaptivePolling = config.adaptivePolling !== false // Default true
+    this.minPollInterval = config.minPollIntervalMs ?? 1000 // 1 second
+    this.maxPollInterval = config.maxPollIntervalMs ?? 60_000 // 60 seconds
+    this.currentPollInterval = this.adaptivePolling 
+      ? this.minPollInterval 
+      : config.pollIntervalMs
   }
 
   /**
    * Start the worker pool.
    * Initializes worker slots and begins polling for ready cards.
+   * Uses adaptive polling that backs off when idle.
    */
   async start(): Promise<void> {
-    if (this.pollInterval) {
+    if (this.pollTimeout) {
       logAction('workerPool:alreadyRunning', { projectId: this.projectId })
       return
     }
@@ -50,15 +78,83 @@ export class WorkerPool {
     // Initialize worker slots in DB
     initializeWorkerSlots(this.projectId, this.config.maxWorkers)
 
+    // Warm up AI tools cache at startup for faster worker initialization
+    try {
+      this.aiTools = await warmupAIToolsCache()
+      logAction('workerPool:aiToolsDetected', {
+        projectId: this.projectId,
+        claude: this.aiTools.claude,
+        codex: this.aiTools.codex
+      })
+    } catch (error) {
+      logAction('workerPool:aiToolsDetectionFailed', {
+        projectId: this.projectId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+
     logAction('workerPool:started', {
       projectId: this.projectId,
       maxWorkers: this.config.maxWorkers,
-      pollIntervalMs: this.config.pollIntervalMs
+      pollIntervalMs: this.config.pollIntervalMs,
+      adaptivePolling: this.adaptivePolling,
+      minPollInterval: this.minPollInterval,
+      maxPollInterval: this.maxPollInterval
     })
 
-    // Run immediately once, then set up interval
+    // Run immediately once, then schedule next poll
     this.poll()
-    this.pollInterval = setInterval(() => this.poll(), this.config.pollIntervalMs)
+  }
+
+  /**
+   * Schedule the next poll with adaptive interval.
+   */
+  private scheduleNextPoll(): void {
+    if (this.isShuttingDown) return
+    
+    this.pollTimeout = setTimeout(() => this.poll(), this.currentPollInterval)
+  }
+
+  /**
+   * Adjust polling interval based on activity.
+   * Speeds up when cards are found, slows down when idle.
+   */
+  private adjustPollInterval(foundCards: boolean): void {
+    if (!this.adaptivePolling) return
+
+    if (foundCards) {
+      // Reset to fast polling when we find work
+      this.consecutiveEmptyPolls = 0
+      this.currentPollInterval = this.minPollInterval
+    } else {
+      // Exponential backoff when idle
+      this.consecutiveEmptyPolls++
+      // Backoff multiplier: 1.5x per empty poll, capped at max
+      const backoffMultiplier = Math.pow(1.5, this.consecutiveEmptyPolls)
+      this.currentPollInterval = Math.min(
+        Math.floor(this.minPollInterval * backoffMultiplier),
+        this.maxPollInterval
+      )
+    }
+  }
+
+  /**
+   * Wake up the pool immediately for fast polling.
+   * Call this when external events indicate new cards may be available.
+   */
+  wakeUp(): void {
+    if (this.isShuttingDown || !this.pollTimeout) return
+    
+    // Reset to fast polling
+    this.consecutiveEmptyPolls = 0
+    this.currentPollInterval = this.minPollInterval
+    
+    // Clear existing timeout and poll immediately
+    clearTimeout(this.pollTimeout)
+    this.pollTimeout = null
+    
+    logAction('workerPool:wakeUp', { projectId: this.projectId })
+    this.poll()
   }
 
   /**
@@ -68,9 +164,9 @@ export class WorkerPool {
   async stop(): Promise<void> {
     this.isShuttingDown = true
 
-    if (this.pollInterval) {
-      clearInterval(this.pollInterval)
-      this.pollInterval = null
+    if (this.pollTimeout) {
+      clearTimeout(this.pollTimeout)
+      this.pollTimeout = null
     }
 
     // Wait for all active workers to complete
@@ -93,22 +189,43 @@ export class WorkerPool {
     activeWorkers: number
     maxWorkers: number
     idleSlots: number
+    currentPollInterval: number
+    consecutiveEmptyPolls: number
+    aiTools: AIToolAvailability | null
   } {
     return {
-      running: this.pollInterval !== null,
+      running: this.pollTimeout !== null || this.isPolling,
       activeWorkers: this.activeWorkers.size,
       maxWorkers: this.config.maxWorkers,
-      idleSlots: getIdleSlotCount(this.projectId)
+      idleSlots: getIdleSlotCount(this.projectId),
+      currentPollInterval: this.currentPollInterval,
+      consecutiveEmptyPolls: this.consecutiveEmptyPolls,
+      aiTools: this.aiTools
     }
   }
 
   /**
+   * Get cached AI tool availability.
+   */
+  getAITools(): AIToolAvailability | null {
+    return this.aiTools
+  }
+
+  /**
    * Poll for ready cards and start workers.
+   * Uses adaptive polling to reduce overhead when idle.
    */
   private async poll(): Promise<void> {
-    if (this.isShuttingDown || this.isPolling) return
+    if (this.isShuttingDown || this.isPolling) {
+      // If already polling, schedule next poll to avoid missing cycles
+      if (!this.isShuttingDown && !this.pollTimeout) {
+        this.scheduleNextPoll()
+      }
+      return
+    }
 
     this.isPolling = true
+    let foundCards = false
 
     try {
       const project = getProject(this.projectId)
@@ -132,10 +249,13 @@ export class WorkerPool {
         return // No cards to process
       }
 
+      foundCards = true
+
       logAction('workerPool:foundCards', {
         projectId: this.projectId,
         cardCount: readyCards.length,
-        idleSlots: idleSlots.length
+        idleSlots: idleSlots.length,
+        pollInterval: this.currentPollInterval
       })
 
       // Start workers for available cards
@@ -158,6 +278,12 @@ export class WorkerPool {
       })
     } finally {
       this.isPolling = false
+      
+      // Adjust polling interval based on whether we found cards
+      this.adjustPollInterval(foundCards)
+      
+      // Schedule next poll with (potentially adjusted) interval
+      this.scheduleNextPoll()
     }
   }
 
@@ -282,6 +408,27 @@ export async function stopAllWorkerPools(): Promise<void> {
  */
 export function isWorkerPoolRunning(projectId: string): boolean {
   return activePools.has(projectId)
+}
+
+/**
+ * Wake up a worker pool for immediate polling.
+ * Call this when new cards become available.
+ */
+export function wakeUpWorkerPool(projectId: string): void {
+  const pool = activePools.get(projectId)
+  if (pool) {
+    pool.wakeUp()
+  }
+}
+
+/**
+ * Wake up all worker pools for immediate polling.
+ * Call this when cards may have become available across projects.
+ */
+export function wakeUpAllWorkerPools(): void {
+  for (const pool of activePools.values()) {
+    pool.wakeUp()
+  }
 }
 
 /**

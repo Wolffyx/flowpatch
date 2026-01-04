@@ -5,10 +5,13 @@ import {
   stopAllWorkerPools,
   isWorkerPoolRunning,
   getWorkerPoolStatus,
-  getPoolConfigFromPolicy
+  getPoolConfigFromPolicy,
+  wakeUpWorkerPool,
+  wakeUpAllWorkerPools
 } from './pool'
 import { logAction } from '../../shared/utils'
 import type { PolicyConfig } from '../../shared/types'
+import type { AIToolAvailability } from './cache'
 
 /**
  * Starts the worker loop for a project.
@@ -118,6 +121,9 @@ export function getWorkerLoopStatus(): {
   activeWorkers?: number
   maxWorkers?: number
   idleSlots?: number
+  currentPollInterval?: number
+  consecutiveEmptyPolls?: number
+  aiTools?: AIToolAvailability | null
 }[] {
   const projects = listProjects()
   return projects.map((p) => {
@@ -127,7 +133,25 @@ export function getWorkerLoopStatus(): {
       running: poolStatus?.running ?? false,
       activeWorkers: poolStatus?.activeWorkers,
       maxWorkers: poolStatus?.maxWorkers,
-      idleSlots: poolStatus?.idleSlots
+      idleSlots: poolStatus?.idleSlots,
+      currentPollInterval: poolStatus?.currentPollInterval,
+      consecutiveEmptyPolls: poolStatus?.consecutiveEmptyPolls,
+      aiTools: poolStatus?.aiTools
     }
   })
+}
+
+/**
+ * Wake up the worker loop for a project for immediate polling.
+ * Call this when a card status changes to 'ready'.
+ */
+export function wakeUpWorkerLoop(projectId: string): void {
+  wakeUpWorkerPool(projectId)
+}
+
+/**
+ * Wake up all worker loops for immediate polling.
+ */
+export function wakeUpAllWorkerLoops(): void {
+  wakeUpAllWorkerPools()
 }

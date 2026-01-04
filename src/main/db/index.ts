@@ -171,6 +171,7 @@ export {
   getUsageRecordsByJob,
   getUsageStatsByTool,
   getUsageSummary,
+  getHourlyUsage,
   getDailyUsage,
   getMonthlyUsage,
   getTotalUsage,
@@ -178,6 +179,7 @@ export {
   getAllToolLimits,
   setToolLimits,
   getUsageWithLimits,
+  getResetTimes,
   deleteOldUsageRecords
 } from './usage'
 export type { UsageRecordCreate } from './usage'

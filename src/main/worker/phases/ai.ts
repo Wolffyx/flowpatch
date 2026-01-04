@@ -4,33 +4,124 @@
  * Handles AI tool execution (Claude Code or Codex).
  */
 
-import { execFile } from 'child_process'
-import { promisify } from 'util'
 import { writeFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { runProcessStreaming, WorkerCanceledError } from '../process-runner'
 import { getWorkingDir, type PipelineContext, type LogFn } from './types'
 import { buildContextBundle, buildPromptContext } from '../../services/patchwork-context'
 import { ensureRunDir } from '../../services/patchwork-runs'
-import { updateWorkerProgress } from '../../db'
-import type { ThinkingMode } from '../../../shared/types'
+import { updateWorkerProgress, createUsageRecord, getHourlyUsage, getDailyUsage, getMonthlyUsage, getToolLimits } from '../../db'
+import { hasCommand, getAvailableAITools } from '../cache'
+import type { ThinkingMode, AIToolType } from '../../../shared/types'
 
-const execFileAsync = promisify(execFile)
+// ============================================================================
+// Usage Tracking
+// ============================================================================
+
+/** Pricing per 1M tokens (approximate, may vary by model) */
+const PRICING = {
+  claude: { input: 3.0, output: 15.0 }, // Claude Sonnet 4 pricing
+  codex: { input: 2.5, output: 10.0 } // Codex/GPT-4 approximate pricing
+}
 
 /**
- * Check if a command is available on the system.
+ * Estimate token count from text (rough approximation: ~4 chars per token).
+ */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4)
+}
+
+/**
+ * Calculate estimated cost in USD.
+ */
+function calculateCost(
+  toolType: 'claude' | 'codex',
+  inputTokens: number,
+  outputTokens: number
+): number {
+  const pricing = PRICING[toolType]
+  const inputCost = (inputTokens / 1_000_000) * pricing.input
+  const outputCost = (outputTokens / 1_000_000) * pricing.output
+  return inputCost + outputCost
+}
+
+/**
+ * Check if usage limits are exceeded for a tool.
+ * Checks in order: hourly -> daily -> monthly (most restrictive first)
+ */
+export function checkLimitsExceeded(
+  toolType: AIToolType
+): { exceeded: boolean; reason?: string; fallbackAllowed?: boolean } {
+  const limits = getToolLimits(toolType)
+  if (!limits) return { exceeded: false }
+
+  const hourly = getHourlyUsage(toolType)
+  const daily = getDailyUsage(toolType)
+  const monthly = getMonthlyUsage(toolType)
+
+  // Check hourly token limit (most restrictive first)
+  if (limits.hourly_token_limit && hourly.tokens >= limits.hourly_token_limit) {
+    return {
+      exceeded: true,
+      reason: `Hourly token limit reached (${hourly.tokens.toLocaleString()}/${limits.hourly_token_limit.toLocaleString()})`,
+      fallbackAllowed: true
+    }
+  }
+
+  // Check hourly cost limit
+  if (limits.hourly_cost_limit_usd && hourly.cost >= limits.hourly_cost_limit_usd) {
+    return {
+      exceeded: true,
+      reason: `Hourly cost limit reached ($${hourly.cost.toFixed(2)}/$${limits.hourly_cost_limit_usd.toFixed(2)})`,
+      fallbackAllowed: true
+    }
+  }
+
+  // Check daily token limit
+  if (limits.daily_token_limit && daily.tokens >= limits.daily_token_limit) {
+    return {
+      exceeded: true,
+      reason: `Daily token limit reached (${daily.tokens.toLocaleString()}/${limits.daily_token_limit.toLocaleString()})`,
+      fallbackAllowed: true
+    }
+  }
+
+  // Check daily cost limit
+  if (limits.daily_cost_limit_usd && daily.cost >= limits.daily_cost_limit_usd) {
+    return {
+      exceeded: true,
+      reason: `Daily cost limit reached ($${daily.cost.toFixed(2)}/$${limits.daily_cost_limit_usd.toFixed(2)})`,
+      fallbackAllowed: true
+    }
+  }
+
+  // Check monthly token limit
+  if (limits.monthly_token_limit && monthly.tokens >= limits.monthly_token_limit) {
+    return {
+      exceeded: true,
+      reason: `Monthly token limit reached (${monthly.tokens.toLocaleString()}/${limits.monthly_token_limit.toLocaleString()})`,
+      fallbackAllowed: true
+    }
+  }
+
+  // Check monthly cost limit
+  if (limits.monthly_cost_limit_usd && monthly.cost >= limits.monthly_cost_limit_usd) {
+    return {
+      exceeded: true,
+      reason: `Monthly cost limit reached ($${monthly.cost.toFixed(2)}/$${limits.monthly_cost_limit_usd.toFixed(2)})`,
+      fallbackAllowed: true
+    }
+  }
+
+  return { exceeded: false }
+}
+
+/**
+ * Check if a command is available on the system (cached).
+ * @deprecated Use hasCommand from cache.ts for better performance.
  */
 export async function checkCommand(cmd: string): Promise<boolean> {
-  try {
-    if (process.platform === 'win32') {
-      await execFileAsync('where', [cmd])
-    } else {
-      await execFileAsync('which', [cmd])
-    }
-    return true
-  } catch {
-    return false
-  }
+  return hasCommand(cmd)
 }
 
 /**
@@ -162,10 +253,22 @@ export interface ClaudeCodeOptions {
   thinkingBudget?: number
 }
 
+/** Result from AI tool execution with usage metrics */
+export interface AIExecutionResult {
+  /** Estimated input tokens */
+  inputTokens: number
+  /** Estimated output tokens */
+  outputTokens: number
+  /** Execution duration in milliseconds */
+  durationMs: number
+  /** Accumulated output length for estimation */
+  outputLength: number
+}
+
 /**
  * Run Claude Code CLI.
  */
-export async function runClaudeCode(options: ClaudeCodeOptions): Promise<void> {
+export async function runClaudeCode(options: ClaudeCodeOptions): Promise<AIExecutionResult> {
   const { prompt, timeoutMs, cwd, log, isCanceled, thinkingMode, thinkingBudget } = options
 
   // Build CLI arguments
@@ -184,6 +287,9 @@ export async function runClaudeCode(options: ClaudeCodeOptions): Promise<void> {
   const promptPath = join(cwd, '.patchwork-prompt.md')
   writeFileSync(promptPath, prompt)
 
+  const startTime = Date.now()
+  let outputLength = 0
+
   try {
     await runProcessStreaming({
       command: 'claude',
@@ -195,9 +301,24 @@ export async function runClaudeCode(options: ClaudeCodeOptions): Promise<void> {
         ...process.env,
         CLAUDE_CODE_ENTRYPOINT: 'cli'
       },
-      onLog: (message, meta) => log(message, meta),
+      onLog: (message, meta) => {
+        // Track output length for token estimation
+        outputLength += message.length
+        log(message, meta)
+      },
       isCanceled
     })
+
+    const durationMs = Date.now() - startTime
+    const inputTokens = estimateTokens(prompt)
+    const outputTokens = estimateTokens(outputLength.toString()) || Math.ceil(outputLength / 4)
+
+    return {
+      inputTokens,
+      outputTokens,
+      durationMs,
+      outputLength
+    }
   } finally {
     try {
       unlinkSync(promptPath)
@@ -216,8 +337,11 @@ export async function runCodex(
   cwd: string,
   log: LogFn,
   isCanceled: () => boolean
-): Promise<void> {
+): Promise<AIExecutionResult> {
   log('Invoking Codex CLI...')
+
+  const startTime = Date.now()
+  let outputLength = 0
 
   try {
     await runProcessStreaming({
@@ -227,10 +351,60 @@ export async function runCodex(
       timeoutMs,
       source: 'codex',
       stdin: prompt,
-      onLog: (message, meta) => log(message, meta),
+      onLog: (message, meta) => {
+        outputLength += message.length
+        log(message, meta)
+      },
       isCanceled
     })
+
+    const durationMs = Date.now() - startTime
+    const inputTokens = estimateTokens(prompt)
+    const outputTokens = Math.ceil(outputLength / 4)
+
+    return {
+      inputTokens,
+      outputTokens,
+      durationMs,
+      outputLength
+    }
   } finally {
+    // Cleanup if needed
+  }
+}
+
+/**
+ * Record usage after AI execution.
+ */
+function recordAIUsage(
+  ctx: PipelineContext,
+  tool: 'claude' | 'codex',
+  result: AIExecutionResult,
+  log: LogFn
+): void {
+  try {
+    const totalTokens = result.inputTokens + result.outputTokens
+    const costUsd = calculateCost(tool, result.inputTokens, result.outputTokens)
+
+    createUsageRecord({
+      projectId: ctx.project!.id,
+      jobId: ctx.jobId,
+      cardId: ctx.card?.id,
+      toolType: tool,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      totalTokens,
+      costUsd,
+      durationMs: result.durationMs,
+      model: tool === 'claude' ? 'claude-sonnet-4' : 'codex'
+    })
+
+    log(
+      `📊 Usage recorded: ${totalTokens.toLocaleString()} tokens (~$${costUsd.toFixed(4)}) in ${Math.round(result.durationMs / 1000)}s`
+    )
+  } catch (err) {
+    // Don't fail the pipeline if usage recording fails
+    log(`⚠️ Failed to record usage: ${err}`)
   }
 }
 
@@ -249,9 +423,10 @@ export async function runAI(
   const maxMinutes = ctx.policy.worker?.maxMinutes || 25
   const timeoutMs = maxMinutes * 60 * 1000
 
-  // Detect available tools
-  const hasClaude = await checkCommand('claude')
-  const hasCodex = await checkCommand('codex')
+  // Detect available tools (cached for efficiency)
+  const aiTools = await getAvailableAITools()
+  const hasClaude = aiTools.claude
+  const hasCodex = aiTools.codex
 
   let tool: 'claude' | 'codex' | null = null
   if (toolPreference === 'claude' && hasClaude) tool = 'claude'
@@ -290,6 +465,52 @@ Forbidden paths: ${(ctx.policy.worker?.forbidPaths || []).join(', ')}
     return true // Return true to continue with stub PR
   }
 
+  // Check usage limits before running
+  const limitCheck = checkLimitsExceeded(tool)
+  if (limitCheck.exceeded) {
+    log(`⚠️ ${tool} limit exceeded: ${limitCheck.reason}`)
+
+    // Try fallback tool if allowed
+    const fallbackTool = tool === 'claude' ? 'codex' : 'claude'
+    const hasFallback = fallbackTool === 'claude' ? hasClaude : hasCodex
+
+    if (limitCheck.fallbackAllowed && hasFallback) {
+      const fallbackCheck = checkLimitsExceeded(fallbackTool)
+      if (!fallbackCheck.exceeded) {
+        log(`↪️ Falling back to ${fallbackTool}...`)
+        tool = fallbackTool
+      } else {
+        log(`⚠️ ${fallbackTool} also exceeded: ${fallbackCheck.reason}`)
+        log('❌ All AI tools have exceeded their limits. Cannot proceed.')
+        // Create a stub file explaining the limit
+        const planPath = join(workingDir, 'IMPLEMENTATION_PLAN.md')
+        const fullPlan = `# Implementation Plan (Usage limits exceeded)
+
+## Task
+${ctx.card.title}
+
+## Description
+${ctx.card.body || 'No description'}
+
+## Plan
+${plan}
+
+## Note
+This PR was created without AI implementation because usage limits have been exceeded.
+- ${limitCheck.reason}
+- ${fallbackCheck.reason}
+
+Please implement the changes manually or wait for limits to reset.
+`
+        writeFileSync(planPath, fullPlan)
+        return false
+      }
+    } else if (!hasFallback) {
+      log('❌ No fallback tool available. Cannot proceed.')
+      return false
+    }
+  }
+
   try {
     log(`Running ${tool} with ${maxMinutes} minute timeout`)
 
@@ -302,9 +523,12 @@ Forbidden paths: ${(ctx.policy.worker?.forbidPaths || []).join(', ')}
     const thinkingMode = thinkingEnabled ? thinkingConfig?.mode : undefined
     const thinkingBudget = thinkingConfig?.budgetTokens
 
+    let executionResult: AIExecutionResult | null = null
+    let usedTool: 'claude' | 'codex' = tool
+
     if (tool === 'claude') {
       try {
-        await runClaudeCode({
+        executionResult = await runClaudeCode({
           prompt,
           timeoutMs,
           cwd: workingDir,
@@ -316,13 +540,19 @@ Forbidden paths: ${(ctx.policy.worker?.forbidPaths || []).join(', ')}
       } catch (error) {
         if (hasCodex && isClaudeRetryableLimitError(error)) {
           log('Claude failed due to rate/usage limit; falling back to Codex...')
-          await runCodex(prompt, timeoutMs, workingDir, log, isCanceled)
+          executionResult = await runCodex(prompt, timeoutMs, workingDir, log, isCanceled)
+          usedTool = 'codex'
         } else {
           throw error
         }
       }
     } else if (tool === 'codex') {
-      await runCodex(prompt, timeoutMs, workingDir, log, isCanceled)
+      executionResult = await runCodex(prompt, timeoutMs, workingDir, log, isCanceled)
+    }
+
+    // Record usage after successful execution
+    if (executionResult) {
+      recordAIUsage(ctx, usedTool, executionResult, log)
     }
 
     log('AI implementation completed')

@@ -314,8 +314,10 @@ export interface UsageSummary {
 /** Tool limits configuration */
 export interface AIToolLimits {
   tool_type: AIToolType
+  hourly_token_limit: number | null
   daily_token_limit: number | null
   monthly_token_limit: number | null
+  hourly_cost_limit_usd: number | null
   daily_cost_limit_usd: number | null
   monthly_cost_limit_usd: number | null
 }
@@ -323,10 +325,28 @@ export interface AIToolLimits {
 /** Usage with limit info for display */
 export interface UsageWithLimits extends UsageStats {
   limits: AIToolLimits | null
+  hourly_tokens_used: number
   daily_tokens_used: number
   monthly_tokens_used: number
+  hourly_cost_used: number
   daily_cost_used: number
   monthly_cost_used: number
+}
+
+/** Reset time information for usage limits */
+export interface UsageResetTimes {
+  /** Seconds until hourly limit resets */
+  hourly_resets_in: number
+  /** Seconds until daily limit resets */
+  daily_resets_in: number
+  /** Seconds until monthly limit resets */
+  monthly_resets_in: number
+}
+
+/** Response from getUsageWithLimits including reset times */
+export interface UsageWithLimitsResponse {
+  usageWithLimits: UsageWithLimits[]
+  resetTimes: UsageResetTimes
 }
 
 // ============================================================================
@@ -1148,12 +1168,12 @@ export const DEFAULT_POLICY: PolicyConfig = {
     pollingFallbackMinutes: 3,
     readyLabel: 'ready',
     statusLabels: {
-      draft: 'status::draft',
-      ready: 'status::ready',
-      inProgress: 'status::in-progress',
-      inReview: 'status::in-review',
-      testing: 'status::testing',
-      done: 'status::done'
+      draft: 'Draft',
+      ready: 'Ready',
+      inProgress: 'In Progress',
+      inReview: 'In Review',
+      testing: 'Testing',
+      done: 'Done'
     },
     githubProjectsV2: {
       enabled: false
@@ -1279,6 +1299,133 @@ export const DEFAULT_POLICY: PolicyConfig = {
       fixToolPriority: 'claude-first'
     }
   }
+}
+
+// ============================================================================
+// Security Types
+// ============================================================================
+
+/**
+ * Security context for IPC requests.
+ * Tracks the origin and trust level of a request.
+ */
+export interface SecurityContext {
+  /** Unique identifier for the WebContents that sent the request */
+  webContentsId: number
+  /** Frame URL that initiated the request */
+  frameUrl: string
+  /** Whether the request came from a trusted source (main window or project tabs) */
+  isTrusted: boolean
+  /** Timestamp when the request was made */
+  timestamp: number
+  /** Request nonce for replay protection */
+  nonce: string
+}
+
+/**
+ * Signed IPC request wrapper.
+ * All security-sensitive IPC calls should be wrapped in this structure.
+ */
+export interface SignedRequest<T = unknown> {
+  /** The actual payload of the request */
+  payload: T
+  /** HMAC signature of the payload + nonce + timestamp */
+  signature: string
+  /** Unique nonce to prevent replay attacks */
+  nonce: string
+  /** Timestamp when the request was signed */
+  timestamp: number
+  /** WebContents ID of the sender (verified by main process) */
+  senderId?: number
+}
+
+/**
+ * Result of security verification.
+ */
+export interface SecurityVerificationResult {
+  /** Whether the request passed all security checks */
+  valid: boolean
+  /** Error message if validation failed */
+  error?: string
+  /** The verified security context if valid */
+  context?: SecurityContext
+}
+
+/**
+ * Command execution request that has passed security checks.
+ * Only commands wrapped in this type should be executed.
+ */
+export interface SecureCommandRequest {
+  /** The command to execute */
+  command: string
+  /** Command arguments */
+  args: string[]
+  /** Working directory */
+  cwd: string
+  /** Security context proving this request is authorized */
+  securityContext: SecurityContext
+  /** Whether this command was explicitly allowed by policy */
+  policyApproved: boolean
+}
+
+/**
+ * Security audit log entry.
+ * Used for tracking security-related events.
+ */
+export interface SecurityAuditEntry {
+  /** Event type */
+  type: 'ipc_request' | 'command_execution' | 'security_violation' | 'origin_rejected'
+  /** Timestamp of the event */
+  timestamp: string
+  /** WebContents ID involved */
+  webContentsId?: number
+  /** Details about the event */
+  details: Record<string, unknown>
+  /** Whether the request was allowed */
+  allowed: boolean
+  /** Reason for rejection if not allowed */
+  rejectionReason?: string
+}
+
+/**
+ * Security configuration for the application.
+ */
+export interface SecurityConfig {
+  /** Whether to enforce IPC origin verification */
+  enforceOriginCheck: boolean
+  /** Whether to require request signatures */
+  requireSignatures: boolean
+  /** Maximum age of a signed request in milliseconds (for replay protection) */
+  maxRequestAgeMs: number
+  /** Whether to log security audit events */
+  enableAuditLog: boolean
+  /** List of IPC channels that require security verification */
+  securedChannels: string[]
+}
+
+/**
+ * Execution origin types for command execution.
+ * Used to distinguish between trusted UI actions and potentially malicious sources.
+ */
+export type ExecutionOrigin = 
+  | 'user_action'      // Direct user interaction (button click, etc.)
+  | 'worker_pipeline'  // Internal worker pipeline execution
+  | 'ipc_request'      // IPC request from renderer
+  | 'ai_output'        // Command suggested by AI (potentially untrusted)
+  | 'external'         // External source (should be blocked)
+
+/**
+ * Command guard configuration for a project.
+ */
+export interface CommandGuardConfig {
+  /** Allowed commands (from policy) */
+  allowedCommands: string[]
+  /** Forbidden paths that commands cannot modify */
+  forbiddenPaths: string[]
+  /** Whether to allow network access */
+  allowNetwork: boolean
+  /** Maximum execution time in minutes */
+  maxMinutes: number
 }
 
 // Re-export IPC types for convenient importing

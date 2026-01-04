@@ -71,7 +71,18 @@ export interface ProjectAPI {
 
   // Usage Tracking
   getTotalUsage: () => Promise<{ usage: { tokens: number; cost: number } }>
-  getUsageWithLimits: () => Promise<{ usageWithLimits: UsageWithLimits[] }>
+  getUsageWithLimits: () => Promise<{ usageWithLimits: UsageWithLimits[]; resetTimes: UsageResetTimes }>
+  setToolLimits: (
+    toolType: AIToolType,
+    limits: {
+      hourlyTokenLimit?: number | null
+      dailyTokenLimit?: number | null
+      monthlyTokenLimit?: number | null
+      hourlyCostLimitUsd?: number | null
+      dailyCostLimitUsd?: number | null
+      monthlyCostLimitUsd?: number | null
+    }
+  ) => Promise<{ success: boolean; limits: AIToolLimits; error?: string }>
 
   // Diff Viewer
   getDiffFiles: (worktreeId: string) => Promise<{ files: DiffFile[]; error?: string }>
@@ -316,8 +327,10 @@ type AIToolType = 'claude' | 'codex' | 'other'
 
 interface AIToolLimits {
   tool_type: AIToolType
+  hourly_token_limit: number | null
   daily_token_limit: number | null
   monthly_token_limit: number | null
+  hourly_cost_limit_usd: number | null
   daily_cost_limit_usd: number | null
   monthly_cost_limit_usd: number | null
 }
@@ -331,10 +344,18 @@ interface UsageWithLimits {
   invocation_count: number
   avg_duration_ms: number
   limits: AIToolLimits | null
+  hourly_tokens_used: number
   daily_tokens_used: number
   monthly_tokens_used: number
+  hourly_cost_used: number
   daily_cost_used: number
   monthly_cost_used: number
+}
+
+interface UsageResetTimes {
+  hourly_resets_in: number
+  daily_resets_in: number
+  monthly_resets_in: number
 }
 
 // Diff viewer types
@@ -741,6 +762,28 @@ const projectAPI: ProjectAPI = {
 
   getUsageWithLimits: () => {
     return ipcRenderer.invoke('usage:getWithLimits')
+  },
+
+  setToolLimits: (
+    toolType: AIToolType,
+    limits: {
+      hourlyTokenLimit?: number | null
+      dailyTokenLimit?: number | null
+      monthlyTokenLimit?: number | null
+      hourlyCostLimitUsd?: number | null
+      dailyCostLimitUsd?: number | null
+      monthlyCostLimitUsd?: number | null
+    }
+  ) => {
+    return ipcRenderer.invoke('usage:setToolLimits', {
+      toolType,
+      hourlyTokenLimit: limits.hourlyTokenLimit,
+      dailyTokenLimit: limits.dailyTokenLimit,
+      monthlyTokenLimit: limits.monthlyTokenLimit,
+      hourlyCostLimitUsd: limits.hourlyCostLimitUsd,
+      dailyCostLimitUsd: limits.dailyCostLimitUsd,
+      monthlyCostLimitUsd: limits.monthlyCostLimitUsd
+    })
   },
 
   // -------------------------------------------------------------------------
