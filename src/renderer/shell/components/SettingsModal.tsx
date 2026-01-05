@@ -51,7 +51,8 @@ import {
   Copy,
   Star,
   Volume2,
-  VolumeX
+  VolumeX,
+  RefreshCw
 } from 'lucide-react'
 import { ShortcutsEditor } from '../../src/components/ShortcutsEditor'
 import type { ShortcutBinding } from '@shared/shortcuts'
@@ -198,6 +199,28 @@ function readNotificationsSettings(project: Project | null): NotificationsSettin
   }
 }
 
+interface SyncSettings {
+  pollInterval: number
+  autoSyncOnAction: boolean
+}
+
+function readSyncSettings(project: Project | null): SyncSettings {
+  const defaults: SyncSettings = {
+    pollInterval: 180000,
+    autoSyncOnAction: true
+  }
+  if (!project?.policy_json) return defaults
+  try {
+    const policy = JSON.parse(project.policy_json) as PolicyConfig
+    return {
+      pollInterval: policy?.sync?.pollInterval ?? defaults.pollInterval,
+      autoSyncOnAction: policy?.sync?.autoSyncOnAction ?? defaults.autoSyncOnAction
+    }
+  } catch {
+    return defaults
+  }
+}
+
 interface SettingsModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -317,6 +340,14 @@ export function SettingsModal({
   )
   const [soundOnApproval, setSoundOnApproval] = useState(
     () => readNotificationsSettings(project).soundOnApproval
+  )
+
+  // Sync settings state
+  const [syncPollInterval, setSyncPollInterval] = useState(
+    () => Math.round(readSyncSettings(project).pollInterval / 60000)
+  )
+  const [autoSyncOnAction, setAutoSyncOnAction] = useState(
+    () => readSyncSettings(project).autoSyncOnAction
   )
 
   // Usage Limits state
@@ -995,6 +1026,46 @@ export function SettingsModal({
     [updateNotificationSetting]
   )
 
+  // Sync settings handlers
+  const updateSyncSetting = useCallback(
+    async (update: { pollInterval?: number; autoSyncOnAction?: boolean }): Promise<void> => {
+      if (!project) return
+      try {
+        await window.electron.ipcRenderer.invoke('updateSyncSettings', {
+          projectId: project.id,
+          ...update
+        })
+        toast.success('Sync settings updated')
+      } catch (err) {
+        // Rollback state on error
+        const sync = readSyncSettings(project)
+        setSyncPollInterval(Math.round(sync.pollInterval / 60000))
+        setAutoSyncOnAction(sync.autoSyncOnAction)
+        toast.error('Failed to update sync settings', {
+          description: err instanceof Error ? err.message : 'Unknown error'
+        })
+      }
+    },
+    [project]
+  )
+
+  const handleSyncPollIntervalChange = useCallback(
+    (minutes: number): void => {
+      const clamped = Math.max(1, Math.min(60, minutes))
+      setSyncPollInterval(clamped)
+      updateSyncSetting({ pollInterval: clamped * 60000 })
+    },
+    [updateSyncSetting]
+  )
+
+  const handleAutoSyncOnActionChange = useCallback(
+    (enabled: boolean): void => {
+      setAutoSyncOnAction(enabled)
+      updateSyncSetting({ autoSyncOnAction: enabled })
+    },
+    [updateSyncSetting]
+  )
+
   // AI Profiles handlers
   const loadAIProfiles = useCallback(async (): Promise<void> => {
     if (!project?.id) return
@@ -1026,7 +1097,7 @@ export function SettingsModal({
     if (!project) return
     setLimitsLoading(true)
     try {
-      const result = await window.projectAPI.getUsageWithLimits()
+      const result = await window.electron.ipcRenderer.invoke('usage:getWithLimits')
       const usageData = result.usageWithLimits
 
       // Find claude and codex limits
@@ -1071,7 +1142,8 @@ export function SettingsModal({
     async (toolType: 'claude' | 'codex', limits: ToolLimitsState): Promise<void> => {
       setSavingLimits(true)
       try {
-        await window.projectAPI.setToolLimits(toolType, {
+        await window.electron.ipcRenderer.invoke('usage:setToolLimits', {
+          toolType,
           hourlyTokenLimit: limits.hourlyTokenLimit ? parseInt(limits.hourlyTokenLimit, 10) : null,
           dailyTokenLimit: limits.dailyTokenLimit ? parseInt(limits.dailyTokenLimit, 10) : null,
           monthlyTokenLimit: limits.monthlyTokenLimit ? parseInt(limits.monthlyTokenLimit, 10) : null,
@@ -1754,6 +1826,44 @@ export function SettingsModal({
                       </div>
                     </>
                   )}
+                </div>
+
+                {/* Sync Settings */}
+                <div className="grid gap-2">
+                  <div className="flex items-center gap-2">
+                    <RefreshCw className="h-4 w-4 text-foreground/70" />
+                    <h3 className="text-sm font-medium">Sync Settings</h3>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                    <div className="flex-1">
+                      <div className="font-medium text-sm">Sync Interval</div>
+                      <div className="text-xs text-muted-foreground">
+                        How often to poll for card updates from remote (in minutes)
+                      </div>
+                    </div>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={60}
+                      value={syncPollInterval}
+                      onChange={(e) => handleSyncPollIntervalChange(Number(e.target.value))}
+                      className="w-20"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                    <div className="flex-1">
+                      <div className="font-medium text-sm">Auto-sync on Actions</div>
+                      <div className="text-xs text-muted-foreground">
+                        Automatically sync after card moves and worker completions
+                      </div>
+                    </div>
+                    <Switch
+                      checked={autoSyncOnAction}
+                      onCheckedChange={handleAutoSyncOnActionChange}
+                    />
+                  </div>
                 </div>
               </>
             )}

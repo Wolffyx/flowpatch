@@ -13,7 +13,8 @@ import {
   getJob,
   createEvent,
   ensureCardLink,
-  listCardLinks
+  listCardLinks,
+  deleteCard
 } from '../db'
 import type { Project, Card, CardStatus, PolicyConfig } from '../../shared/types'
 
@@ -135,6 +136,12 @@ export class SyncEngine {
       for (const remoteCard of remoteCards) {
         const updated = await this.syncCard(remoteCard)
         if (updated) cardsUpdated++
+      }
+
+      // Detect and handle remote deletions
+      const deletedCount = await this.detectRemoteDeletions(remoteCards)
+      if (deletedCount > 0) {
+        console.log(`[SyncEngine] Detected ${deletedCount} remotely deleted cards`)
       }
 
       // After cards are present locally, link issues to their related PRs (GitHub only)
@@ -264,6 +271,77 @@ export class SyncEngine {
         `[SyncEngine] syncGithubIssuePrLinks failed project=${this.projectId}: ${errorMsg}`
       )
     }
+  }
+
+  /**
+   * Detect cards that exist locally but have been deleted from the remote.
+   * When detected, delete them from the local database.
+   */
+  private async detectRemoteDeletions(remoteCards: Card[]): Promise<number> {
+    if (!this.project?.remote_repo_key) {
+      return 0
+    }
+
+    // Build a set of remote identifiers for quick lookup
+    const remoteIdentifiers = new Set<string>()
+    for (const remoteCard of remoteCards) {
+      if (remoteCard.remote_repo_key && remoteCard.remote_number_or_iid) {
+        remoteIdentifiers.add(`${remoteCard.remote_repo_key}:${remoteCard.remote_number_or_iid}`)
+      }
+    }
+
+    // Get all local cards with remote references
+    const localCards = listCards(this.projectId)
+    const cardsToDelete: Card[] = []
+
+    for (const localCard of localCards) {
+      // Skip local-only cards (no remote reference)
+      if (!localCard.remote_repo_key || !localCard.remote_number_or_iid) {
+        continue
+      }
+
+      // Skip cards from different remotes (multi-remote support)
+      if (localCard.remote_repo_key !== this.project.remote_repo_key) {
+        continue
+      }
+
+      const localIdentifier = `${localCard.remote_repo_key}:${localCard.remote_number_or_iid}`
+
+      // If card exists locally but not in remote list, it was deleted remotely
+      if (!remoteIdentifiers.has(localIdentifier)) {
+        cardsToDelete.push(localCard)
+      }
+    }
+
+    // Delete the cards that were removed from remote
+    let deletedCount = 0
+    for (const card of cardsToDelete) {
+      try {
+        // Create event before deletion
+        createEvent(this.projectId, 'card_deleted', card.id, {
+          title: card.title,
+          type: card.type,
+          remoteNumber: card.remote_number_or_iid,
+          reason: 'remote_deleted'
+        })
+
+        // Delete the card locally
+        const deleted = deleteCard(card.id)
+        if (deleted) {
+          deletedCount++
+          console.log(
+            `[SyncEngine] Deleted locally: ${card.type} #${card.remote_number_or_iid} (${card.title}) - removed from remote`
+          )
+        }
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error)
+        console.error(
+          `[SyncEngine] Failed to delete card ${card.id}: ${errorMsg}`
+        )
+      }
+    }
+
+    return deletedCount
   }
 
   async pushStatusChange(cardId: string, newStatus: CardStatus): Promise<boolean> {

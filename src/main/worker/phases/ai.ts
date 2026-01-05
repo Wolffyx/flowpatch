@@ -388,7 +388,7 @@ function recordAIUsage(
 
     createUsageRecord({
       projectId: ctx.project!.id,
-      jobId: ctx.jobId,
+      jobId: ctx.jobId ?? undefined,
       cardId: ctx.card?.id,
       toolType: tool,
       inputTokens: result.inputTokens,

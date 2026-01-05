@@ -88,6 +88,8 @@ export type EventType =
   | 'follow_up_instruction_added'
   | 'follow_up_instruction_applied'
   | 'follow_up_instruction_rejected'
+  | 'card_updated'
+  | 'card_deleted'
 
 // Subtask status for decomposed tasks
 export type SubtaskStatus = 'pending' | 'in_progress' | 'completed' | 'failed'
@@ -937,6 +939,12 @@ export interface PolicyConfig {
     syncOnStartup?: boolean
     /** Watch .patchwork/config.yml for external changes */
     watchFileChanges?: boolean
+    /** Interval in milliseconds for automatic polling (default: 180000 = 3 minutes) */
+    pollInterval?: number
+    /** Enable automatic sync after worker actions (default: true) */
+    autoSyncOnAction?: boolean
+    /** Debounce delay in milliseconds for rapid actions (default: 5000) */
+    debounceDelay?: number
   }
   /** Feature configurations for optional capabilities */
   features?: FeaturesConfig
@@ -1180,7 +1188,10 @@ export const DEFAULT_POLICY: PolicyConfig = {
     },
     configPriority: 'database',
     syncOnStartup: true,
-    watchFileChanges: true
+    watchFileChanges: true,
+    pollInterval: 180000,
+    autoSyncOnAction: true,
+    debounceDelay: 5000
   },
   features: {
     thinking: {

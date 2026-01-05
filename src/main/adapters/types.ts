@@ -126,6 +126,12 @@ export interface IRepoAdapter {
     labels?: string[]
   ): Promise<IssueResult | null>
 
+  /**
+   * Update the body of an issue on the remote repository.
+   * LocalAdapter returns true (no-op success).
+   */
+  updateIssueBody(issueNumber: number, body: string | null): Promise<boolean>
+
   // ──────────────────────────────────────────────────────────────────────────
   // Pull Requests / Merge Requests
   // ──────────────────────────────────────────────────────────────────────────
@@ -235,6 +241,9 @@ export interface IGithubAdapter extends IRepoAdapter {
 
   /** Update the status field on a GitHub Projects V2 draft item */
   updateProjectDraftStatus(draftNodeId: string, newStatus: CardStatus): Promise<boolean>
+
+  /** Update the title and body of a GitHub Projects V2 draft item */
+  updateProjectDraftBody(draftNodeId: string, title: string, body: string | null): Promise<boolean>
 
   /** List PR to issue links */
   listPRIssueLinks(): Promise<Array<{

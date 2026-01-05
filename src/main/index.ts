@@ -15,6 +15,7 @@ import { registerAllHandlers } from './ipc/handlers'
 import { startEnabledWorkerLoops, stopAllWorkerLoops } from './worker/loop'
 import { startCleanupScheduler, stopCleanupScheduler } from './services/worktree-cleanup-scheduler'
 import { startIndexScheduler, stopIndexScheduler } from './services/patchwork-index-scheduler'
+import { stopAllSyncSchedulers } from './sync/scheduler'
 import { reconcileAllProjects } from './services/worktree-reconciler'
 import { initializeSecurity, cleanupSecurity } from './security'
 
@@ -85,6 +86,7 @@ app.on('window-all-closed', () => {
 // Stop all worker loops and cleanup scheduler on app quit
 app.on('before-quit', () => {
   stopAllWorkerLoops()
+  stopAllSyncSchedulers()
   stopCleanupScheduler()
   stopIndexScheduler()
   cleanupSecurity()

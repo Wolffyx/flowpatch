@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import {
   X,
   ExternalLink,
@@ -12,7 +12,9 @@ import {
   Trash2,
   GitPullRequest,
   GitCompareArrows,
-  MessageSquare
+  MessageSquare,
+  Pencil,
+  Save
 } from 'lucide-react'
 import { Button } from './ui/button'
 import { Badge } from './ui/badge'
@@ -40,6 +42,7 @@ interface CardDrawerProps {
   onClose: () => void
   onMoveCard: (cardId: string, status: CardStatus) => void
   onRunWorker: (cardId: string) => void
+  onCardDeleted?: () => void
 }
 
 export function CardDrawer({
@@ -49,13 +52,19 @@ export function CardDrawer({
   projectId,
   onClose,
   onMoveCard,
-  onRunWorker
+  onRunWorker,
+  onCardDeleted
 }: CardDrawerProps): React.JSX.Element | null {
   const [worktree, setWorktree] = useState<Worktree | null>(null)
   const [worktreeLoading, setWorktreeLoading] = useState(false)
   const [diffDialogOpen, setDiffDialogOpen] = useState(false)
   const [chatDialogOpen, setChatDialogOpen] = useState(false)
   const [latestJob, setLatestJob] = useState<Job | null>(null)
+  const [isEditingDescription, setIsEditingDescription] = useState(false)
+  const [editedDescription, setEditedDescription] = useState('')
+  const [isSavingDescription, setIsSavingDescription] = useState(false)
+  const [isDeletingCard, setIsDeletingCard] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
   // Load worktree and latest job info for this card
   useEffect(() => {
@@ -132,6 +141,59 @@ export function CardDrawer({
       setWorktreeLoading(false)
     }
   }
+
+  // Reset edit state when card changes
+  useEffect(() => {
+    setIsEditingDescription(false)
+    setEditedDescription(card?.body || '')
+    setShowDeleteConfirm(false)
+  }, [card?.id])
+
+  const handleStartEditDescription = useCallback(() => {
+    setEditedDescription(card?.body || '')
+    setIsEditingDescription(true)
+  }, [card?.body])
+
+  const handleCancelEditDescription = useCallback(() => {
+    setIsEditingDescription(false)
+    setEditedDescription(card?.body || '')
+  }, [card?.body])
+
+  const handleSaveDescription = useCallback(async () => {
+    if (!card) return
+    setIsSavingDescription(true)
+    try {
+      const result = await window.projectAPI.editCardBody(card.id, editedDescription || null)
+      if (result.error) {
+        console.error('Failed to save description:', result.error)
+      } else {
+        setIsEditingDescription(false)
+      }
+    } catch (error) {
+      console.error('Failed to save description:', error)
+    } finally {
+      setIsSavingDescription(false)
+    }
+  }, [card, editedDescription])
+
+  const handleDeleteCard = useCallback(async () => {
+    if (!card) return
+    setIsDeletingCard(true)
+    try {
+      const result = await window.projectAPI.deleteCard(card.id)
+      if (result.error) {
+        console.error('Failed to delete card:', result.error)
+      } else {
+        setShowDeleteConfirm(false)
+        onClose()
+        onCardDeleted?.()
+      }
+    } catch (error) {
+      console.error('Failed to delete card:', error)
+    } finally {
+      setIsDeletingCard(false)
+    }
+  }, [card, onClose, onCardDeleted])
 
   if (!card) return null
 
@@ -232,15 +294,60 @@ export function CardDrawer({
             </div>
           )}
 
-          {/* Body */}
-          {card.body && (
-            <div>
-              <h4 className="text-sm font-medium mb-2">Description</h4>
+          {/* Body / Description */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-sm font-medium">Description</h4>
+              {!isEditingDescription && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleStartEditDescription}
+                  className="h-6 px-2"
+                >
+                  <Pencil className="h-3 w-3 mr-1" />
+                  Edit
+                </Button>
+              )}
+            </div>
+            {isEditingDescription ? (
+              <div className="space-y-2">
+                <textarea
+                  value={editedDescription}
+                  onChange={(e) => setEditedDescription(e.target.value)}
+                  className="w-full min-h-[100px] text-sm rounded-md bg-muted p-3 border border-input focus:outline-none focus:ring-2 focus:ring-ring resize-y"
+                  placeholder="Add a description..."
+                  autoFocus
+                />
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    onClick={handleSaveDescription}
+                    disabled={isSavingDescription}
+                  >
+                    <Save className="h-3 w-3 mr-1" />
+                    {isSavingDescription ? 'Saving...' : 'Save'}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCancelEditDescription}
+                    disabled={isSavingDescription}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            ) : card.body ? (
               <div className="text-sm text-muted-foreground whitespace-pre-wrap break-words overflow-x-hidden rounded-md bg-muted p-3">
                 {card.body}
               </div>
-            </div>
-          )}
+            ) : (
+              <div className="text-sm text-muted-foreground italic rounded-md bg-muted p-3">
+                No description provided. Click Edit to add one.
+              </div>
+            )}
+          </div>
 
           {/* Dependencies */}
           <div className="rounded-md bg-muted p-3">
@@ -465,6 +572,50 @@ export function CardDrawer({
             <p>Local update: {formatRelativeTime(card.updated_local_at)}</p>
             {card.updated_remote_at && (
               <p>Remote update: {formatRelativeTime(card.updated_remote_at)}</p>
+            )}
+          </div>
+
+          {/* Delete Card */}
+          <div className="pt-4 border-t">
+            {showDeleteConfirm ? (
+              <div className="space-y-2">
+                <p className="text-sm text-destructive font-medium">
+                  Are you sure you want to delete this card?
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  This action cannot be undone. The card will be removed from your local database.
+                  {card.remote_url && ' The remote issue/PR will not be affected.'}
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={handleDeleteCard}
+                    disabled={isDeletingCard}
+                  >
+                    <Trash2 className="h-3 w-3 mr-1" />
+                    {isDeletingCard ? 'Deleting...' : 'Delete'}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowDeleteConfirm(false)}
+                    disabled={isDeletingCard}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowDeleteConfirm(true)}
+                className="text-destructive hover:text-destructive"
+              >
+                <Trash2 className="h-3 w-3 mr-1" />
+                Delete Card
+              </Button>
             )}
           </div>
         </div>

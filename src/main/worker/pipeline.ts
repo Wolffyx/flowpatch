@@ -1,124 +1,87 @@
-import { execFile, execFileSync, spawn } from 'child_process'
-import { promisify } from 'util'
-import { writeFileSync } from 'fs'
-import { join, resolve } from 'path'
+/**
+ * Worker Pipeline
+ *
+ * Orchestrates the worker execution flow from card pickup to PR creation.
+ * Delegates specific responsibilities to manager classes for maintainability.
+ */
+
 import { AdapterRegistry } from '../adapters'
 import type { IRepoAdapter } from '../adapters'
 import {
   getProject,
   getCard,
-  updateCardStatus,
   updateCardConflictStatus,
   createEvent,
-  ensureCardLink,
   listCardLinks,
   updateJobState,
-  updateJobResult,
   getJob,
   cancelJob,
   acquireJobLease,
   renewJobLease,
-  createWorktree,
-  updateWorktreeStatus,
-  updateWorktreeJob,
-  getWorktreeByCard,
-  getWorktreeByBranch,
-  acquireWorktreeLock,
-  releaseWorktreeLock,
-  renewWorktreeLock,
-  countActiveWorktrees,
   cryptoRandomId,
   updateSubtaskStatus,
   getNextPendingSubtask,
   createWorkerProgress,
   updateWorkerProgress,
   getWorkerProgress,
-  createPlanApproval,
   getPlanApprovalByJob,
   deletePlanApprovalsByJob,
-  getNextPendingInstruction,
-  markInstructionProcessing,
-  markInstructionApplied,
   deleteFollowUpInstructionsByJob
 } from '../db'
 import { TaskDecomposer } from '../services/task-decomposer'
 import type {
-  CardStatus,
   JobState,
   Project,
   Card,
   PolicyConfig,
-  WorkerLogMessage,
-  Worktree,
   Subtask,
   WorkerProgress,
-  PlanningMode,
-  PlanApproval,
-  FollowUpInstruction
+  PlanningMode
 } from '../../shared/types'
-import { slugify, generateWorktreeBranchName } from '../../shared/types'
 import { broadcastToRenderers } from '../ipc/broadcast'
-import { GitWorktreeManager, WorktreeConfig } from '../services/git-worktree-manager'
-import { buildContextBundle, buildPromptContext } from '../services/patchwork-context'
-import { writeCheckpoint, readCheckpoint, ensureRunDir } from '../services/patchwork-runs'
-import { runE2EPhase as runE2EPhaseImpl, type E2EResult } from './phases/e2e'
+import { writeCheckpoint, readCheckpoint } from '../services/patchwork-runs'
+
+// Phase implementations
+import { runAI, buildAIPrompt } from './phases/ai'
 import { runBranchSyncPhase, type BranchSyncResult } from './phases/branch-sync'
+import { runE2EPhase as runE2EPhaseImpl, type E2EResult } from './phases/e2e'
+import { runChecks } from './phases/checks'
+import type { PipelineContext, WorkerResult } from './phases/types'
 
-const execFileAsync = promisify(execFile)
+// Managers
+import {
+  LogManager,
+  PlanManager,
+  ApprovalManager,
+  CardStatusManager,
+  BranchManager,
+  WorktreePipelineManager
+} from './managers'
 
-function resolveWindowsSpawnCommand(command: string, env: NodeJS.ProcessEnv): string {
-  // If the caller passed a path or explicit extension, don't try to resolve it.
-  if (command.includes('\\') || command.includes('/') || /\.[A-Za-z0-9]+$/.test(command)) return command
+// Errors
+import { WorkerCanceledError, WorkerPendingApprovalError } from './errors'
 
-  try {
-    const raw = execFileSync('where', [command], {
-      env,
-      encoding: 'utf-8',
-      windowsHide: true
-    })
+// Sync scheduler
+import { triggerProjectSync } from '../sync/scheduler'
 
-    const matches = raw
-      .split(/\r?\n/)
-      .map((s) => s.trim())
-      .filter(Boolean)
+// Git operations
+import {
+  stageAll,
+  commit,
+  push,
+  stashPush,
+  stashList,
+  stashApplyDrop,
+  isWorkingTreeClean,
+  getWorkingTreeStatus,
+  getModifiedFiles,
+  getDiffStat
+} from './git-operations'
 
-    if (!matches.length) return command
-
-    const preferredExts = ['.exe', '.cmd', '.bat', '.com']
-    for (const ext of preferredExts) {
-      const hit = matches.find((m) => m.toLowerCase().endsWith(ext))
-      if (hit) return hit
-    }
-
-    return matches[0]
-  } catch {
-    return command
-  }
-}
-
-interface WorkerResult {
-  success: boolean
-  phase: string
-  prUrl?: string
-  error?: string
-  plan?: string
-  logs?: string[]
-}
-
-class WorkerCanceledError extends Error {
-  constructor(message = 'Canceled') {
-    super(message)
-    this.name = 'WorkerCanceledError'
-  }
-}
-
-class WorkerPendingApprovalError extends Error {
-  constructor(public planApprovalId: string) {
-    super('Pending plan approval')
-    this.name = 'WorkerPendingApprovalError'
-  }
-}
-
+/**
+ * Main worker pipeline class.
+ * Orchestrates the execution flow by delegating to specialized managers.
+ */
 export class WorkerPipeline {
   private projectId: string
   private cardId: string
@@ -126,41 +89,24 @@ export class WorkerPipeline {
   private card: Card | null = null
   private policy: PolicyConfig
   private adapter: IRepoAdapter | null = null
-  private logs: string[] = []
-  private leaseInterval: NodeJS.Timeout | null = null
-  private worktreeLockInterval: NodeJS.Timeout | null = null
   private jobId: string | null = null
-  private phase: string = 'init'
-  private lastPlan: string | undefined
-  private lastPersistMs = 0
-  private startingBranch: string | null = null
-  private baseBranch: string | null = null
-  private baseHeadSha: string | null = null
-  private workerBranch: string | null = null
-
-  // Worktree-specific state
-  private useWorktree: boolean = false
-  private worktreeManager: GitWorktreeManager | null = null
-  private worktreeRecord: Worktree | null = null
-  private worktreePath: string | null = null
+  private leaseInterval: NodeJS.Timeout | null = null
   private workerId: string = cryptoRandomId()
+
+  // Managers
+  private logManager: LogManager
+  private cardStatusManager: CardStatusManager | null = null
+  private branchManager: BranchManager | null = null
+  private worktreeManager: WorktreePipelineManager | null = null
+  private approvalManager: ApprovalManager | null = null
+
+  // Worktree state
+  private useWorktree: boolean = false
 
   // Decomposition and iterative AI state
   private subtasks: Subtask[] = []
   private progress: WorkerProgress | null = null
   private taskDecomposer: TaskDecomposer | null = null
-
-  // Plan approval state
-  private planApproval: PlanApproval | null = null
-
-  // Follow-up instructions state
-  private followUpInstructions: FollowUpInstruction[] = []
-
-  // Log batching for reduced DB writes
-  private pendingLogCount = 0
-  private logFlushTimer: NodeJS.Timeout | null = null
-  private readonly logBatchSize = 50 // Flush after this many logs
-  private readonly logFlushIntervalMs = 2000 // Flush every 2 seconds
 
   constructor(projectId: string, cardId: string) {
     this.projectId = projectId
@@ -177,37 +123,18 @@ export class WorkerPipeline {
         commitMessage: '#{issue} {title}'
       }
     }
+
+    // Initialize log manager early
+    this.logManager = new LogManager(projectId, cardId)
   }
 
-  private normalizePath(p: string): string {
-    const resolved = resolve(p)
-    return process.platform === 'win32' ? resolved.toLowerCase() : resolved
-  }
+  // ==================== Helpers ====================
 
   /**
    * Get the working directory for operations.
-   * Returns worktree path if using worktrees, otherwise the main repo path.
    */
   private getWorkingDir(): string {
-    return this.worktreePath ?? this.project!.local_path
-  }
-
-  private gitEnv(): NodeJS.ProcessEnv {
-    return {
-      ...process.env,
-      GIT_TERMINAL_PROMPT: '0',
-      GIT_ASKPASS: process.env.GIT_ASKPASS || 'echo'
-    }
-  }
-
-  /**
-   * Get worktree configuration from policy.
-   */
-  private getWorktreeConfig(): WorktreeConfig {
-    return {
-      root: this.policy.worker?.worktree?.root ?? 'repo',
-      customPath: this.policy.worker?.worktree?.customPath
-    }
+    return this.worktreeManager?.getWorktreePath() ?? this.project!.local_path
   }
 
   private getJobState(): JobState | null {
@@ -220,7 +147,7 @@ export class WorkerPipeline {
     return this.getJobState() === 'canceled'
   }
 
-  private cancelJob(reason?: string): void {
+  private cancelJobInternal(reason?: string): void {
     if (!this.jobId) return
     if (this.isCanceled()) return
     cancelJob(this.jobId, reason ?? 'Canceled')
@@ -230,167 +157,12 @@ export class WorkerPipeline {
     if (this.isCanceled()) throw new WorkerCanceledError()
   }
 
-  /**
-   * Check if plan approval is required and handle the approval flow.
-   * Returns true if we can proceed, throws WorkerPendingApprovalError if waiting for approval.
-   */
-  private async checkPlanApproval(plan: string, planningMode: PlanningMode): Promise<void> {
-    const planningConfig = this.policy.features?.planning
-    if (!planningConfig?.approvalRequired) {
-      return // No approval needed
-    }
-
-    // Check if we already have an approval for this job
-    const existingApproval = this.jobId ? getPlanApprovalByJob(this.jobId) : null
-
-    if (existingApproval) {
-      this.planApproval = existingApproval
-
-      if (existingApproval.status === 'approved' || existingApproval.status === 'skipped') {
-        this.log(`Plan already ${existingApproval.status}`)
-        return // Already approved or skipped
-      }
-
-      if (existingApproval.status === 'rejected') {
-        // Plan was rejected - cancel the job
-        this.cancelJob('Plan rejected by reviewer')
-        throw new WorkerCanceledError('Plan rejected')
-      }
-
-      if (existingApproval.status === 'pending') {
-        // Still waiting for approval
-        this.log('Waiting for plan approval...')
-        throw new WorkerPendingApprovalError(existingApproval.id)
-      }
-    }
-
-    // Create a new plan approval request
-    this.log('Creating plan approval request...')
-    this.planApproval = createPlanApproval({
-      jobId: this.jobId!,
-      cardId: this.cardId,
-      projectId: this.projectId,
-      plan,
-      planningMode
-    })
-
-    // Update job state to pending_approval
-    updateJobState(this.jobId!, 'pending_approval', {
-      success: false,
-      phase: 'pending_approval',
-      plan,
-      logs: this.logs.slice(-500)
-    })
-
-    // Broadcast the update
-    broadcastToRenderers('stateUpdated')
-    broadcastToRenderers('planApprovalRequired', {
-      projectId: this.projectId,
-      cardId: this.cardId,
-      jobId: this.jobId,
-      approvalId: this.planApproval.id
-    })
-
-    // Create event for the approval request
-    createEvent(this.projectId, 'plan_approval_requested', this.cardId, {
-      approvalId: this.planApproval.id,
-      planningMode
-    })
-
-    this.log('Plan submitted for approval')
-    throw new WorkerPendingApprovalError(this.planApproval.id)
-  }
-
-  /**
-   * Check for pending follow-up instructions and process them.
-   * Returns any pending instructions to be incorporated into the next iteration.
-   */
-  private checkFollowUpInstructions(): FollowUpInstruction[] {
-    if (!this.jobId) return []
-
-    const followUpConfig = this.policy.features?.followUpInstructions
-    if (!followUpConfig?.enabled) return []
-
-    // Get the next pending instruction
-    const instruction = getNextPendingInstruction(this.jobId)
-    if (!instruction) return []
-
-    // Handle abort instruction specially
-    if (instruction.instruction_type === 'abort') {
-      this.log('Received abort instruction, canceling job')
-      markInstructionApplied(instruction.id)
-      createEvent(this.projectId, 'follow_up_instruction_applied', this.cardId, {
-        instructionId: instruction.id,
-        instructionType: 'abort'
-      })
-      throw new WorkerCanceledError('Aborted by follow-up instruction')
-    }
-
-    // Mark as processing
-    markInstructionProcessing(instruction.id)
-    this.log(`Processing follow-up instruction: ${instruction.instruction_type}`)
-
-    // Add to our tracked list
-    this.followUpInstructions.push(instruction)
-
-    return [instruction]
-  }
-
-  /**
-   * Build additional context from follow-up instructions for the AI prompt.
-   */
-  private buildFollowUpContext(): string {
-    if (this.followUpInstructions.length === 0) return ''
-
-    const sections: string[] = [
-      '\n## Follow-up Instructions from User\n',
-      'The user has provided the following additional instructions that should be incorporated:\n'
-    ]
-
-    for (const instruction of this.followUpInstructions) {
-      const typeLabel = instruction.instruction_type === 'revision' ? 'REVISION REQUEST'
-        : instruction.instruction_type === 'clarification' ? 'CLARIFICATION'
-        : instruction.instruction_type === 'additional' ? 'ADDITIONAL REQUIREMENT'
-        : instruction.instruction_type.toUpperCase()
-
-      sections.push(`### ${typeLabel}`)
-      sections.push(instruction.content)
-      sections.push('')
-    }
-
-    return sections.join('\n')
-  }
-
-  /**
-   * Mark all processed follow-up instructions as applied.
-   */
-  private markFollowUpInstructionsApplied(): void {
-    for (const instruction of this.followUpInstructions) {
-      if (instruction.status === 'processing') {
-        markInstructionApplied(instruction.id)
-        createEvent(this.projectId, 'follow_up_instruction_applied', this.cardId, {
-          instructionId: instruction.id,
-          instructionType: instruction.instruction_type
-        })
-      }
-    }
-    this.followUpInstructions = []
-  }
-
-  private ensureCardStatusAllowed(allowed: CardStatus[], reason?: string): void {
-    const card = getCard(this.cardId)
-    if (!card) return
-    this.card = card
-
-    if (allowed.includes(card.status)) return
-
-    this.cancelJob(reason ?? `Canceled: card moved to ${card.status}`)
-    throw new WorkerCanceledError()
+  private log(message: string, meta?: { source?: string; stream?: 'stdout' | 'stderr' }): void {
+    this.logManager.log(message, meta)
   }
 
   private setPhase(phase: string): void {
-    this.phase = phase
-    this.persistPartialResult(true)
+    this.logManager.setPhase(phase)
     this.persistRunCheckpoint()
   }
 
@@ -402,7 +174,7 @@ export class WorkerPipeline {
         jobId: this.jobId,
         cardId: this.cardId,
         projectId: this.projectId,
-        phase: this.phase,
+        phase: this.logManager.getPhase(),
         iteration,
         updatedAt: new Date().toISOString(),
         lastContextPath: this.progress?.progress_file_path ?? undefined
@@ -412,100 +184,10 @@ export class WorkerPipeline {
     }
   }
 
-  private log(message: string, meta?: { source?: string; stream?: 'stdout' | 'stderr' }): void {
-    const ts = new Date().toISOString()
-    const sourcePrefix = meta?.source
-      ? `[${meta.source}${meta.stream ? `:${meta.stream}` : ''}] `
-      : ''
-    const fullMessage = `${sourcePrefix}${message}`
-    const line = `[${ts}] ${fullMessage}`
-    this.logs.push(line)
-    console.log(`[Worker] ${fullMessage}`)
-
-    if (!this.jobId) return
-
-    const payload: WorkerLogMessage = {
-      projectId: this.projectId,
-      jobId: this.jobId,
-      cardId: this.cardId,
-      ts,
-      line,
-      source: meta?.source,
-      stream: meta?.stream
-    }
-
-    // Broadcast individual logs for real-time UI updates
-    broadcastToRenderers('workerLog', payload)
-    
-    // Use batched persistence to reduce DB writes
-    this.pendingLogCount++
-    this.scheduleLogFlush()
-    
-    // Force flush if we've accumulated too many logs
-    if (this.pendingLogCount >= this.logBatchSize) {
-      this.flushLogs()
-    }
-  }
-
-  /**
-   * Schedule a log flush if not already scheduled.
-   */
-  private scheduleLogFlush(): void {
-    if (this.logFlushTimer) return
-    
-    this.logFlushTimer = setTimeout(() => {
-      this.flushLogs()
-    }, this.logFlushIntervalMs)
-  }
-
-  /**
-   * Flush pending logs to DB.
-   */
-  private flushLogs(): void {
-    if (this.logFlushTimer) {
-      clearTimeout(this.logFlushTimer)
-      this.logFlushTimer = null
-    }
-    
-    if (this.pendingLogCount === 0) return
-    
-    this.pendingLogCount = 0
-    this.persistPartialResult(true)
-  }
-
-  /**
-   * Cancel any pending log flush timer.
-   * Call this during cleanup.
-   */
-  private cancelLogFlush(): void {
-    if (this.logFlushTimer) {
-      clearTimeout(this.logFlushTimer)
-      this.logFlushTimer = null
-    }
-  }
-
-  private persistPartialResult(force: boolean): void {
-    if (!this.jobId) return
-    const now = Date.now()
-    
-    // Allow more aggressive throttling when not forced
-    // Previously: 1000ms, Now: 2000ms for non-forced writes
-    const throttleMs = force ? 500 : 2000
-    if (!force && now - this.lastPersistMs < throttleMs) return
-    this.lastPersistMs = now
-
-    updateJobResult(this.jobId, {
-      success: false,
-      phase: this.phase,
-      plan: this.lastPlan,
-      logs: this.logs.slice(-500)
-    })
-
-    broadcastToRenderers('stateUpdated')
-  }
+  // ==================== Initialization ====================
 
   async initialize(): Promise<boolean> {
-    // Phase 1: Load project and card in parallel (both are synchronous DB reads)
+    // Load project and card
     const [project, card] = await Promise.all([
       Promise.resolve(getProject(this.projectId)),
       Promise.resolve(getCard(this.cardId))
@@ -524,12 +206,12 @@ export class WorkerPipeline {
       return false
     }
 
-    // If we're resuming an existing job, load any prior checkpoint to reduce rework.
+    // Resume from checkpoint if available
     if (this.jobId && this.project) {
       try {
         const cp = readCheckpoint(this.project.local_path, this.jobId)
         if (cp?.phase) {
-          this.phase = cp.phase
+          this.logManager.setPhase(cp.phase)
         }
       } catch {
         // ignore
@@ -550,131 +232,129 @@ export class WorkerPipeline {
       }
     }
 
-    // Phase 2: Initialize adapter and check features in parallel
-    // These are independent operations that can run concurrently
-    const initPromises: Promise<void>[] = []
-
-    // Initialize adapter (synchronous but wrapped for parallel execution)
-    let adapterError: Error | null = null
-    initPromises.push(
-      Promise.resolve().then(() => {
-        try {
-          this.adapter = AdapterRegistry.create({
-            repoKey: this.project!.remote_repo_key!,
-            providerHint: this.project!.provider_hint,
-            repoPath: this.project!.local_path,
-            policy: this.policy
-          })
-        } catch (error) {
-          adapterError = error instanceof Error ? error : new Error(String(error))
-        }
+    // Initialize adapter
+    try {
+      this.adapter = AdapterRegistry.create({
+        repoKey: this.project.remote_repo_key,
+        providerHint: this.project.provider_hint,
+        repoPath: this.project.local_path,
+        policy: this.policy
       })
-    )
-
-    // Check worktree support in parallel if worktrees are enabled
-    let worktreeSupport = false
-    if (this.policy.worker?.worktree?.enabled) {
-      initPromises.push(
-        Promise.resolve().then(() => {
-          this.worktreeManager = new GitWorktreeManager(this.project!.local_path)
-          worktreeSupport = this.worktreeManager.checkWorktreeSupport()
-        })
-      )
-    }
-
-    // Wait for all parallel initialization to complete
-    await Promise.all(initPromises)
-
-    // Check for adapter error
-    if (adapterError) {
-      this.log(`Failed to create adapter: ${adapterError.message}`)
+    } catch (error) {
+      this.log(`Failed to create adapter: ${error instanceof Error ? error.message : String(error)}`)
       return false
     }
 
-    // Initialize task decomposer if enabled (depends on adapter)
+    // Initialize task decomposer if enabled
     if (this.policy.worker?.decomposition?.enabled && this.adapter) {
       this.taskDecomposer = new TaskDecomposer(this.policy, this.adapter)
     }
 
-    // Evaluate worktree mode (depends on worktreeManager being initialized)
-    if (this.policy.worker?.worktree?.enabled && this.worktreeManager) {
-      if (!worktreeSupport) {
-        this.log(
-          'Git version does not support worktrees (requires 2.17+), falling back to stash mode'
-        )
-        this.useWorktree = false
-      } else {
-        // Check max concurrent limit
-        const maxConcurrent = this.policy.worker.worktree.maxConcurrent ?? 1
-        const activeCount = countActiveWorktrees(this.projectId)
-        if (activeCount >= maxConcurrent) {
-          this.log(
-            `Max concurrent worktrees reached (${activeCount}/${maxConcurrent}), falling back to stash mode`
-          )
-          this.useWorktree = false
-        } else {
-          this.useWorktree = true
-          this.log('Worktree mode enabled')
-        }
+    // Initialize worktree manager if enabled
+    if (this.policy.worker?.worktree?.enabled) {
+      this.worktreeManager = new WorktreePipelineManager(
+        {
+          projectId: this.projectId,
+          cardId: this.cardId,
+          jobId: this.jobId,
+          workerId: this.workerId,
+          repoPath: this.project.local_path,
+          policy: this.policy,
+          card: this.card
+        },
+        (msg) => this.log(msg)
+      )
+
+      this.useWorktree = this.worktreeManager.canUseWorktree()
+      if (this.useWorktree) {
+        this.log('Worktree mode enabled')
       }
     }
+
+    // Initialize card status manager
+    this.cardStatusManager = new CardStatusManager(
+      {
+        projectId: this.projectId,
+        cardId: this.cardId,
+        card: this.card,
+        adapter: this.adapter
+      },
+      (msg) => this.log(msg),
+      (reason) => this.cancelJobInternal(reason)
+    )
+
+    // Initialize branch manager
+    this.branchManager = new BranchManager(
+      {
+        repoPath: this.project.local_path,
+        policy: this.policy,
+        card: this.card
+      },
+      (msg) => this.log(msg)
+    )
+
+    // Initialize approval manager
+    this.approvalManager = new ApprovalManager(
+      this.policy,
+      {
+        projectId: this.projectId,
+        cardId: this.cardId,
+        jobId: this.jobId!,
+        logs: this.logManager.getLogs()
+      },
+      (msg) => this.log(msg),
+      (reason) => this.cancelJobInternal(reason)
+    )
 
     return true
   }
 
+  // ==================== Main Run ====================
+
   async run(jobId: string): Promise<WorkerResult> {
     this.jobId = jobId
+    this.logManager.setJobId(jobId)
     this.setPhase('init')
     let outcome: 'succeeded' | 'failed' | 'canceled' | 'pending_approval' = 'failed'
 
     // Start lease renewal
     this.leaseInterval = setInterval(() => {
       renewJobLease(jobId)
-    }, 60000) // Renew every minute
+    }, 60000)
 
     try {
       const initialized = await this.initialize()
       if (!initialized) {
         outcome = 'failed'
-        return { success: false, phase: 'init', error: 'Failed to initialize', logs: this.logs }
+        return { success: false, phase: 'init', error: 'Failed to initialize', logs: this.logManager.getLogs() }
       }
 
       this.ensureNotCanceled()
-      this.ensureCardStatusAllowed(['ready'], 'Canceled: card no longer Ready')
+      this.cardStatusManager!.ensureCardStatusAllowed(['ready'], 'Canceled: card no longer Ready')
 
       // Phase 1: Move to In Progress
       this.setPhase('in_progress')
       this.log('Moving card to In Progress')
-      await this.moveToInProgress()
+      await this.cardStatusManager!.moveToInProgress()
 
       this.ensureNotCanceled()
-      this.ensureCardStatusAllowed(['in_progress'])
+      this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
 
-      // Phase 2: Setup working environment (worktree or stash-based)
+      // Phase 2: Setup working environment
       this.setPhase('working_tree')
-      if (this.useWorktree) {
+      if (this.useWorktree && this.worktreeManager) {
         this.log('Setting up worktree')
-        const worktreeSetup = await this.setupWorktree()
+        const worktreeSetup = await this.worktreeManager.setup()
         if (!worktreeSetup) {
           outcome = 'failed'
           return {
             success: false,
             phase: 'working_tree',
             error: 'Failed to setup worktree',
-            logs: this.logs
+            logs: this.logManager.getLogs()
           }
         }
-        // Start worktree lock renewal
-        if (this.worktreeRecord) {
-          this.worktreeLockInterval = setInterval(
-            () => {
-              if (this.worktreeRecord) {
-                renewWorktreeLock(this.worktreeRecord.id, this.workerId, 10)
-              }
-            },
-            5 * 60 * 1000
-          ) // Renew every 5 minutes
-        }
+        this.worktreeManager.startLockRenewal()
       } else {
         this.log('Checking working tree')
         const cleanTree = await this.checkWorkingTree()
@@ -684,125 +364,103 @@ export class WorkerPipeline {
             success: false,
             phase: 'working_tree',
             error: 'Working tree is not clean',
-            logs: this.logs
+            logs: this.logManager.getLogs()
           }
         }
       }
 
       this.ensureNotCanceled()
-      this.ensureCardStatusAllowed(['in_progress'])
+      this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
 
       // Phase 3: Fetch latest
       this.setPhase('fetch')
       this.log('Fetching latest from remote')
-      await this.fetchLatest()
+      await this.branchManager!.fetchLatest()
 
       this.ensureNotCanceled()
-      this.ensureCardStatusAllowed(['in_progress'])
+      this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
 
-      // Phase 4: Create branch (only if not using worktree - worktree already created branch)
+      // Phase 4: Create branch
       this.setPhase('branch')
       let branchName: string
-      if (this.useWorktree && this.workerBranch) {
-        branchName = this.workerBranch
+      if (this.useWorktree && this.worktreeManager?.getWorkerBranch()) {
+        branchName = this.worktreeManager.getWorkerBranch()!
         this.log(`Using worktree branch: ${branchName}`)
       } else {
-        branchName = this.generateBranchName()
+        branchName = this.branchManager!.generateBranchName()
         this.log(`Preparing branch: ${branchName}`)
-        await this.createBranch(branchName)
+        await this.branchManager!.createBranch(branchName)
       }
 
       this.ensureNotCanceled()
-      this.ensureCardStatusAllowed(['in_progress'])
+      this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
 
-      // Phase 4.2: Branch Sync (sync existing branch with main)
+      // Phase 4.2: Branch Sync
       this.setPhase('branch_sync')
       this.log('Checking if branch needs sync with main')
       const syncResult = await this.runBranchSync(branchName)
 
       this.ensureNotCanceled()
-      this.ensureCardStatusAllowed(['in_progress'])
+      this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
 
       if (!syncResult.success) {
-        // Failed to sync/resolve conflicts - move to In Review with conflict marker
         this.log(`Branch sync failed: ${syncResult.error}`)
-
-        // Mark card as having conflicts
         updateCardConflictStatus(this.cardId, true)
-
-        // Create conflict event
         createEvent(this.projectId, 'error', this.cardId, {
           phase: 'branch_sync',
           hasConflicts: true,
           unresolvedFiles: syncResult.unresolvedFiles,
           error: syncResult.error
         })
-
-        // Move to In Review with error
-        updateCardStatus(this.cardId, 'in_review')
         broadcastToRenderers('card-updated', { cardId: this.cardId })
-
         outcome = 'failed'
         return {
           success: false,
           phase: 'branch_sync',
           error: syncResult.error || 'Failed to sync branch with main',
-          logs: this.logs
+          logs: this.logManager.getLogs()
         }
       }
 
-      // Clear any previous conflict status on success
       if (syncResult.hadConflicts && syncResult.conflictsResolved) {
         updateCardConflictStatus(this.cardId, false)
         this.log('Conflicts resolved successfully')
       }
 
-      // Phase 4.5: Task Decomposition (if enabled)
+      // Phase 4.5: Task Decomposition
       if (this.taskDecomposer && this.card) {
         this.setPhase('decomposition')
         await this.runDecomposition()
       }
 
       this.ensureNotCanceled()
-      this.ensureCardStatusAllowed(['in_progress'])
+      this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
 
-      // Phase 5: Generate plan (based on planning mode)
+      // Phase 5: Generate plan
       this.setPhase('plan')
       const planningConfig = this.policy.features?.planning
       const planningMode: PlanningMode =
         planningConfig?.enabled !== false ? (planningConfig?.mode ?? 'lite') : 'skip'
 
-      let plan: string | null = null
+      let plan: string
       if (planningMode === 'skip') {
         this.log('Planning skipped (mode: skip)')
-        plan = this.generateMinimalPlan()
+        plan = new PlanManager(this.card!, this.policy).generatePlan('skip')
       } else {
         this.log(`Generating implementation plan (mode: ${planningMode})`)
-        plan = await this.generatePlan(planningMode)
-        if (!plan) {
-          outcome = 'failed'
-          return {
-            success: false,
-            phase: 'plan',
-            error: 'Failed to generate plan',
-            logs: this.logs
-          }
-        }
+        plan = new PlanManager(this.card!, this.policy).generatePlan(planningMode)
       }
-      this.lastPlan = plan
+      this.logManager.setLastPlan(plan)
 
-      // Store plan as event
       createEvent(this.projectId, 'worker_plan', this.cardId, { plan })
 
-      // Phase 5.5: Check for plan approval (if required)
-      // This will throw WorkerPendingApprovalError if approval is needed and pending
-      await this.checkPlanApproval(plan, planningMode)
+      // Phase 5.5: Check for plan approval
+      await this.approvalManager!.checkPlanApproval(plan, planningMode)
 
       this.ensureNotCanceled()
-      this.ensureCardStatusAllowed(['in_progress'])
+      this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
 
-      // Phase 6: Run AI tool (Claude Code or Codex)
-      // Supports both single-shot and iterative modes
+      // Phase 6: Run AI tool
       this.setPhase('ai')
       const sessionMode = this.policy.worker?.session?.sessionMode ?? 'single'
       let aiSuccess: boolean
@@ -812,11 +470,11 @@ export class WorkerPipeline {
         aiSuccess = await this.runIterativeAI(plan)
       } else {
         this.log('Running AI implementation')
-        aiSuccess = await this.runAI(plan)
+        aiSuccess = await this.runAIPhase(plan)
       }
 
       this.ensureNotCanceled()
-      this.ensureCardStatusAllowed(['in_progress'])
+      this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
       if (!aiSuccess) {
         outcome = 'failed'
         return {
@@ -824,33 +482,31 @@ export class WorkerPipeline {
           phase: 'ai',
           error: 'AI implementation failed',
           plan,
-          logs: this.logs
+          logs: this.logManager.getLogs()
         }
       }
 
       // Phase 7: Run checks
       this.setPhase('checks')
       this.log('Running verification checks')
-      const checksPass = await this.runChecks()
+      const checksPass = await this.runChecksPhase()
       this.ensureNotCanceled()
-      this.ensureCardStatusAllowed(['in_progress'])
+      this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
       if (!checksPass) {
         this.log('Checks failed, creating WIP PR')
-        // Still create PR but mark as WIP
       }
 
-      // Phase 7.5: Run E2E tests (if enabled)
+      // Phase 7.5: Run E2E tests
       let e2ePass = true
       if (this.policy.worker?.e2e?.enabled) {
         this.setPhase('e2e')
         this.log('Running E2E tests')
         const e2eResult = await this.runE2EPhase()
         this.ensureNotCanceled()
-        this.ensureCardStatusAllowed(['in_progress'])
+        this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
         e2ePass = e2eResult.success
         if (!e2ePass) {
           this.log(`E2E tests failed after ${e2eResult.fixAttempts} fix attempts`)
-          // Still create PR but mark as WIP
         }
       }
 
@@ -860,14 +516,14 @@ export class WorkerPipeline {
       await this.commitAndPush(branchName)
 
       this.ensureNotCanceled()
-      this.ensureCardStatusAllowed(['in_progress'])
+      this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
 
       // Phase 9: Create PR/MR
       this.setPhase('pr')
       this.log('Creating PR/MR')
       const prResult = await this.createPR(branchName, plan, checksPass && e2ePass)
       this.ensureNotCanceled()
-      this.ensureCardStatusAllowed(['in_progress'])
+      this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
       if (!prResult) {
         outcome = 'failed'
         return {
@@ -875,14 +531,14 @@ export class WorkerPipeline {
           phase: 'pr',
           error: 'Failed to create PR/MR',
           plan,
-          logs: this.logs
+          logs: this.logManager.getLogs()
         }
       }
 
       // Phase 10: Move to In Review
       this.setPhase('in_review')
       this.log('Moving card to In Review')
-      await this.moveToInReview(prResult.url, !prResult.existing)
+      await this.cardStatusManager!.moveToInReview(prResult.url, !prResult.existing)
 
       this.setPhase('done')
       outcome = 'succeeded'
@@ -891,7 +547,7 @@ export class WorkerPipeline {
         phase: 'complete',
         prUrl: prResult.url,
         plan,
-        logs: this.logs
+        logs: this.logManager.getLogs()
       }
     } catch (err) {
       if (err instanceof WorkerCanceledError) {
@@ -902,8 +558,8 @@ export class WorkerPipeline {
           success: false,
           phase: 'canceled',
           error: 'Canceled',
-          plan: this.lastPlan,
-          logs: this.logs
+          plan: this.logManager.getLogs().find(l => l.includes('Plan'))?.slice(0, 1000),
+          logs: this.logManager.getLogs()
         }
       }
       if (err instanceof WorkerPendingApprovalError) {
@@ -914,34 +570,29 @@ export class WorkerPipeline {
           success: false,
           phase: 'pending_approval',
           error: 'Pending plan approval',
-          plan: this.lastPlan,
-          logs: this.logs
+          logs: this.logManager.getLogs()
         }
       }
       throw err
     } finally {
-      // Stop lease renewal
+      // Cleanup
       if (this.leaseInterval) {
         clearInterval(this.leaseInterval)
       }
 
-      // Stop worktree lock renewal
-      if (this.worktreeLockInterval) {
-        clearInterval(this.worktreeLockInterval)
+      if (this.worktreeManager) {
+        this.worktreeManager.stopLockRenewal()
       }
 
-      // Flush any pending logs and cancel timer
-      this.flushLogs()
-      this.cancelLogFlush()
+      this.logManager.cleanup()
 
       // Handle worktree or traditional cleanup
-      if (this.useWorktree && this.worktreeRecord) {
-        await this.cleanupWorktree(this.phase === 'done')
+      if (this.useWorktree && this.worktreeManager) {
+        await this.worktreeManager.cleanup(this.logManager.getPhase() === 'done')
       } else {
         if (this.isCanceled() && this.policy.worker?.rollbackOnCancel) {
-          await this.rollbackWorkerChanges()
+          await this.branchManager?.rollbackWorkerChanges()
         }
-        // Restore any stashed changes
         await this.restoreStash()
       }
 
@@ -950,438 +601,34 @@ export class WorkerPipeline {
           const current = getCard(this.cardId)
           if (current?.status === 'in_progress') {
             this.log('Worker failed; moving card back to Ready so it can be retried.')
-            await this.moveToReady('worker_failed')
+            await this.cardStatusManager?.moveToReady('worker_failed')
           }
         } catch (error) {
           this.log(
-            `Failed to move card back to Ready after error: ${
-              error instanceof Error ? error.message : String(error)
-            }`
+            `Failed to move card back to Ready after error: ${error instanceof Error ? error.message : String(error)}`
           )
         }
       }
     }
   }
 
-  /**
-   * Setup a git worktree for isolated work.
-   * The flow is:
-   * 1. Check for existing worktree (and verify it's healthy)
-   * 2. Create DB record with lock already set (atomic lock acquisition)
-   * 3. Create git worktree
-   * 4. Verify worktree is healthy before marking as 'running'
-   */
-  private async setupWorktree(): Promise<boolean> {
-    if (!this.worktreeManager || !this.card || !this.project) return false
-
-    try {
-      const config = this.getWorktreeConfig()
-      const baseBranch = await this.getBaseBranch()
-      this.baseBranch = baseBranch
-
-      // Check if there's an existing worktree for this card
-      const existingWorktree = getWorktreeByCard(this.cardId)
-      if (existingWorktree) {
-        // Verify the existing worktree is healthy before reusing
-        const health = this.worktreeManager.verifyWorktree(
-          existingWorktree.worktree_path,
-          existingWorktree.branch_name
-        )
-
-        if (!health.healthy) {
-          this.log(`Existing worktree is unhealthy: ${health.error}. Will recreate.`)
-          // Mark as error and continue with recreate logic below.
-          updateWorktreeStatus(existingWorktree.id, 'error', health.error)
-        } else {
-          // Acquire lock to ensure exclusive use
-          const locked = acquireWorktreeLock(existingWorktree.id, this.workerId, 10)
-          if (!locked) {
-            this.log(`Worktree is locked by another worker: ${existingWorktree.worktree_path}`)
-            return false
-          }
-
-          this.log(`Reusing existing worktree: ${existingWorktree.worktree_path}`)
-          this.worktreeRecord = existingWorktree
-          this.worktreePath = existingWorktree.worktree_path
-          this.workerBranch = existingWorktree.branch_name
-          updateWorktreeJob(existingWorktree.id, this.jobId)
-          updateWorktreeStatus(existingWorktree.id, 'running')
-          return true
-        }
-      }
-
-      // Generate branch name using worktree naming convention
-      let branchName = generateWorktreeBranchName(
-        this.card.provider,
-        this.card.remote_number_or_iid,
-        this.card.title,
-        this.policy.worker?.worktree?.branchPrefix ?? 'patchwork/'
-      )
-
-      // If a record already exists for this branch name, reuse it instead of creating a duplicate.
-      // This avoids SQLITE UNIQUE constraint failures when a prior run crashed or left an errored record.
-      const existingByBranch = getWorktreeByBranch(this.projectId, branchName)
-      if (existingByBranch && existingByBranch.card_id === this.cardId) {
-        const health = this.worktreeManager.verifyWorktree(
-          existingByBranch.worktree_path,
-          existingByBranch.branch_name
-        )
-
-        // Acquire lock to ensure exclusive use (even if we're going to recreate).
-        const locked = acquireWorktreeLock(existingByBranch.id, this.workerId, 10)
-        if (!locked) {
-          this.log(`Worktree is locked by another worker: ${existingByBranch.worktree_path}`)
-          return false
-        }
-
-        if (health.healthy) {
-          this.log(`Reusing existing worktree: ${existingByBranch.worktree_path}`)
-          this.worktreeRecord = existingByBranch
-          this.worktreePath = existingByBranch.worktree_path
-          this.workerBranch = existingByBranch.branch_name
-          updateWorktreeJob(existingByBranch.id, this.jobId)
-          updateWorktreeStatus(existingByBranch.id, 'running')
-          return true
-        }
-
-        this.log(`Existing worktree is unhealthy: ${health.error}. Attempting to recreate.`)
-        this.worktreeRecord = existingByBranch
-        updateWorktreeJob(existingByBranch.id, this.jobId)
-        updateWorktreeStatus(existingByBranch.id, 'creating')
-      } else if (existingByBranch && existingByBranch.card_id !== this.cardId) {
-        // Extremely defensive: if another card already uses this branch, avoid the UNIQUE constraint by
-        // creating a deterministic suffix for this card.
-        branchName = `${branchName}-${this.cardId.slice(0, 6)}`
-      }
-
-      // Compute worktree path (after any branch name adjustments)
-      const worktreePath = this.worktreeManager.computeWorktreePath(branchName, config)
-
-      if (!this.worktreeRecord) {
-        // Create DB record with lock already acquired (prevents race condition)
-        // By setting lockedBy and lockExpiresAt during creation, we atomically claim the record
-        const now = new Date()
-        const lockExpiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString()
-
-        this.worktreeRecord = createWorktree({
-          projectId: this.projectId,
-          cardId: this.cardId,
-          jobId: this.jobId ?? undefined,
-          worktreePath,
-          branchName,
-          baseRef: `origin/${baseBranch}`,
-          status: 'creating',
-          lockedBy: this.workerId,
-          lockExpiresAt
-        })
-      }
-
-      this.log(`Creating worktree at: ${worktreePath}`)
-
-      // Create the worktree
-      const result = await this.worktreeManager.ensureWorktree(
-        worktreePath,
-        branchName,
-        baseBranch,
-        {
-          fetchFirst: true,
-          config
-        }
-      )
-
-      this.worktreePath = result.worktreePath
-      this.workerBranch = result.branchName
-
-      // Verify the worktree was created successfully before marking as running
-      const health = this.worktreeManager.verifyWorktree(result.worktreePath, result.branchName)
-      if (!health.healthy) {
-        const error = `Worktree verification failed: ${health.error}`
-        this.log(error)
-        updateWorktreeStatus(this.worktreeRecord.id, 'error', error)
-        return false
-      }
-
-      // Update status to running
-      updateWorktreeStatus(this.worktreeRecord.id, 'running')
-
-      this.log(`Worktree ${result.created ? 'created' : 'reused'}: ${result.branchName}`)
-      return true
-    } catch (error) {
-      this.log(`Failed to setup worktree: ${error}`)
-      if (this.worktreeRecord) {
-        updateWorktreeStatus(
-          this.worktreeRecord.id,
-          'error',
-          error instanceof Error ? error.message : String(error)
-        )
-      }
-      return false
-    }
-  }
-
-  /**
-   * Cleanup worktree after worker completes.
-   */
-  private async cleanupWorktree(success: boolean): Promise<void> {
-    if (!this.worktreeRecord || !this.worktreeManager) return
-
-    const cleanup = this.policy.worker?.worktree?.cleanup
-    const cleanupTiming = success ? cleanup?.onSuccess : cleanup?.onFailure
-
-    // Release lock (pass workerId to verify we own it)
-    releaseWorktreeLock(this.worktreeRecord.id, this.workerId)
-
-    switch (cleanupTiming) {
-      case 'immediate':
-        this.log('Cleaning up worktree immediately')
-        try {
-          await this.worktreeManager.removeWorktree(this.worktreePath!, {
-            force: true,
-            config: this.getWorktreeConfig()
-          })
-          updateWorktreeStatus(this.worktreeRecord.id, 'cleaned')
-        } catch (error) {
-          this.log(`Failed to cleanup worktree: ${error}`)
-          updateWorktreeStatus(
-            this.worktreeRecord.id,
-            'error',
-            error instanceof Error ? error.message : String(error)
-          )
-        }
-        break
-
-      case 'delay':
-        this.log('Worktree marked for delayed cleanup')
-        updateWorktreeStatus(this.worktreeRecord.id, 'cleanup_pending')
-        break
-
-      case 'never':
-        this.log('Worktree kept (cleanup=never)')
-        updateWorktreeStatus(this.worktreeRecord.id, 'ready')
-        break
-
-      default:
-        // Default: immediate on success, delay on failure
-        if (success) {
-          try {
-            await this.worktreeManager.removeWorktree(this.worktreePath!, {
-              force: true,
-              config: this.getWorktreeConfig()
-            })
-            updateWorktreeStatus(this.worktreeRecord.id, 'cleaned')
-          } catch (error) {
-            updateWorktreeStatus(this.worktreeRecord.id, 'cleanup_pending')
-          }
-        } else {
-          updateWorktreeStatus(this.worktreeRecord.id, 'cleanup_pending')
-        }
-    }
-  }
-
-  private async runProcessStreaming(options: {
-    command: string
-    args: string[]
-    cwd: string
-    timeoutMs: number
-    source: string
-    env?: NodeJS.ProcessEnv
-    stdin?: string
-  }): Promise<void> {
-    const { command, args, cwd, timeoutMs, source, env, stdin } = options
-
-    await new Promise<void>((resolve, reject) => {
-      const spawnCommand =
-        process.platform === 'win32'
-          ? resolveWindowsSpawnCommand(command, env ?? process.env)
-          : command
-
-      const child = spawn(spawnCommand, args, {
-        cwd,
-        env: env ?? process.env,
-        stdio: [stdin ? 'pipe' : 'ignore', 'pipe', 'pipe']
-      })
-
-      if (stdin) {
-        try {
-          child.stdin?.write(stdin)
-          child.stdin?.end()
-        } catch {
-          // ignore
-        }
-      }
-
-      let killedByTimeout = false
-      const timer = setTimeout(() => {
-        killedByTimeout = true
-        try {
-          if (process.platform === 'win32' && child.pid) {
-            execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], () => {})
-          } else {
-            child.kill('SIGKILL')
-          }
-        } catch {
-          // ignore
-        }
-      }, timeoutMs)
-
-      let killedByCancel = false
-      const cancelTimer = setInterval(() => {
-        if (!this.isCanceled()) return
-        if (!child.pid) return
-
-        killedByCancel = true
-        try {
-          if (process.platform === 'win32') {
-            execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], () => {})
-          } else {
-            child.kill('SIGTERM')
-            setTimeout(() => {
-              try {
-                child.kill('SIGKILL')
-              } catch {
-                // ignore
-              }
-            }, 2000)
-          }
-        } catch {
-          // ignore
-        }
-      }, 500)
-
-      const buffers = { stdout: '', stderr: '' }
-      const tail = { stdout: [] as string[], stderr: [] as string[] }
-      const pushTail = (stream: 'stdout' | 'stderr', line: string): void => {
-        if (!line) return
-        tail[stream].push(line)
-        if (tail[stream].length > 40) tail[stream].shift()
-      }
-
-      const flushLine = (line: string, stream: 'stdout' | 'stderr'): void => {
-        const trimmed = line.trimEnd()
-        if (trimmed) {
-          pushTail(stream, trimmed)
-          this.log(trimmed, { source, stream })
-        }
-      }
-
-      const onChunk = (stream: 'stdout' | 'stderr', chunk: Buffer): void => {
-        // Treat carriage returns as line breaks so progress updates are visible.
-        buffers[stream] += chunk.toString('utf-8').replace(/\r/g, '\n')
-        const parts = buffers[stream].split(/\r\n|\n|\r/)
-        buffers[stream] = parts.pop() ?? ''
-        for (const part of parts) flushLine(part, stream)
-      }
-
-      child.stdout?.on('data', (c: Buffer) => onChunk('stdout', c))
-      child.stderr?.on('data', (c: Buffer) => onChunk('stderr', c))
-
-      child.on('error', (err) => {
-        clearTimeout(timer)
-        clearInterval(cancelTimer)
-        reject(err)
-      })
-
-      child.on('close', (code) => {
-        clearTimeout(timer)
-        clearInterval(cancelTimer)
-
-        flushLine(buffers.stdout, 'stdout')
-        flushLine(buffers.stderr, 'stderr')
-
-        if (killedByCancel || this.isCanceled()) {
-          reject(new WorkerCanceledError())
-          return
-        }
-        if (killedByTimeout) {
-          reject(new Error(`${command} timed out after ${Math.ceil(timeoutMs / 1000)}s`))
-          return
-        }
-        if (code && code !== 0) {
-          const stderrTail = tail.stderr.length
-            ? `\n\n--- stderr (tail) ---\n${tail.stderr.join('\n')}`
-            : ''
-          const stdoutTail = tail.stdout.length
-            ? `\n\n--- stdout (tail) ---\n${tail.stdout.join('\n')}`
-            : ''
-          reject(new Error(`${command} exited with code ${code}${stderrTail}${stdoutTail}`))
-          return
-        }
-        resolve()
-      })
-    })
-  }
-
-  private async moveToInProgress(): Promise<void> {
-    updateCardStatus(this.cardId, 'in_progress')
-    createEvent(this.projectId, 'status_changed', this.cardId, {
-      from: this.card?.status,
-      to: 'in_progress',
-      source: 'worker'
-    })
-
-    // Update remote if adapter available
-    if (this.adapter && this.card?.remote_number_or_iid) {
-      const issueNumber = parseInt(this.card.remote_number_or_iid, 10)
-      const newLabel = this.adapter.getStatusLabel('in_progress')
-      const allLabels = this.adapter.getAllStatusLabels()
-      await this.adapter.updateLabels(
-        issueNumber,
-        [newLabel],
-        allLabels.filter((l) => l !== newLabel)
-      )
-    }
-  }
-
-  private async moveToReady(reason: string): Promise<void> {
-    const current = getCard(this.cardId)
-    if (!current) return
-    if (current.status === 'ready') return
-
-    updateCardStatus(this.cardId, 'ready')
-    createEvent(this.projectId, 'status_changed', this.cardId, {
-      from: current.status,
-      to: 'ready',
-      source: 'worker',
-      reason
-    })
-
-    // Update remote if adapter available
-    if (this.adapter && this.card?.remote_number_or_iid) {
-      const issueNumber = parseInt(this.card.remote_number_or_iid, 10)
-      const newLabel = this.adapter.getStatusLabel('ready')
-      const allLabels = this.adapter.getAllStatusLabels()
-      await this.adapter.updateLabels(
-        issueNumber,
-        [newLabel],
-        allLabels.filter((l) => l !== newLabel)
-      )
-    }
-  }
+  // ==================== Phase Implementations ====================
 
   private async checkWorkingTree(): Promise<boolean> {
     try {
-      const { stdout } = await execFileAsync('git', ['status', '--porcelain'], {
-        cwd: this.project!.local_path
-      })
-
-      if (stdout.trim() === '') {
+      if (await isWorkingTreeClean(this.project!.local_path)) {
         return true
       }
 
-      // Working tree has changes - check policy for how to handle
-      // For now, try to stash changes automatically
       this.log('Working tree has uncommitted changes, attempting to stash...')
-
       try {
-        await execFileAsync('git', ['stash', 'push', '-m', 'patchwork-worker-autostash'], {
-          cwd: this.project!.local_path
-        })
+        await stashPush(this.project!.local_path, 'patchwork-worker-autostash')
         this.log('Changes stashed successfully')
         return true
       } catch (stashError) {
         this.log(`Failed to stash changes: ${stashError}`)
-        // Log what files are dirty to help user understand
-        this.log(`Dirty files:\n${stdout.trim()}`)
+        const status = await getWorkingTreeStatus(this.project!.local_path)
+        this.log(`Dirty files:\n${status}`)
         return false
       }
     } catch {
@@ -1389,17 +636,10 @@ export class WorkerPipeline {
     }
   }
 
-  /**
-   * Restore stashed changes after worker completes (success or failure).
-   */
   private async restoreStash(): Promise<void> {
     try {
-      // Check if there's a stash with our marker
-      const { stdout } = await execFileAsync('git', ['stash', 'list'], {
-        cwd: this.project!.local_path
-      })
-
-      const line = stdout.split(/\r\n|\n|\r/).find((l) => l.includes('patchwork-worker-autostash'))
+      const stashOutput = await stashList(this.project!.local_path)
+      const line = stashOutput.split(/\r?\n|\n|\r/).find((l) => l.includes('patchwork-worker-autostash'))
       if (!line) return
 
       const m = line.match(/^(stash@\{\d+\}):/)
@@ -1407,21 +647,12 @@ export class WorkerPipeline {
       if (!ref) return
 
       this.log(`Restoring stashed changes from ${ref}...`)
-
       try {
-        // Use apply + drop instead of pop so we don't lose the stash if there are conflicts.
-        await execFileAsync('git', ['stash', 'apply', ref], {
-          cwd: this.project!.local_path
-        })
-
-        await execFileAsync('git', ['stash', 'drop', ref], {
-          cwd: this.project!.local_path
-        })
-
+        await stashApplyDrop(this.project!.local_path, ref)
         this.log('Stashed changes restored')
       } catch (error) {
         this.log(
-          `Warning: Failed to restore autostash (${ref}). The stash was kept; you can resolve conflicts and run: git stash pop ${ref}. Error: ${error}`
+          `Warning: Failed to restore autostash (${ref}). Error: ${error}`
         )
       }
     } catch (error) {
@@ -1429,1089 +660,8 @@ export class WorkerPipeline {
     }
   }
 
-  private async pullBaseBranch(): Promise<void> {
-    if (!this.project) return
-
-    const repoPath = this.project.local_path
-    const baseBranch = await this.getBaseBranch()
-    this.baseBranch = baseBranch
-
-    // Refresh remote refs for the base branch before pulling.
-    try {
-      await execFileAsync('git', ['fetch', 'origin', baseBranch], {
-        cwd: repoPath,
-        env: this.gitEnv()
-      })
-    } catch (error) {
-      this.log(`Base branch fetch warning: ${error}`)
-    }
-
-    // Avoid switching branches if the main worktree has uncommitted changes.
-    try {
-      const { stdout } = await execFileAsync('git', ['status', '--porcelain'], {
-        cwd: repoPath,
-        env: this.gitEnv()
-      })
-      if (stdout.trim()) {
-        this.log('Skipping base branch pull: working tree not clean')
-        return
-      }
-    } catch (error) {
-      this.log(`Base branch status warning: ${error}`)
-      return
-    }
-
-    if (!this.startingBranch) {
-      this.startingBranch = await this.getCurrentBranch()
-    }
-
-    // Check out the base branch (create tracking branch if missing) and pull latest.
-    try {
-      await execFileAsync('git', ['checkout', baseBranch], {
-        cwd: repoPath,
-        env: this.gitEnv()
-      })
-    } catch {
-      try {
-        await execFileAsync(
-          'git',
-          ['checkout', '--track', '-b', baseBranch, `origin/${baseBranch}`],
-          { cwd: repoPath, env: this.gitEnv() }
-        )
-      } catch (error) {
-        this.log(`Base branch checkout warning: ${error}`)
-        return
-      }
-    }
-
-    try {
-      await execFileAsync('git', ['pull', '--rebase', 'origin', baseBranch], {
-        cwd: repoPath,
-        env: this.gitEnv()
-      })
-      this.log(`Updated base branch from origin/${baseBranch}`)
-    } catch (error) {
-      this.log(`Base branch pull warning: ${error}`)
-    } finally {
-      if (this.startingBranch && this.startingBranch !== baseBranch) {
-        try {
-          await execFileAsync('git', ['checkout', this.startingBranch], {
-            cwd: repoPath,
-            env: this.gitEnv()
-          })
-        } catch (error) {
-          this.log(`Return to starting branch warning: ${error}`)
-        }
-      }
-    }
-  }
-
-  private async fetchLatest(): Promise<void> {
-    await this.pullBaseBranch()
-
-    try {
-      await execFileAsync('git', ['fetch', 'origin'], {
-        cwd: this.project!.local_path,
-        env: this.gitEnv()
-      })
-    } catch (error) {
-      this.log(`Fetch warning: ${error}`)
-    }
-  }
-
-  private async getCurrentBranch(): Promise<string | null> {
-    try {
-      const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
-        cwd: this.project!.local_path
-      })
-      const name = stdout.trim()
-      if (!name || name === 'HEAD') return null
-      return name
-    } catch {
-      return null
-    }
-  }
-
-  private async rollbackWorkerChanges(): Promise<void> {
-    if (!this.project) return
-    if (!this.workerBranch) return
-
-    this.log('Rollback enabled: reverting worker changes')
-
-    try {
-      if (this.baseHeadSha) {
-        await execFileAsync('git', ['reset', '--hard', this.baseHeadSha], {
-          cwd: this.project.local_path
-        })
-      } else {
-        await execFileAsync('git', ['reset', '--hard'], {
-          cwd: this.project.local_path
-        })
-      }
-    } catch (error) {
-      this.log(`Rollback warning: reset failed: ${error}`)
-    }
-
-    const targetBranch = this.startingBranch || this.baseBranch || 'main'
-    try {
-      await execFileAsync('git', ['checkout', targetBranch], {
-        cwd: this.project.local_path
-      })
-    } catch (error) {
-      this.log(`Rollback warning: checkout failed: ${error}`)
-    }
-
-    try {
-      if (this.workerBranch !== targetBranch) {
-        await execFileAsync('git', ['branch', '-D', this.workerBranch], {
-          cwd: this.project.local_path
-        })
-      }
-    } catch (error) {
-      this.log(`Rollback warning: branch delete failed: ${error}`)
-    }
-  }
-
-  private generateBranchName(): string {
-    const pattern = this.policy.worker?.branchPattern || 'kanban/{id}-{slug}'
-    const issueId = this.card?.remote_number_or_iid || this.cardId.slice(0, 8)
-    const titleSlug = this.card ? slugify(this.card.title) : 'task'
-
-    return pattern.replace('{id}', issueId).replace('{slug}', titleSlug.slice(0, 30))
-  }
-
-  private async createBranch(branchName: string): Promise<void> {
-    const baseBranch = await this.getBaseBranch()
-    this.baseBranch = baseBranch
-
-    try {
-      if (!this.startingBranch) {
-        this.startingBranch = await this.getCurrentBranch()
-      }
-
-      // If branch already exists, just check it out and continue work there.
-      if (await this.localBranchExists(branchName)) {
-        const checkedOutAt = await this.getWorktreePathForBranch(branchName)
-        if (
-          checkedOutAt &&
-          this.normalizePath(checkedOutAt) !== this.normalizePath(this.project!.local_path)
-        ) {
-          throw new Error(
-            `Branch ${branchName} is already checked out in another worktree: ${checkedOutAt}`
-          )
-        }
-        this.log(`Branch exists locally; checking out: ${branchName}`)
-        await execFileAsync('git', ['checkout', branchName], {
-          cwd: this.project!.local_path
-        })
-        await this.updateBranchFromOrigin(branchName)
-        this.workerBranch = branchName
-        return
-      }
-
-      // Refresh remote refs for this branch name (best-effort) so the remote existence check is accurate.
-      try {
-        await execFileAsync('git', ['fetch', 'origin', branchName], {
-          cwd: this.project!.local_path,
-          env: this.gitEnv()
-        })
-      } catch {
-        // ignore
-      }
-
-      // If remote branch exists, create a local tracking branch and continue there.
-      if (await this.remoteBranchExists(branchName)) {
-        const checkedOutAt = await this.getWorktreePathForBranch(branchName)
-        if (
-          checkedOutAt &&
-          this.normalizePath(checkedOutAt) !== this.normalizePath(this.project!.local_path)
-        ) {
-          throw new Error(
-            `Branch ${branchName} is already checked out in another worktree: ${checkedOutAt}`
-          )
-        }
-        this.log(`Branch exists on origin; creating local tracking branch: ${branchName}`)
-        await execFileAsync(
-          'git',
-          ['checkout', '--track', '-b', branchName, `origin/${branchName}`],
-          { cwd: this.project!.local_path }
-        )
-        await this.updateBranchFromOrigin(branchName)
-        this.workerBranch = branchName
-        return
-      }
-
-      // Checkout base branch and pull
-      await execFileAsync('git', ['checkout', baseBranch], {
-        cwd: this.project!.local_path,
-        env: this.gitEnv()
-      })
-      await execFileAsync('git', ['pull', 'origin', baseBranch], {
-        cwd: this.project!.local_path,
-        env: this.gitEnv()
-      })
-      try {
-        const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], {
-          cwd: this.project!.local_path
-        })
-        this.baseHeadSha = stdout.trim() || null
-      } catch {
-        this.baseHeadSha = null
-      }
-      // Create and checkout new branch
-      await execFileAsync('git', ['checkout', '-b', branchName], {
-        cwd: this.project!.local_path
-      })
-      this.workerBranch = branchName
-    } catch (error) {
-      this.log(`Branch creation warning: ${error}`)
-      throw error
-    }
-  }
-
-  private async updateBranchFromOrigin(branchName: string): Promise<void> {
-    // Avoid disruptive pulls if the working tree is dirty (shouldn't happen, but be safe).
-    try {
-      const { stdout } = await execFileAsync('git', ['status', '--porcelain'], {
-        cwd: this.project!.local_path,
-        env: this.gitEnv()
-      })
-      if (stdout.trim()) {
-        this.log('Skipping branch update: working tree not clean')
-        return
-      }
-    } catch {
-      // ignore
-    }
-
-    // Fetch remote ref for the branch (best-effort).
-    try {
-      await execFileAsync('git', ['fetch', 'origin', branchName], {
-        cwd: this.project!.local_path,
-        env: this.gitEnv()
-      })
-    } catch {
-      // ignore
-    }
-
-    // If the remote branch exists, pull/rebase so we don't get non-fast-forward on push.
-    if (!(await this.remoteBranchExists(branchName))) return
-
-    try {
-      await execFileAsync('git', ['pull', '--rebase', 'origin', branchName], {
-        cwd: this.project!.local_path,
-        env: this.gitEnv()
-      })
-      this.log(`Updated branch from origin/${branchName}`)
-    } catch (error) {
-      this.log(`Branch update warning: ${error}`)
-      throw error
-    }
-  }
-
-  private async getWorktreePathForBranch(branchName: string): Promise<string | null> {
-    try {
-      const { stdout } = await execFileAsync('git', ['worktree', 'list', '--porcelain'], {
-        cwd: this.project!.local_path
-      })
-      const entries = stdout.split(/\r?\n\r?\n/).filter((e) => e.trim())
-      for (const entry of entries) {
-        const lines = entry.split(/\r?\n/)
-        let worktreePath: string | null = null
-        let branch: string | null = null
-        for (const line of lines) {
-          if (line.startsWith('worktree ')) worktreePath = line.slice('worktree '.length).trim()
-          if (line.startsWith('branch ')) branch = line.slice('branch '.length).trim()
-        }
-        if (worktreePath && branch === `refs/heads/${branchName}`) return worktreePath
-      }
-      return null
-    } catch {
-      return null
-    }
-  }
-
-  private async getBaseBranch(): Promise<string> {
-    // Prefer explicit worker base branch, fallback to legacy worktree setting for compatibility.
-    const configured =
-      (this.policy.worker?.baseBranch || '').trim() ||
-      (this.policy.worker?.worktree?.baseBranch || '').trim()
-    if (configured) return configured
-
-    // Try to read default from origin/HEAD.
-    try {
-      const { stdout } = await execFileAsync('git', ['symbolic-ref', 'refs/remotes/origin/HEAD'], {
-        cwd: this.project!.local_path
-      })
-      const ref = stdout.trim()
-      if (ref) return ref.replace(/^refs\/remotes\/origin\//, '')
-    } catch {
-      // ignore
-    }
-
-    // Try common branch names.
-    for (const candidate of ['main', 'master', 'develop']) {
-      try {
-        await execFileAsync('git', ['rev-parse', '--verify', `refs/heads/${candidate}`], {
-          cwd: this.project!.local_path
-        })
-        return candidate
-      } catch {
-        // ignore
-      }
-    }
-
-    return 'main'
-  }
-
-  private async localBranchExists(branchName: string): Promise<boolean> {
-    try {
-      await execFileAsync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branchName}`], {
-        cwd: this.project!.local_path
-      })
-      return true
-    } catch {
-      return false
-    }
-  }
-
-  private async remoteBranchExists(branchName: string): Promise<boolean> {
-    try {
-      await execFileAsync(
-        'git',
-        ['show-ref', '--verify', '--quiet', `refs/remotes/origin/${branchName}`],
-        { cwd: this.project!.local_path }
-      )
-      return true
-    } catch {
-      return false
-    }
-  }
-
-  /**
-   * Generate a minimal plan for 'skip' mode.
-   * Returns a simple task summary without detailed planning.
-   */
-  private generateMinimalPlan(): string {
-    if (!this.card) return 'No card context available.'
-
-    return `
-# Task Summary
-
-**Title:** ${this.card.title}
-
-**Description:** ${this.card.body || 'No description provided'}
-
-**Commands:** ${(this.policy.worker?.allowedCommands || []).join(', ') || 'None specified'}
-
-*Planning skipped - proceeding directly to implementation.*
-`.trim()
-  }
-
-  /**
-   * Generate implementation plan based on planning mode.
-   * - lite: Basic plan with task overview and high-level approach
-   * - spec: Detailed specification with file analysis and dependencies
-   * - full: Comprehensive plan with risk analysis and verification steps
-   */
-  private async generatePlan(mode: PlanningMode): Promise<string | null> {
-    if (!this.card) return null
-
-    switch (mode) {
-      case 'lite':
-        return this.generateLitePlan()
-      case 'spec':
-        return this.generateSpecPlan()
-      case 'full':
-        return this.generateFullPlan()
-      default:
-        return this.generateLitePlan()
-    }
-  }
-
-  /**
-   * Generate a lite plan - basic overview and approach.
-   */
-  private generateLitePlan(): string {
-    return `
-# Implementation Plan (Lite)
-
-## Task
-${this.card!.title}
-
-## Description
-${this.card!.body || 'No description provided'}
-
-## Approach
-1. Analyze the requirements
-2. Identify files to modify
-3. Implement changes
-4. Run verification commands
-5. Commit and push
-
-## Commands to Run
-${(this.policy.worker?.allowedCommands || []).map((c) => `- ${c}`).join('\n') || '- None specified'}
-`.trim()
-  }
-
-  /**
-   * Generate a spec plan - detailed specification with file analysis.
-   */
-  private generateSpecPlan(): string {
-    const lintCmd = this.policy.worker?.lintCommand
-    const testCmd = this.policy.worker?.testCommand
-    const buildCmd = this.policy.worker?.buildCommand
-
-    return `
-# Implementation Specification (Spec)
-
-## Task
-${this.card!.title}
-
-## Description
-${this.card!.body || 'No description provided'}
-
-## Analysis Requirements
-Before implementing, analyze the following:
-1. Identify all files that need to be modified
-2. List any new files that need to be created
-3. Check for existing patterns in the codebase to follow
-4. Identify any dependencies or related components
-
-## Implementation Steps
-1. **Preparation**
-   - Review existing code structure
-   - Identify integration points
-
-2. **Core Changes**
-   - Implement the main functionality
-   - Follow existing code patterns and conventions
-
-3. **Integration**
-   - Wire up new components
-   - Update any necessary imports/exports
-
-4. **Testing**
-   - Add or update tests as needed
-   - Verify existing tests still pass
-
-## Verification
-${lintCmd ? `- Lint: \`${lintCmd}\`` : ''}
-${testCmd ? `- Test: \`${testCmd}\`` : ''}
-${buildCmd ? `- Build: \`${buildCmd}\`` : ''}
-
-## Allowed Commands
-${(this.policy.worker?.allowedCommands || []).map((c) => `- ${c}`).join('\n') || '- None specified'}
-
-## Forbidden Paths
-${(this.policy.worker?.forbidPaths || []).map((p) => `- ${p}`).join('\n') || '- None'}
-`.trim()
-  }
-
-  /**
-   * Generate a full plan - comprehensive with risk analysis.
-   */
-  private generateFullPlan(): string {
-    const lintCmd = this.policy.worker?.lintCommand
-    const testCmd = this.policy.worker?.testCommand
-    const buildCmd = this.policy.worker?.buildCommand
-
-    return `
-# Comprehensive Implementation Plan (Full)
-
-## Task
-${this.card!.title}
-
-## Description
-${this.card!.body || 'No description provided'}
-
-## Pre-Implementation Analysis
-Before making any changes:
-1. **Codebase Exploration**
-   - Map the relevant parts of the codebase
-   - Identify all files that might be affected
-   - Understand the data flow and dependencies
-
-2. **Pattern Recognition**
-   - Identify coding patterns used in similar features
-   - Note any architectural conventions
-   - Check for reusable components or utilities
-
-3. **Risk Assessment**
-   - Identify potential breaking changes
-   - Note any performance considerations
-   - Consider backward compatibility
-
-## Implementation Phases
-
-### Phase 1: Foundation
-- Set up any necessary infrastructure
-- Create new files/modules if needed
-- Establish type definitions
-
-### Phase 2: Core Implementation
-- Implement the main functionality
-- Follow TDD where appropriate
-- Keep changes atomic and reviewable
-
-### Phase 3: Integration
-- Connect new code with existing systems
-- Update any configuration files
-- Wire up UI components if applicable
-
-### Phase 4: Polish
-- Handle edge cases
-- Add error handling
-- Improve code clarity
-
-## Testing Strategy
-1. **Unit Tests**
-   - Test individual functions/components
-   - Cover edge cases
-
-2. **Integration Tests**
-   - Test component interactions
-   - Verify data flow
-
-3. **Manual Verification**
-   - Test the full user flow
-   - Verify in development environment
-
-## Verification Commands
-${lintCmd ? `- Lint: \`${lintCmd}\`` : ''}
-${testCmd ? `- Test: \`${testCmd}\`` : ''}
-${buildCmd ? `- Build: \`${buildCmd}\`` : ''}
-
-## Constraints
-### Allowed Commands
-${(this.policy.worker?.allowedCommands || []).map((c) => `- ${c}`).join('\n') || '- None specified'}
-
-### Forbidden Paths
-${(this.policy.worker?.forbidPaths || []).map((p) => `- ${p}`).join('\n') || '- None'}
-
-## Expected Outcomes
-- All acceptance criteria from the task are met
-- All tests pass (existing and new)
-- Code follows project conventions
-- No regressions introduced
-
-## Risks and Mitigations
-| Risk | Mitigation |
-|------|------------|
-| Breaking existing functionality | Run full test suite before and after |
-| Performance degradation | Profile critical paths if applicable |
-| Incomplete implementation | Validate against all acceptance criteria |
-
-## Rollback Plan
-If issues are discovered after merge:
-1. Revert the PR/MR
-2. Document what went wrong
-3. Create follow-up issue for proper fix
-`.trim()
-  }
-
-  private async runAI(plan: string): Promise<boolean> {
-    if (!this.project || !this.card) return false
-
-    const toolPreference = this.policy.worker?.toolPreference || 'auto'
-    const maxMinutes = this.policy.worker?.maxMinutes || 25
-    const timeoutMs = maxMinutes * 60 * 1000
-
-    // Detect available tools
-    const hasClaude = await this.checkCommand('claude')
-    const hasCodex = await this.checkCommand('codex')
-
-    let tool: 'claude' | 'codex' | null = null
-    if (toolPreference === 'claude' && hasClaude) tool = 'claude'
-    else if (toolPreference === 'codex' && hasCodex) tool = 'codex'
-    else if (toolPreference === 'auto') {
-      if (hasClaude) tool = 'claude'
-      else if (hasCodex) tool = 'codex'
-    }
-
-    if (!tool) {
-      this.log('No AI tool available (claude or codex)')
-      // Create a stub file with the plan - PR will be created as a placeholder
-      const planPath = join(this.getWorkingDir(), 'IMPLEMENTATION_PLAN.md')
-      const fullPlan = `# Implementation Plan (AI tool not available)
-
-## Task
-${this.card.title}
-
-## Description
-${this.card.body || 'No description'}
-
-## Plan
-${plan}
-
-## Note
-This PR was created without AI implementation because no AI tool (Claude Code or Codex) was detected.
-Please implement the changes manually following the plan above.
-
-## Commands
-Allowed: ${(this.policy.worker?.allowedCommands || []).join(', ')}
-Forbidden paths: ${(this.policy.worker?.forbidPaths || []).join(', ')}
-`
-      writeFileSync(planPath, fullPlan)
-      return true // Return true to continue with stub PR
-    }
-
-    try {
-      this.log(`Running ${tool} with ${maxMinutes} minute timeout`)
-
-      // Check for any follow-up instructions before building prompt
-      this.checkFollowUpInstructions()
-
-      // Build the prompt for the AI tool
-      const prompt = await this.buildAIPrompt(plan)
-
-      if (tool === 'claude') {
-        try {
-          await this.runClaudeCode(prompt, timeoutMs)
-        } catch (error) {
-          if (hasCodex && this.isClaudeRetryableLimitError(error)) {
-            this.log('Claude failed due to rate/usage limit; falling back to Codex...')
-            await this.runCodex(prompt, timeoutMs)
-          } else {
-            throw error
-          }
-        }
-      } else if (tool === 'codex') {
-        await this.runCodex(prompt, timeoutMs)
-      }
-
-      // Mark any follow-up instructions as applied after successful AI run
-      this.markFollowUpInstructionsApplied()
-
-      this.log('AI implementation completed')
-      return true
-    } catch (error) {
-      this.log(`AI error: ${error}`)
-      // On AI failure, still create the plan file so PR can be created as WIP
-      const planPath = join(this.getWorkingDir(), 'IMPLEMENTATION_PLAN.md')
-      const fullPlan = `# Implementation Plan (AI execution failed)
-
-## Task
-${this.card.title}
-
-## Description
-${this.card.body || 'No description'}
-
-## Plan
-${plan}
-
-## Error
-AI execution failed: ${error instanceof Error ? error.message : String(error)}
-
-Please implement the changes manually following the plan above.
-`
-      writeFileSync(planPath, fullPlan)
-      return false
-    }
-  }
-
-  private isClaudeRetryableLimitError(error: unknown): boolean {
-    const msg = error instanceof Error ? error.message : String(error)
-    const s = msg.toLowerCase()
-    return (
-      s.includes('rate limit') ||
-      s.includes('ratelimit') ||
-      s.includes('rate_limit') ||
-      s.includes("you've hit your limit") ||
-      s.includes('you\u2019ve hit your limit') ||
-      s.includes('limit reached') ||
-      s.includes('quota') ||
-      s.includes('insufficient_quota') ||
-      s.includes('too many requests') ||
-      s.includes('http 429') ||
-      s.includes('status 429') ||
-      s.includes(' usage limit') ||
-      s.includes('usage limit') ||
-      s.includes('overloaded') ||
-      s.includes('exceeded') ||
-      s.includes('429')
-    )
-  }
-
-  private async buildAIPrompt(plan: string): Promise<string> {
-    const allowedCommands = this.policy.worker?.allowedCommands || []
-    const forbidPaths = this.policy.worker?.forbidPaths || []
-    const workingDir = this.getWorkingDir()
-    const repoRoot = this.project!.local_path
-
-    let repoContext = 'Project memory unavailable.'
-    try {
-      const bundle = await buildContextBundle(
-        repoRoot,
-        `${this.card!.title}\n${this.card!.body || ''}`
-      )
-
-      // Persist per-run context for audit and crash recovery.
-      if (this.jobId) {
-        try {
-          const runDir = ensureRunDir(repoRoot, this.jobId)
-          const runContextPath = join(runDir, 'last_context.json')
-          writeFileSync(runContextPath, JSON.stringify(bundle, null, 2), { encoding: 'utf-8' })
-          if (this.progress) {
-            updateWorkerProgress(this.progress.id, { progressFilePath: runContextPath })
-          }
-        } catch {
-          // ignore
-        }
-      }
-
-      repoContext = buildPromptContext(repoRoot, bundle)
-    } catch {
-      // ignore
-    }
-
-    return `# Task: Implement the following issue
-
-## Issue Title
-${this.card!.title}
-
-## Issue Description
-${this.card!.body || 'No description provided'}
-
-## Implementation Plan
-${plan}
-
-## Important Constraints
-- Only use these commands: ${allowedCommands.join(', ') || 'none specified'}
-- Do NOT modify these paths: ${forbidPaths.join(', ') || 'none'}
-- Working directory: ${workingDir}
-- Repo root: ${repoRoot}
-- After implementation, run the verification commands if they exist
-
-## Verification Commands
-${this.policy.worker?.lintCommand ? `- Lint: ${this.policy.worker.lintCommand}` : ''}
-${this.policy.worker?.testCommand ? `- Test: ${this.policy.worker.testCommand}` : ''}
-${this.policy.worker?.buildCommand ? `- Build: ${this.policy.worker.buildCommand}` : ''}
-
-## Project Memory (from .patchwork)
-${repoContext}
-${this.buildFollowUpContext()}
-Please implement the changes now.`
-  }
-
-  private async runClaudeCode(prompt: string, timeoutMs: number): Promise<void> {
-    this.log('Invoking Claude Code CLI...')
-
-    const workingDir = this.getWorkingDir()
-
-    // Write prompt to a temp file for Claude to read
-    const promptPath = join(workingDir, '.patchwork-prompt.md')
-    writeFileSync(promptPath, prompt)
-
-    try {
-      await this.runProcessStreaming({
-        command: 'claude',
-        args: ['--print', '--dangerously-skip-permissions', '-p', prompt],
-        cwd: workingDir,
-        timeoutMs,
-        source: 'claude',
-        env: {
-          ...process.env,
-          CLAUDE_CODE_ENTRYPOINT: 'cli'
-        }
-      })
-    } finally {
-      // Clean up prompt file
-      try {
-        const { unlinkSync } = require('fs')
-        unlinkSync(promptPath)
-      } catch {
-        // Ignore cleanup errors
-      }
-    }
-  }
-
-  private async runCodex(prompt: string, timeoutMs: number): Promise<void> {
-    this.log('Invoking Codex CLI...')
-
-    const workingDir = this.getWorkingDir()
-
-    // Write prompt to a temp file
-    const promptPath = join(workingDir, '.patchwork-prompt.md')
-    writeFileSync(promptPath, prompt)
-
-    try {
-      await this.runProcessStreaming({
-        command: 'codex',
-        args: ['exec', '--full-auto', '-'],
-        cwd: workingDir,
-        timeoutMs,
-        source: 'codex',
-        stdin: prompt
-      })
-    } finally {
-      // Clean up prompt file
-      try {
-        const { unlinkSync } = require('fs')
-        unlinkSync(promptPath)
-      } catch {
-        // Ignore cleanup errors
-      }
-    }
-  }
-
-  private async checkCommand(cmd: string): Promise<boolean> {
-    try {
-      if (process.platform === 'win32') {
-        await execFileAsync('where', [cmd])
-      } else {
-        await execFileAsync('which', [cmd])
-      }
-      return true
-    } catch {
-      return false
-    }
-  }
-
-  private async runChecks(): Promise<boolean> {
-    const lintCmd = this.policy.worker?.lintCommand
-    const testCmd = this.policy.worker?.testCommand
-    const buildCmd = this.policy.worker?.buildCommand
-
-    try {
-      if (lintCmd) {
-        this.log(`Running lint: ${lintCmd}`)
-        await this.runCommand(lintCmd)
-      }
-
-      if (testCmd) {
-        this.log(`Running tests: ${testCmd}`)
-        await this.runCommand(testCmd)
-      }
-
-      if (buildCmd) {
-        this.log(`Running build: ${buildCmd}`)
-        await this.runCommand(buildCmd)
-      }
-
-      return true
-    } catch (error) {
-      this.log(`Check failed: ${error}`)
-      return false
-    }
-  }
-
-  private async runE2EPhase(): Promise<E2EResult> {
-    // Build pipeline context for E2E phase
-    const ctx = {
-      projectId: this.projectId,
-      cardId: this.cardId,
-      jobId: this.jobId,
-      workerId: this.workerId,
-      project: this.project,
-      card: this.card,
-      policy: this.policy,
-      adapter: this.adapter,
-      startingBranch: this.startingBranch,
-      baseBranch: this.baseBranch,
-      baseHeadSha: null,
-      workerBranch: this.workerBranch,
-      useWorktree: this.useWorktree,
-      worktreeManager: this.worktreeManager,
-      worktreeRecord: this.worktreeRecord,
-      worktreePath: this.worktreePath,
-      taskDecomposer: this.taskDecomposer,
-      subtasks: this.subtasks,
-      progress: this.progress,
-      phase: 'e2e',
-      logs: this.logs,
-      lastPlan: undefined,
-      lastPersistMs: 0
-    }
-
-    return runE2EPhaseImpl(
-      ctx,
-      (message, meta) => this.log(message, meta),
-      () => this.isCanceled()
-    )
-  }
-
-  private async runCommand(cmd: string): Promise<void> {
-    const [command, ...args] = cmd.split(' ')
-    await this.runProcessStreaming({
-      command,
-      args,
-      cwd: this.getWorkingDir(),
-      timeoutMs: 5 * 60 * 1000,
-      source: command
-    })
-  }
-
-  private async commitAndPush(branchName: string): Promise<void> {
-    const commitMsg =
-      this.policy.worker?.commitMessage
-        ?.replace('{issue}', this.card?.remote_number_or_iid || '')
-        .replace('{title}', this.card?.title || '') ||
-      `#${this.card?.remote_number_or_iid} ${this.card?.title}`
-
-    const workingDir = this.getWorkingDir()
-
-    try {
-      // Add all changes
-      await execFileAsync('git', ['add', '-A'], {
-        cwd: workingDir,
-        env: this.gitEnv()
-      })
-
-      // Check if there are changes
-      const { stdout } = await execFileAsync('git', ['status', '--porcelain'], {
-        cwd: workingDir,
-        env: this.gitEnv()
-      })
-
-      if (stdout.trim()) {
-        // Commit
-        await execFileAsync('git', ['commit', '-m', commitMsg], {
-          cwd: workingDir,
-          env: this.gitEnv()
-        })
-      }
-
-      // If the branch already exists upstream, rebase onto the latest remote before pushing to avoid non-fast-forward.
-      try {
-        await this.updateBranchFromOrigin(branchName)
-      } catch {
-        // If we can't update cleanly, let push surface the issue with a clear error.
-      }
-
-      // Push
-      await execFileAsync('git', ['push', '-u', 'origin', branchName], {
-        cwd: workingDir,
-        env: this.gitEnv()
-      })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      if (
-        message.includes('could not read Username') ||
-        message.includes('Authentication failed')
-      ) {
-        this.log(
-          'Git push failed: missing credentials. Configure a credential helper or ensure the remote URL includes an auth token.'
-        )
-      }
-      this.log(`Commit/push warning: ${message}`)
-      throw error
-    }
-  }
-
-  private async createPR(
-    branchName: string,
-    plan: string,
-    checksPass: boolean
-  ): Promise<{ number: number; url: string; existing?: boolean } | null> {
-    if (!this.adapter || !this.card) return null
-
-    const linkedType = this.adapter.providerKey === 'github' ? 'pr' : 'mr'
-    const existingLink = listCardLinks(this.cardId).find((link) => link.linked_type === linkedType)
-    if (existingLink?.linked_url) {
-      const url = existingLink.linked_url
-      const numberMatch =
-        linkedType === 'pr'
-          ? url.match(/\/pull\/(\d+)/)
-          : url.match(/\/merge_requests\/(\d+)/)
-      const number = numberMatch ? parseInt(numberMatch[1], 10) : 0
-      return { number, url, existing: true }
-    }
-
-    const title = checksPass ? this.card.title : `[WIP] ${this.card.title}`
-
-    const body = `
-## Summary
-${this.card.body || 'Automated implementation'}
-
-## Plan
-${plan}
-
-## Testing
-${checksPass ? 'All checks passed' : 'Some checks failed - needs review'}
-
----
-Closes #${this.card.remote_number_or_iid}
-
-_Automated by Patchwork_
-`.trim()
-
-    const baseBranch = this.baseBranch ?? (await this.getBaseBranch())
-
-    // Get status label to attach to PR on creation
-    const statusLabel = this.adapter.getStatusLabel('in_review')
-
-    // Use unified interface - works for both GitHub and GitLab
-    const result = await this.adapter.createPullRequest(title, body, branchName, baseBranch, [statusLabel])
-    return result ? { ...result, existing: false } : null
-  }
-
-  private async moveToInReview(prUrl: string, created = true): Promise<void> {
-    updateCardStatus(this.cardId, 'in_review')
-
-    // Create card link
-    const linkedType = this.adapter?.providerKey === 'github' ? 'pr' : 'mr'
-    ensureCardLink(this.cardId, linkedType, prUrl)
-
-    createEvent(this.projectId, 'pr_created', this.cardId, {
-      prUrl,
-      status: 'in_review',
-      existing: !created
-    })
-
-    // Update remote labels
-    if (this.adapter && this.card?.remote_number_or_iid) {
-      const issueNumber = parseInt(this.card.remote_number_or_iid, 10)
-      const newLabel = this.adapter.getStatusLabel('in_review')
-      const allLabels = this.adapter.getAllStatusLabels()
-      await this.adapter.updateLabels(
-        issueNumber,
-        [newLabel],
-        allLabels.filter((l) => l !== newLabel)
-      )
-
-      // Comment on issue with PR link
-      if (created) {
-        await this.adapter.commentOnIssue(
-          issueNumber,
-          `PR created: ${prUrl}\n\n_Automated by Patchwork_`
-        )
-      }
-    }
-  }
-
-  /**
-   * Run branch synchronization phase.
-   * Syncs the card's branch with main and handles conflicts.
-   */
   private async runBranchSync(branchName: string): Promise<BranchSyncResult> {
-    // Build pipeline context for branch sync phase
-    const ctx = {
-      projectId: this.projectId,
-      cardId: this.cardId,
-      jobId: this.jobId,
-      workerId: this.workerId,
-      project: this.project,
-      card: this.card,
-      policy: this.policy,
-      adapter: this.adapter,
-      startingBranch: this.startingBranch,
-      baseBranch: this.baseBranch,
-      baseHeadSha: null,
-      workerBranch: this.workerBranch,
-      useWorktree: this.useWorktree,
-      worktreeManager: this.worktreeManager,
-      worktreeRecord: this.worktreeRecord,
-      worktreePath: this.worktreePath,
-      taskDecomposer: this.taskDecomposer,
-      subtasks: this.subtasks,
-      progress: this.progress,
-      phase: 'branch_sync',
-      logs: this.logs,
-      lastPlan: undefined,
-      lastPersistMs: 0
-    }
-
+    const ctx = this.buildPipelineContext()
     return runBranchSyncPhase(
       ctx,
       branchName,
@@ -2520,15 +670,9 @@ _Automated by Patchwork_
     )
   }
 
-  /**
-   * Run task decomposition to break complex tasks into subtasks.
-   * This phase checks if the task should be decomposed and creates subtasks
-   * either locally or as remote issues (GitHub/GitLab).
-   */
   private async runDecomposition(): Promise<void> {
     if (!this.taskDecomposer || !this.card) return
 
-    // Check if we already have subtasks
     if (this.taskDecomposer.hasExistingSubtasks(this.cardId)) {
       this.subtasks = this.taskDecomposer.getExistingSubtasks(this.cardId)
       this.log(`Found ${this.subtasks.length} existing subtasks`)
@@ -2551,11 +695,9 @@ _Automated by Patchwork_
         this.log(`Reasoning: ${analysis.reasoning}`)
       }
 
-      // Create subtasks in DB and optionally as remote issues
       const result = await this.taskDecomposer.createSubtasks(this.card, analysis.subtasks)
       this.subtasks = result.subtasks
 
-      // Log decomposition event
       createEvent(this.projectId, 'task_decomposed', this.cardId, {
         subtaskCount: this.subtasks.length,
         remoteIssuesCreated: result.remoteIssuesCreated,
@@ -2567,15 +709,123 @@ _Automated by Patchwork_
       )
     } catch (error) {
       this.log(`Decomposition failed: ${error instanceof Error ? error.message : String(error)}`)
-      // Non-fatal - continue with the main task
     }
   }
 
-  /**
-   * Run AI implementation in iterative mode.
-   * Each iteration works on a portion of the task, commits progress,
-   * and continues until the task is complete or max iterations reached.
-   */
+  private async runAIPhase(plan: string): Promise<boolean> {
+    // Check for follow-up instructions
+    this.approvalManager?.checkFollowUpInstructions()
+
+    const ctx = this.buildPipelineContext()
+    const success = await runAI(
+      ctx,
+      plan,
+      (msg, meta) => this.log(msg, meta),
+      () => this.isCanceled()
+    )
+
+    // Mark follow-up instructions as applied
+    this.approvalManager?.markFollowUpInstructionsApplied()
+
+    return success
+  }
+
+  private async runChecksPhase(): Promise<boolean> {
+    const ctx = this.buildPipelineContext()
+    return runChecks(
+      ctx,
+      (msg, meta) => this.log(msg, meta),
+      () => this.isCanceled()
+    )
+  }
+
+  private async runE2EPhase(): Promise<E2EResult> {
+    const ctx = this.buildPipelineContext()
+    return runE2EPhaseImpl(
+      ctx,
+      (msg, meta) => this.log(msg, meta),
+      () => this.isCanceled()
+    )
+  }
+
+  private async commitAndPush(branchName: string): Promise<void> {
+    const commitMsg =
+      this.policy.worker?.commitMessage
+        ?.replace('{issue}', this.card?.remote_number_or_iid || '')
+        .replace('{title}', this.card?.title || '') ||
+      `#${this.card?.remote_number_or_iid} ${this.card?.title}`
+
+    const workingDir = this.getWorkingDir()
+
+    try {
+      await stageAll(workingDir)
+
+      if (!(await isWorkingTreeClean(workingDir))) {
+        await commit(workingDir, commitMsg)
+      }
+
+      // Update from origin before push
+      try {
+        await this.branchManager?.updateBranchFromOrigin(branchName)
+      } catch {
+        // Let push surface the issue
+      }
+
+      await push(workingDir, branchName)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (message.includes('could not read Username') || message.includes('Authentication failed')) {
+        this.log('Git push failed: missing credentials.')
+      }
+      this.log(`Commit/push warning: ${message}`)
+      throw error
+    }
+  }
+
+  private async createPR(
+    branchName: string,
+    plan: string,
+    checksPass: boolean
+  ): Promise<{ number: number; url: string; existing?: boolean } | null> {
+    if (!this.adapter || !this.card) return null
+
+    const linkedType = this.adapter.providerKey === 'github' ? 'pr' : 'mr'
+    const existingLink = listCardLinks(this.cardId).find((link) => link.linked_type === linkedType)
+    if (existingLink?.linked_url) {
+      const url = existingLink.linked_url
+      const numberMatch =
+        linkedType === 'pr' ? url.match(/\/pull\/(\d+)/) : url.match(/\/merge_requests\/(\d+)/)
+      const number = numberMatch ? parseInt(numberMatch[1], 10) : 0
+      return { number, url, existing: true }
+    }
+
+    const title = checksPass ? this.card.title : `[WIP] ${this.card.title}`
+
+    const body = `
+## Summary
+${this.card.body || 'Automated implementation'}
+
+## Plan
+${plan}
+
+## Testing
+${checksPass ? 'All checks passed' : 'Some checks failed - needs review'}
+
+---
+Closes #${this.card.remote_number_or_iid}
+
+_Automated by Patchwork_
+`.trim()
+
+    const baseBranch = this.branchManager?.getBaseBranch() ?? await this.branchManager?.fetchBaseBranch() ?? 'main'
+    const statusLabel = this.adapter.getStatusLabel('in_review')
+
+    const result = await this.adapter.createPullRequest(title, body, branchName, baseBranch, [statusLabel])
+    return result ? { ...result, existing: false } : null
+  }
+
+  // ==================== Iterative AI ====================
+
   private async runIterativeAI(plan: string): Promise<boolean> {
     if (!this.project || !this.card) return false
 
@@ -2604,43 +854,31 @@ _Automated by Patchwork_
     for (let i = startIteration; i <= maxIterations; i++) {
       this.ensureNotCanceled()
 
-      // Build iteration-specific prompt
-      const iterationPrompt = await this.buildIterationPrompt(
-        plan,
-        i,
-        maxIterations,
-        contextSummary
-      )
+      const iterationPrompt = await this.buildIterationPrompt(plan, i, maxIterations, contextSummary)
 
       this.log(`Running iteration ${i}/${maxIterations}`)
 
       try {
-        // Run AI for this iteration
-        const success = await this.runAI(iterationPrompt)
+        const success = await this.runAIPhase(iterationPrompt)
 
         if (!success) {
           this.log(`Iteration ${i} failed`)
           allSuccess = false
-          // Update progress but don't break - let the partial work be saved
         }
 
-        // Checkpoint progress if enabled
         if (progressCheckpoint) {
           await this.checkpointProgress(i, contextCarryover)
         }
 
-        // Check if we've completed all subtasks or the main task
         if (await this.isIterationComplete()) {
           this.log(`Task completed after iteration ${i}`)
           break
         }
 
-        // Update context summary for next iteration
         if (contextCarryover !== 'none') {
           contextSummary = await this.generateContextSummary(contextCarryover)
         }
 
-        // Update progress in DB
         if (this.progress) {
           updateWorkerProgress(this.progress.id, {
             iteration: i + 1,
@@ -2661,23 +899,19 @@ _Automated by Patchwork_
     return allSuccess
   }
 
-  /**
-   * Build a prompt for a specific iteration of the iterative AI mode.
-   */
   private async buildIterationPrompt(
     plan: string,
     iteration: number,
     maxIterations: number,
     contextSummary: string
   ): Promise<string> {
-    const basePrompt = await this.buildAIPrompt(plan)
+    const ctx = this.buildPipelineContext()
+    const basePrompt = await buildAIPrompt(ctx, plan)
 
-    // Add iteration context
     let iterationContext = `\n\n## Iteration Context
 This is iteration ${iteration} of ${maxIterations}.
 `
 
-    // Add previous context if available
     if (contextSummary) {
       iterationContext += `\n### Previous Progress
 ${contextSummary}
@@ -2686,7 +920,6 @@ Continue from where you left off. Focus on the next logical step.
 `
     }
 
-    // Add subtask focus if we have subtasks
     if (this.subtasks.length > 0) {
       const pendingSubtasks = this.subtasks.filter((s) => s.status === 'pending')
       const currentSubtask = pendingSubtasks[0]
@@ -2708,13 +941,12 @@ Remaining subtasks: ${pendingSubtasks.length}
 - If you complete the current subtask, move to the next one
 `
 
-    return basePrompt + iterationContext
+    // Add follow-up context
+    const followUpContext = this.approvalManager?.buildFollowUpContext() ?? ''
+
+    return basePrompt + iterationContext + followUpContext
   }
 
-  /**
-   * Checkpoint progress between iterations.
-   * Creates a WIP commit with current changes.
-   */
   private async checkpointProgress(
     iteration: number,
     contextCarryover: 'full' | 'summary' | 'none'
@@ -2722,40 +954,29 @@ Remaining subtasks: ${pendingSubtasks.length}
     const workingDir = this.getWorkingDir()
 
     try {
-      // Check if there are changes to commit
-      const { stdout } = await execFileAsync('git', ['status', '--porcelain'], {
-        cwd: workingDir
-      })
-
-      if (!stdout.trim()) {
+      if (await isWorkingTreeClean(workingDir)) {
         this.log(`Iteration ${iteration}: No changes to checkpoint`)
         return
       }
 
-      // Stage and commit changes
-      await execFileAsync('git', ['add', '-A'], {
-        cwd: workingDir,
-        env: this.gitEnv()
-      })
+      await stageAll(workingDir)
 
       const commitMsg = `[WIP] Iteration ${iteration}: Progress checkpoint
 
 Automated checkpoint by Patchwork worker.
 Card: #${this.card?.remote_number_or_iid} ${this.card?.title}`
 
-      await execFileAsync('git', ['commit', '-m', commitMsg], {
-        cwd: workingDir,
-        env: this.gitEnv()
-      })
+      await commit(workingDir, commitMsg)
 
       this.log(`Iteration ${iteration}: Progress checkpointed`)
 
-      // Update subtask status if we completed one
       await this.updateSubtaskProgress()
 
-      // Track modified files
       if (this.progress && contextCarryover !== 'none') {
-        const modifiedFiles = await this.getModifiedFilesSinceBase()
+        const modifiedFiles = await getModifiedFiles(
+          workingDir,
+          this.branchManager?.getBaseHeadSha() ?? 'HEAD~1'
+        )
         updateWorkerProgress(this.progress.id, {
           iteration,
           filesModified: modifiedFiles
@@ -2763,51 +984,28 @@ Card: #${this.card?.remote_number_or_iid} ${this.card?.title}`
       }
     } catch (error) {
       this.log(`Checkpoint warning: ${error instanceof Error ? error.message : String(error)}`)
-      // Non-fatal - continue
     }
   }
 
-  /**
-   * Check if the current iteration has completed the task.
-   */
   private async isIterationComplete(): Promise<boolean> {
-    // If we have subtasks, check if all are completed
     if (this.subtasks.length > 0) {
-      const allCompleted = this.subtasks.every((s) => s.status === 'completed')
-      if (allCompleted) return true
+      return this.subtasks.every((s) => s.status === 'completed')
     }
-
-    // Check for completion markers in the codebase
-    // This is a simple heuristic - could be enhanced
     return false
   }
 
-  /**
-   * Generate a context summary for the next iteration.
-   */
   private async generateContextSummary(mode: 'full' | 'summary' | 'none'): Promise<string> {
     if (mode === 'none') return ''
 
     const workingDir = this.getWorkingDir()
+    const baseRef = this.branchManager?.getBaseHeadSha() ?? 'HEAD~1'
 
     try {
-      // Get the diff of changes made
-      const { stdout: diffStat } = await execFileAsync(
-        'git',
-        ['diff', '--stat', this.baseHeadSha ?? 'HEAD~1'],
-        { cwd: workingDir }
-      )
+      const diffStat = await getDiffStat(workingDir, baseRef)
+      const modifiedFiles = await getModifiedFiles(workingDir, baseRef)
 
-      // Get list of modified files
-      const { stdout: modifiedFiles } = await execFileAsync(
-        'git',
-        ['diff', '--name-only', this.baseHeadSha ?? 'HEAD~1'],
-        { cwd: workingDir }
-      )
+      let summary = `Files modified:\n${modifiedFiles.join('\n')}\n\nChange summary:\n${diffStat}`
 
-      let summary = `Files modified:\n${modifiedFiles.trim()}\n\nChange summary:\n${diffStat.trim()}`
-
-      // For summary mode, keep it brief
       if (mode === 'summary') {
         const lines = summary.split('\n')
         if (lines.length > 20) {
@@ -2821,23 +1019,16 @@ Card: #${this.card?.remote_number_or_iid} ${this.card?.title}`
     }
   }
 
-  /**
-   * Update subtask status based on completed work.
-   */
   private async updateSubtaskProgress(): Promise<void> {
     if (this.subtasks.length === 0) return
 
-    // Find the current in-progress subtask
     const inProgress = this.subtasks.find((s) => s.status === 'in_progress')
     if (inProgress) {
-      // Mark as completed
       updateSubtaskStatus(inProgress.id, 'completed')
-      // Refresh local cache
       const updated = this.taskDecomposer?.getExistingSubtasks(this.cardId)
       if (updated) this.subtasks = updated
     }
 
-    // Start the next pending subtask
     const nextPending = getNextPendingSubtask(this.cardId)
     if (nextPending) {
       updateSubtaskStatus(nextPending.id, 'in_progress')
@@ -2845,7 +1036,6 @@ Card: #${this.card?.remote_number_or_iid} ${this.card?.title}`
       if (updated) this.subtasks = updated
     }
 
-    // Update progress
     if (this.progress) {
       const completed = this.subtasks.filter((s) => s.status === 'completed').length
       updateWorkerProgress(this.progress.id, {
@@ -2855,28 +1045,38 @@ Card: #${this.card?.remote_number_or_iid} ${this.card?.title}`
     }
   }
 
-  /**
-   * Get list of files modified since the base commit.
-   */
-  private async getModifiedFilesSinceBase(): Promise<string[]> {
-    const workingDir = this.getWorkingDir()
+  // ==================== Context Builder ====================
 
-    try {
-      const { stdout } = await execFileAsync(
-        'git',
-        ['diff', '--name-only', this.baseHeadSha ?? 'HEAD~1'],
-        { cwd: workingDir }
-      )
-
-      return stdout
-        .trim()
-        .split('\n')
-        .filter((f) => f.trim())
-    } catch {
-      return []
+  private buildPipelineContext(): PipelineContext {
+    return {
+      projectId: this.projectId,
+      cardId: this.cardId,
+      jobId: this.jobId,
+      workerId: this.workerId,
+      project: this.project,
+      card: this.card,
+      policy: this.policy,
+      adapter: this.adapter,
+      startingBranch: this.branchManager?.getStartingBranch() ?? null,
+      baseBranch: this.branchManager?.getBaseBranch() ?? null,
+      baseHeadSha: this.branchManager?.getBaseHeadSha() ?? null,
+      workerBranch: this.branchManager?.getWorkerBranch() ?? this.worktreeManager?.getWorkerBranch() ?? null,
+      useWorktree: this.useWorktree,
+      worktreeManager: this.worktreeManager?.getWorktreeManager() ?? null,
+      worktreeRecord: this.worktreeManager?.getWorktreeRecord() ?? null,
+      worktreePath: this.worktreeManager?.getWorktreePath() ?? null,
+      taskDecomposer: this.taskDecomposer,
+      subtasks: this.subtasks,
+      progress: this.progress,
+      phase: this.logManager.getPhase(),
+      logs: this.logManager.getLogs(),
+      lastPlan: undefined,
+      lastPersistMs: 0
     }
   }
 }
+
+// ==================== Public API ====================
 
 export async function runWorker(jobId: string): Promise<WorkerResult> {
   const job = getJob(jobId)
@@ -2888,7 +1088,6 @@ export async function runWorker(jobId: string): Promise<WorkerResult> {
     return { success: false, phase: 'init', error: 'No card specified' }
   }
 
-  // Acquire lease
   if (!acquireJobLease(jobId)) {
     return { success: false, phase: 'init', error: 'Failed to acquire job lease' }
   }
@@ -2918,31 +1117,33 @@ export async function runWorker(jobId: string): Promise<WorkerResult> {
   const finalState = getJob(jobId)?.state
   if (result.phase === 'canceled' || finalState === 'canceled') {
     updateJobState(jobId, 'canceled', result, result.error)
-    // Clean up any pending approvals and follow-up instructions
     deletePlanApprovalsByJob(jobId)
     deleteFollowUpInstructionsByJob(jobId)
   } else if (result.phase === 'pending_approval' || finalState === 'pending_approval') {
-    // Job is waiting for plan approval - don't update state, it's already set
-    // The job will be resumed when the plan is approved
+    // Job is waiting for plan approval - don't update state
   } else if (result.success) {
     updateJobState(jobId, 'succeeded', result)
-    // Clean up approval records and follow-up instructions on success
     deletePlanApprovalsByJob(jobId)
     deleteFollowUpInstructionsByJob(jobId)
   } else {
     updateJobState(jobId, 'failed', result, result.error)
-    // Clean up any pending approvals and follow-up instructions on failure
     deletePlanApprovalsByJob(jobId)
     deleteFollowUpInstructionsByJob(jobId)
   }
   broadcastToRenderers('stateUpdated')
+
+  // Trigger sync after job completion (success or failure)
+  // This will be debounced by the scheduler
+  const completedJob = getJob(jobId)
+  if (completedJob?.project_id) {
+    triggerProjectSync(completedJob.project_id)
+  }
 
   return result
 }
 
 /**
  * Resume a worker job after plan approval.
- * This is called when a pending_approval job is approved.
  */
 export async function resumeWorkerAfterApproval(jobId: string): Promise<WorkerResult> {
   const job = getJob(jobId)
@@ -2954,7 +1155,6 @@ export async function resumeWorkerAfterApproval(jobId: string): Promise<WorkerRe
     return { success: false, phase: 'init', error: 'Job is not pending approval' }
   }
 
-  // Check the plan approval status
   const approval = getPlanApprovalByJob(jobId)
   if (!approval) {
     return { success: false, phase: 'init', error: 'No plan approval found' }
@@ -2965,18 +1165,24 @@ export async function resumeWorkerAfterApproval(jobId: string): Promise<WorkerRe
   }
 
   if (approval.status === 'rejected') {
-    updateJobState(jobId, 'canceled', { success: false, phase: 'canceled', error: 'Plan rejected' }, 'Plan rejected by reviewer')
+    updateJobState(
+      jobId,
+      'canceled',
+      { success: false, phase: 'canceled', error: 'Plan rejected' },
+      'Plan rejected by reviewer'
+    )
     deletePlanApprovalsByJob(jobId)
     deleteFollowUpInstructionsByJob(jobId)
     broadcastToRenderers('stateUpdated')
     return { success: false, phase: 'canceled', error: 'Plan rejected by reviewer' }
   }
 
-  // Plan is approved or skipped - resume the job
-  // Update job state back to running
+  // Plan is approved or skipped - resume
   updateJobState(jobId, 'running', { success: false, phase: 'ai', plan: approval.plan })
   broadcastToRenderers('stateUpdated')
 
-  // Run the worker again - it will continue from where it left off
   return runWorker(jobId)
 }
+
+// Re-export errors for backward compatibility
+export { WorkerCanceledError, WorkerPendingApprovalError } from './errors'

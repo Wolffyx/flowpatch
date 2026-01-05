@@ -38,6 +38,8 @@ export interface ProjectAPI {
     body?: string
     createType: 'local' | 'repo_issue' | 'github_issue' | 'gitlab_issue'
   }) => Promise<Card>
+  editCardBody: (cardId: string, body: string | null) => Promise<{ card?: Card; error?: string }>
+  deleteCard: (cardId: string) => Promise<{ success: boolean; error?: string }>
 
   // Sync
   sync: () => Promise<void>
@@ -650,6 +652,14 @@ const projectAPI: ProjectAPI = {
     return result.card
   },
 
+  editCardBody: (cardId: string, body: string | null) => {
+    return ipcRenderer.invoke('editCardBody', { cardId, body })
+  },
+
+  deleteCard: (cardId: string) => {
+    return ipcRenderer.invoke('deleteCard', { cardId })
+  },
+
   // -------------------------------------------------------------------------
   // Sync
   // -------------------------------------------------------------------------
@@ -1195,7 +1205,9 @@ const allowedInvokeChannels = [
   'dismissStarterCardsWizard',
   'completeStarterCardsWizard',
   'dismissGithubProjectPrompt',
-  'createGithubProjectV2'
+  'createGithubProjectV2',
+  // Sync Scheduler
+  'getSyncSchedulerStatus'
 ]
 
 const allowedSendChannels = ['openExternal']

@@ -10,15 +10,25 @@ import {
   Settings,
   Terminal
 } from 'lucide-react'
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Button } from './ui/button'
 import { Switch } from './ui/switch'
 import { Badge } from './ui/badge'
+import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip'
 import { cn } from '../lib/utils'
 import { formatRelativeTime } from '../lib/utils'
 import { acceleratorToDisplay, detectPlatform } from '@shared/accelerator'
 import type { Project, Job, Card } from '../../../shared/types'
 import { SettingsDialog, type WorkerToolPreference } from './SettingsDialog'
+
+interface SyncSchedulerStatus {
+  running: boolean
+  pollIntervalMs: number
+  autoSyncOnAction: boolean
+  isSyncing: boolean
+  nextSyncAt: number | null
+  lastSyncAt: number | null
+}
 
 interface TopBarProps {
   project: Project | null
@@ -54,7 +64,63 @@ export function TopBar({
     ? acceleratorToDisplay(commandPaletteShortcut, platform)
     : 'Ctrl+K'
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [syncSchedulerStatus, setSyncSchedulerStatus] = useState<SyncSchedulerStatus | null>(null)
+  const [timeUntilSync, setTimeUntilSync] = useState<string | null>(null)
   const runningJobs = jobs.filter((j) => j.state === 'running')
+
+  // Fetch sync scheduler status
+  const fetchSyncSchedulerStatus = useCallback(async () => {
+    if (!project?.id) {
+      setSyncSchedulerStatus(null)
+      return
+    }
+    try {
+      const status = await window.electron.ipcRenderer.invoke('getSyncSchedulerStatus', {
+        projectId: project.id
+      })
+      setSyncSchedulerStatus(status)
+    } catch {
+      setSyncSchedulerStatus(null)
+    }
+  }, [project?.id])
+
+  // Fetch status periodically
+  useEffect(() => {
+    fetchSyncSchedulerStatus()
+    const interval = setInterval(fetchSyncSchedulerStatus, 5000)
+    return () => clearInterval(interval)
+  }, [fetchSyncSchedulerStatus])
+
+  // Update countdown timer
+  useEffect(() => {
+    if (!syncSchedulerStatus?.nextSyncAt) {
+      setTimeUntilSync(null)
+      return
+    }
+
+    const updateCountdown = (): void => {
+      const now = Date.now()
+      const remaining = syncSchedulerStatus.nextSyncAt! - now
+      if (remaining <= 0) {
+        setTimeUntilSync('syncing...')
+        return
+      }
+      const seconds = Math.floor(remaining / 1000)
+      const minutes = Math.floor(seconds / 60)
+      const secs = seconds % 60
+      if (minutes > 0) {
+        setTimeUntilSync(`${minutes}m ${secs}s`)
+      } else {
+        setTimeUntilSync(`${secs}s`)
+      }
+    }
+
+    updateCountdown()
+    const interval = setInterval(updateCountdown, 1000)
+    return () => clearInterval(interval)
+  }, [syncSchedulerStatus?.nextSyncAt])
+
+  const isAutoSyncActive = syncSchedulerStatus?.running && syncSchedulerStatus?.autoSyncOnAction
 
   const syncJobs = jobs.filter((j) => j.type === 'sync_poll' || j.type === 'sync_push')
   const latestSyncJob =
@@ -214,15 +280,44 @@ export function TopBar({
             Settings
           </Button>
 
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onSync}
-            disabled={isLoading || !project.remote_repo_key}
-          >
-            <RefreshCw className={cn('mr-2 h-4 w-4', isLoading && 'animate-spin')} />
-            Sync
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onSync}
+                disabled={isLoading || !project.remote_repo_key}
+                className={cn(
+                  isAutoSyncActive &&
+                    'border-green-500/50 bg-green-500/10 hover:bg-green-500/20 hover:border-green-500/70'
+                )}
+              >
+                <RefreshCw
+                  className={cn(
+                    'mr-2 h-4 w-4',
+                    isLoading && 'animate-spin',
+                    isAutoSyncActive && 'text-green-600'
+                  )}
+                />
+                Sync
+                {isAutoSyncActive && (
+                  <span className="ml-1.5 text-xs text-green-600">●</span>
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {isAutoSyncActive ? (
+                <div className="text-center">
+                  <div className="font-medium">Auto-sync active</div>
+                  {timeUntilSync && (
+                    <div className="text-muted-foreground">Next sync in {timeUntilSync}</div>
+                  )}
+                </div>
+              ) : (
+                <span>Click to sync with remote</span>
+              )}
+            </TooltipContent>
+          </Tooltip>
 
           <Button variant="outline" size="sm" onClick={onOpenCommandPalette}>
             <Command className="mr-2 h-4 w-4" />

@@ -499,7 +499,15 @@ const allowedInvokeChannels = [
   'aiProfiles:update',
   'aiProfiles:delete',
   'aiProfiles:setDefault',
-  'aiProfiles:duplicate'
+  'aiProfiles:duplicate',
+  // Sync Scheduler
+  'updateSyncSettings',
+  'getSyncSchedulerStatus',
+  'startSyncScheduler',
+  'stopSyncScheduler',
+  // Usage Limits
+  'usage:getWithLimits',
+  'usage:setToolLimits'
 ]
 
 const electronAPI = {

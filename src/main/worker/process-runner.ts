@@ -16,6 +16,7 @@ import {
 } from '../security/command-guard'
 import type { ExecutionOrigin, CommandGuardConfig } from '../../shared/types'
 import { logAction } from '../../shared/utils'
+import { WorkerCanceledError } from './errors'
 
 function resolveWindowsSpawnCommand(command: string, env: NodeJS.ProcessEnv): string {
   // If the caller passed a path or explicit extension, don't try to resolve it.
@@ -44,13 +45,6 @@ function resolveWindowsSpawnCommand(command: string, env: NodeJS.ProcessEnv): st
     return matches[0]
   } catch {
     return command
-  }
-}
-
-export class WorkerCanceledError extends Error {
-  constructor(message = 'Canceled') {
-    super(message)
-    this.name = 'WorkerCanceledError'
   }
 }
 
@@ -302,3 +296,4 @@ export async function runSecureGitProcess(options: Omit<ProcessStreamingOptions,
 
 // Re-export for convenience
 export { createCommandGuardConfig }
+export { WorkerCanceledError }

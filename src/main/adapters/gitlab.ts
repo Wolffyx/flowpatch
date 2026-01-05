@@ -176,6 +176,28 @@ export class GitlabAdapter extends BaseAdapter {
     }
   }
 
+  /**
+   * Update the body/description of an issue (implements IRepoAdapter)
+   */
+  async updateIssueBody(issueIid: number, body: string | null): Promise<boolean> {
+    try {
+      const args = [
+        'issue',
+        'update',
+        String(issueIid),
+        '--description',
+        body ?? ''
+      ]
+
+      await execFileAsync('glab', args, { cwd: this.repoPath })
+      console.log(`[GitLabAdapter] updateIssueBody: Success iid=${issueIid}`)
+      return true
+    } catch (error) {
+      console.error('Failed to update GitLab issue body:', error)
+      return false
+    }
+  }
+
   // ──────────────────────────────────────────────────────────────────────────
   // Merge Requests (Pull Requests)
   // ──────────────────────────────────────────────────────────────────────────

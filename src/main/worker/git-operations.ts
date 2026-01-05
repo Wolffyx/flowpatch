@@ -465,3 +465,182 @@ export async function stageFile(cwd: string, filePath: string): Promise<void> {
 export async function completeMerge(cwd: string, message: string): Promise<void> {
   await execFileAsync('git', ['commit', '-m', message], { cwd, env: getGitEnv() })
 }
+
+// ==================== Class-Based API ====================
+
+/**
+ * Class-based wrapper for git operations.
+ * Provides an object-oriented alternative to the function-based API.
+ */
+export class GitOperations {
+  private cwd: string
+
+  constructor(cwd: string) {
+    this.cwd = cwd
+  }
+
+  /**
+   * Get the working directory.
+   */
+  getWorkingDirectory(): string {
+    return this.cwd
+  }
+
+  // ==================== Basic Operations ====================
+
+  async exec(args: string[]): Promise<string> {
+    return gitExec(args, this.cwd)
+  }
+
+  async fetchOrigin(branch?: string): Promise<void> {
+    return fetchOrigin(this.cwd, branch)
+  }
+
+  async getCurrentBranch(): Promise<string | null> {
+    return getCurrentBranch(this.cwd)
+  }
+
+  async getDefaultBranch(): Promise<string> {
+    return getDefaultBranch(this.cwd)
+  }
+
+  async getHeadSha(): Promise<string | null> {
+    return getHeadSha(this.cwd)
+  }
+
+  // ==================== Branch Operations ====================
+
+  async localBranchExists(branchName: string): Promise<boolean> {
+    return localBranchExists(this.cwd, branchName)
+  }
+
+  async remoteBranchExists(branchName: string): Promise<boolean> {
+    return remoteBranchExists(this.cwd, branchName)
+  }
+
+  async checkBranchExists(branchName: string): Promise<{ localExists: boolean; remoteExists: boolean }> {
+    return checkBranchExists(this.cwd, branchName)
+  }
+
+  async checkoutBranch(branch: string): Promise<void> {
+    return checkoutBranch(this.cwd, branch)
+  }
+
+  async createBranch(branch: string): Promise<void> {
+    return createBranch(this.cwd, branch)
+  }
+
+  async createTrackingBranch(branch: string): Promise<void> {
+    return createTrackingBranch(this.cwd, branch)
+  }
+
+  async deleteBranch(branch: string): Promise<void> {
+    return deleteBranch(this.cwd, branch)
+  }
+
+  async pullRebase(branch: string): Promise<void> {
+    return pullRebase(this.cwd, branch)
+  }
+
+  async getWorktreePathForBranch(branchName: string): Promise<string | null> {
+    return getWorktreePathForBranch(this.cwd, branchName)
+  }
+
+  // ==================== Working Tree Operations ====================
+
+  async getWorkingTreeStatus(): Promise<string> {
+    return getWorkingTreeStatus(this.cwd)
+  }
+
+  async isWorkingTreeClean(): Promise<boolean> {
+    return isWorkingTreeClean(this.cwd)
+  }
+
+  async stashPush(message: string): Promise<void> {
+    return stashPush(this.cwd, message)
+  }
+
+  async stashList(): Promise<string> {
+    return stashList(this.cwd)
+  }
+
+  async stashApplyDrop(ref: string): Promise<void> {
+    return stashApplyDrop(this.cwd, ref)
+  }
+
+  async resetHard(ref?: string): Promise<void> {
+    return resetHard(this.cwd, ref)
+  }
+
+  // ==================== Staging & Committing ====================
+
+  async stageAll(): Promise<void> {
+    return stageAll(this.cwd)
+  }
+
+  async stageFile(filePath: string): Promise<void> {
+    return stageFile(this.cwd, filePath)
+  }
+
+  async commit(message: string): Promise<void> {
+    return commit(this.cwd, message)
+  }
+
+  async push(branch: string): Promise<void> {
+    return push(this.cwd, branch)
+  }
+
+  // ==================== Diff Operations ====================
+
+  async getDiffStat(baseRef: string): Promise<string> {
+    return getDiffStat(this.cwd, baseRef)
+  }
+
+  async getModifiedFiles(baseRef: string): Promise<string[]> {
+    return getModifiedFiles(this.cwd, baseRef)
+  }
+
+  // ==================== Merge Operations ====================
+
+  async merge(branch: string): Promise<boolean> {
+    return merge(this.cwd, branch)
+  }
+
+  async hasConflicts(): Promise<boolean> {
+    return hasConflicts(this.cwd)
+  }
+
+  async getConflictFiles(): Promise<string[]> {
+    return getConflictFiles(this.cwd)
+  }
+
+  async abortMerge(): Promise<void> {
+    return abortMerge(this.cwd)
+  }
+
+  async completeMerge(message: string): Promise<void> {
+    return completeMerge(this.cwd, message)
+  }
+
+  // ==================== Batch Operations ====================
+
+  async fetchBranches(branches: string[]): Promise<Map<string, boolean>> {
+    return fetchBranches(this.cwd, branches)
+  }
+
+  async getRepoState(): Promise<{
+    currentBranch: string | null
+    isClean: boolean
+    headSha: string | null
+  }> {
+    return getRepoState(this.cwd)
+  }
+
+  async fetchAndCheckBranch(branchName: string): Promise<{
+    fetchSuccess: boolean
+    localExists: boolean
+    remoteExists: boolean
+  }> {
+    return fetchAndCheckBranch(this.cwd, branchName)
+  }
+}

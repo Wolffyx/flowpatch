@@ -254,6 +254,30 @@ export class GithubAdapter extends BaseAdapter implements IGithubAdapter {
     }
   }
 
+  /**
+   * Update the body of an issue (implements IRepoAdapter)
+   */
+  async updateIssueBody(issueNumber: number, body: string | null): Promise<boolean> {
+    try {
+      const args = [
+        'issue',
+        'edit',
+        String(issueNumber),
+        '--repo',
+        `${this.owner}/${this.repo}`,
+        '--body',
+        body ?? ''
+      ]
+
+      await execFileAsync('gh', args, { cwd: this.repoPath })
+      logAction('updateIssueBody: Success', { issueNumber })
+      return true
+    } catch (error) {
+      console.error('Failed to update GitHub issue body:', error)
+      return false
+    }
+  }
+
   // ──────────────────────────────────────────────────────────────────────────
   // Pull Requests
   // ──────────────────────────────────────────────────────────────────────────
@@ -1174,6 +1198,78 @@ export class GithubAdapter extends BaseAdapter implements IGithubAdapter {
       return true
     } catch (error) {
       console.error('Failed to update project draft status:', error)
+      return false
+    }
+  }
+
+  /**
+   * Update the title and body of a GitHub Projects V2 draft item (implements IGithubAdapter)
+   */
+  async updateProjectDraftBody(
+    draftNodeId: string,
+    title: string,
+    body: string | null
+  ): Promise<boolean> {
+    const projectConfig = this.policy.sync?.githubProjectsV2
+    if (projectConfig?.enabled === false) {
+      return false
+    }
+
+    // Auto-detect project ID if not configured
+    let projectId: string | undefined = projectConfig?.projectId
+    if (!projectId) {
+      const detectedId = await this.findRepositoryProject()
+      if (!detectedId) {
+        return false
+      }
+      projectId = detectedId
+    }
+
+    try {
+      // Find the item ID for this draft
+      const itemId = await this.findProjectV2ItemIdByDraftNodeId(projectId, draftNodeId)
+      if (!itemId) {
+        logAction('updateProjectDraftBody: Draft not found in project', { draftNodeId })
+        return false
+      }
+
+      // Update the draft using the updateProjectV2DraftIssue mutation
+      const updateMutation = `
+        mutation($draftIssueId: ID!, $title: String!, $body: String) {
+          updateProjectV2DraftIssue(
+            input: {
+              draftIssueId: $draftIssueId
+              title: $title
+              body: $body
+            }
+          ) {
+            draftIssue {
+              id
+              title
+              body
+            }
+          }
+        }
+      `
+
+      const updateRes = await this.ghApiGraphql<{
+        data?: { updateProjectV2DraftIssue?: { draftIssue?: { id: string } } }
+        errors?: Array<{ message: string }>
+      }>(updateMutation, {
+        draftIssueId: draftNodeId,
+        title,
+        body: body ?? ''
+      })
+
+      if (updateRes.errors?.length) {
+        console.error('GraphQL errors updating project draft body:', updateRes.errors)
+        return false
+      }
+
+      logAction('updateProjectDraftBody: Success', { draftNodeId, title })
+      return true
+    } catch (error) {
+      console.error('Failed to update project draft body:', error)
       return false
     }
   }

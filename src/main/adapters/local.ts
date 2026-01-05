@@ -58,6 +58,14 @@ export class LocalAdapter extends BaseAdapter {
     return null
   }
 
+  /**
+   * No-op success for local projects.
+   * Issue body is managed locally in the database.
+   */
+  async updateIssueBody(_issueNumber: number, _body: string | null): Promise<boolean> {
+    return true
+  }
+
   // ──────────────────────────────────────────────────────────────────────────
   // Pull Requests / Merge Requests
   // ──────────────────────────────────────────────────────────────────────────

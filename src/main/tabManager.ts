@@ -11,8 +11,15 @@
 import { BrowserWindow, WebContentsView, Menu } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
-import { getAppSetting, setAppSetting } from './db'
+import { getAppSetting, setAppSetting, getProject } from './db'
 import { registerTrustedWebContents } from './security'
+import {
+  startSyncScheduler,
+  stopSyncScheduler,
+  stopAllSyncSchedulers,
+  getSyncSchedulerConfigFromPolicy
+} from './sync/scheduler'
+import { parsePolicyJson } from '../shared/utils'
 
 // ============================================================================
 // Types
@@ -289,6 +296,14 @@ export async function createTab(
   // Persist tabs
   persistTabs()
 
+  // Start sync scheduler for this project if it has a remote
+  const project = getProject(projectId)
+  if (project?.remote_repo_key) {
+    const policy = parsePolicyJson(project.policy_json)
+    const syncConfig = getSyncSchedulerConfigFromPolicy(policy)
+    startSyncScheduler(projectId, syncConfig)
+  }
+
   return tab
 }
 
@@ -298,6 +313,9 @@ export async function createTab(
 export async function closeTab(tabId: string): Promise<void> {
   const tab = tabs.get(tabId)
   if (!tab || !mainWindowRef) return
+
+  // Stop sync scheduler for this project
+  stopSyncScheduler(tab.projectId)
 
   if (tab.didFinishLoadHandler) {
     tab.view.webContents.removeListener('did-finish-load', tab.didFinishLoadHandler)
@@ -558,6 +576,9 @@ export async function restoreTabs(): Promise<void> {
  */
 export function cleanupTabManager(): void {
   persistTabs()
+
+  // Stop all sync schedulers
+  stopAllSyncSchedulers()
 
   for (const tab of tabs.values()) {
     try {
