@@ -4,6 +4,10 @@
  * Enforces command execution policies to prevent unauthorized or dangerous
  * commands from being executed. This is the last line of defense against
  * prompt injection attacks.
+ *
+ * Improvements:
+ * - Validation result caching for repeated commands
+ * - Configurable cache TTL
  */
 
 import { resolve, normalize, relative, isAbsolute } from 'path'
@@ -15,6 +19,123 @@ import type {
   SecurityAuditEntry
 } from '../../shared/types'
 import { logAction } from '../../shared/utils'
+
+// ============================================================================
+// Validation Cache
+// ============================================================================
+
+interface CachedValidation {
+  result: CommandValidationResult
+  cachedAt: number
+  hits: number
+}
+
+const VALIDATION_CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
+const MAX_VALIDATION_CACHE_SIZE = 200
+
+const validationCache = new Map<string, CachedValidation>()
+
+/**
+ * Create a cache key for a command validation.
+ */
+function createCacheKey(
+  command: string,
+  args: string[],
+  cwd: string,
+  configHash: string,
+  origin: ExecutionOrigin
+): string {
+  return `${command}|${args.join('|')}|${cwd}|${configHash}|${origin}`
+}
+
+/**
+ * Simple hash for config to include in cache key.
+ */
+function hashConfig(config: CommandGuardConfig): string {
+  const data = JSON.stringify({
+    allowedCommands: config.allowedCommands.sort(),
+    forbiddenPaths: config.forbiddenPaths.sort(),
+    allowNetwork: config.allowNetwork
+  })
+  let hash = 0
+  for (let i = 0; i < data.length; i++) {
+    const char = data.charCodeAt(i)
+    hash = ((hash << 5) - hash) + char
+    hash = hash & hash
+  }
+  return hash.toString(36)
+}
+
+/**
+ * Get cached validation result if still valid.
+ */
+function getCachedValidation(cacheKey: string): CommandValidationResult | null {
+  const cached = validationCache.get(cacheKey)
+  if (!cached) return null
+
+  // Check TTL
+  if (Date.now() - cached.cachedAt > VALIDATION_CACHE_TTL_MS) {
+    validationCache.delete(cacheKey)
+    return null
+  }
+
+  cached.hits++
+  return cached.result
+}
+
+/**
+ * Cache a validation result.
+ */
+function cacheValidation(cacheKey: string, result: CommandValidationResult): void {
+  // Evict oldest entries if at capacity
+  if (validationCache.size >= MAX_VALIDATION_CACHE_SIZE) {
+    let oldestKey: string | null = null
+    let oldestTime = Infinity
+
+    for (const [key, entry] of validationCache) {
+      if (entry.cachedAt < oldestTime) {
+        oldestTime = entry.cachedAt
+        oldestKey = key
+      }
+    }
+
+    if (oldestKey) {
+      validationCache.delete(oldestKey)
+    }
+  }
+
+  validationCache.set(cacheKey, {
+    result,
+    cachedAt: Date.now(),
+    hits: 0
+  })
+}
+
+/**
+ * Clear the validation cache.
+ */
+export function clearValidationCache(): void {
+  validationCache.clear()
+}
+
+/**
+ * Get validation cache statistics.
+ */
+export function getValidationCacheStats(): {
+  size: number
+  maxSize: number
+  totalHits: number
+} {
+  let totalHits = 0
+  for (const entry of validationCache.values()) {
+    totalHits += entry.hits
+  }
+  return {
+    size: validationCache.size,
+    maxSize: MAX_VALIDATION_CACHE_SIZE,
+    totalHits
+  }
+}
 
 // ============================================================================
 // Configuration
@@ -225,6 +346,7 @@ export interface CommandValidationResult {
 /**
  * Validate a command execution request.
  * This is the main entry point for command validation.
+ * Uses caching for repeated validations to improve performance.
  */
 export function validateCommand(
   command: string,
@@ -232,10 +354,22 @@ export function validateCommand(
   cwd: string,
   config: CommandGuardConfig,
   origin: ExecutionOrigin,
-  securityContext?: SecurityContext
+  securityContext?: SecurityContext,
+  options: { useCache?: boolean } = {}
 ): CommandValidationResult {
+  const { useCache = true } = options
   const timestamp = new Date().toISOString()
-  
+
+  // Check cache first (skip for untrusted origins as they're always rejected)
+  if (useCache && origin !== 'external' && origin !== 'ai_output') {
+    const configHash = hashConfig(config)
+    const cacheKey = createCacheKey(command, args, cwd, configHash, origin)
+    const cached = getCachedValidation(cacheKey)
+    if (cached) {
+      return cached
+    }
+  }
+
   // Check execution origin
   if (origin === 'external' || origin === 'ai_output') {
     logCommandAttempt({
@@ -346,11 +480,20 @@ export function validateCommand(
     details: { command, args, origin },
     allowed: true
   })
-  
-  return {
+
+  const result: CommandValidationResult = {
     allowed: true,
     secureRequest
   }
+
+  // Cache the successful result
+  if (useCache) {
+    const configHash = hashConfig(config)
+    const cacheKey = createCacheKey(command, args, cwd, configHash, origin)
+    cacheValidation(cacheKey, result)
+  }
+
+  return result
 }
 
 /**

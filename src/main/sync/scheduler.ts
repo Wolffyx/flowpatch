@@ -13,6 +13,7 @@ import { getProject } from '../db'
 import { broadcastToRenderers } from '../ipc/broadcast'
 import { logAction } from '../../shared/utils'
 import type { PolicyConfig } from '../../shared/types'
+import { withSyncLock, canSyncNow, getSyncLockStats } from './sync-lock'
 
 export interface SyncSchedulerConfig {
   pollIntervalMs: number
@@ -97,6 +98,18 @@ export class SyncScheduler {
   private async runScheduledSync(): Promise<void> {
     if (this.isRunningSync || this.isShuttingDown) return
 
+    // Check if we can sync without waiting (skip if workers are active)
+    if (!canSyncNow(this.projectId)) {
+      const lockStats = getSyncLockStats(this.projectId)
+      logAction('syncScheduler:deferredForWorkers', {
+        projectId: this.projectId,
+        activeWorkers: lockStats?.activeWorkers ?? 0,
+        waitingSyncs: lockStats?.waitingSyncs ?? 0
+      })
+      // Don't wait, just defer to next poll cycle
+      return
+    }
+
     this.isRunningSync = true
     this.nextSyncAt = null
 
@@ -104,18 +117,21 @@ export class SyncScheduler {
       const project = getProject(this.projectId)
       if (!project?.remote_repo_key) return
 
-      logAction('syncScheduler:syncing', { projectId: this.projectId })
+      // Use sync lock to coordinate with workers
+      await withSyncLock(this.projectId, async () => {
+        logAction('syncScheduler:syncing', { projectId: this.projectId })
 
-      const result = await runSync(this.projectId)
-      this.lastSyncAt = Date.now()
+        const result = await runSync(this.projectId)
+        this.lastSyncAt = Date.now()
 
-      logAction('syncScheduler:syncComplete', {
-        projectId: this.projectId,
-        success: result.success,
-        error: result.error
+        logAction('syncScheduler:syncComplete', {
+          projectId: this.projectId,
+          success: result.success,
+          error: result.error
+        })
+
+        broadcastToRenderers('stateUpdated')
       })
-
-      broadcastToRenderers('stateUpdated')
     } catch (error) {
       logAction('syncScheduler:syncError', {
         projectId: this.projectId,

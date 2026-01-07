@@ -275,7 +275,7 @@ export interface Job {
 // ============================================================================
 
 /** AI tool/agent type for usage tracking */
-export type AIToolType = 'claude' | 'codex' | 'other'
+export type AIToolType = 'claude' | 'codex' | 'opencode' | 'cursor' | 'other'
 
 /** Usage record for a single AI tool invocation */
 export interface UsageRecord {
@@ -950,7 +950,7 @@ export interface PolicyConfig {
   features?: FeaturesConfig
   worker?: {
     enabled?: boolean
-    toolPreference?: 'auto' | 'claude' | 'codex'
+    toolPreference?: 'auto' | 'claude' | 'codex' | 'opencode' | 'cursor'
     planFirst?: boolean
     maxMinutes?: number
     allowNetwork?: boolean
@@ -964,6 +964,14 @@ export interface PolicyConfig {
     testCommand?: string
     buildCommand?: string
     forbidPaths?: string[]
+    /** Lease renewal interval in milliseconds (default: 60000). Used to keep jobs alive. */
+    leaseRenewalIntervalMs?: number
+    /** Overall pipeline timeout in milliseconds (default: 30 minutes). Prevents infinite runs. */
+    pipelineTimeoutMs?: number
+    /** Maximum retry attempts for transient failures in pipeline phases (default: 3). */
+    maxRetries?: number
+    /** Initial retry delay in milliseconds (default: 1000). */
+    retryDelayMs?: number
     worktree?: {
       enabled?: boolean
       root?: WorktreeRoot

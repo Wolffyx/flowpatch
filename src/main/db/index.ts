@@ -265,5 +265,21 @@ export type {
   UpdateCardDependencyData
 } from './card-dependencies'
 
+// Query Cache
+export {
+  QueryCache,
+  projectCache,
+  cardCache,
+  settingsCache,
+  jobStatusCache,
+  invalidateProjectCaches,
+  invalidateCardCaches,
+  clearAllQueryCaches,
+  getAllCacheStats,
+  projectKey,
+  cardKey,
+  jobKey
+} from './query-cache'
+
 // Utility re-export for backward compatibility
 export { generateId as cryptoRandomId } from '@shared/utils'

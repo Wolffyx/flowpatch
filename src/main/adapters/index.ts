@@ -49,6 +49,26 @@ export { LocalAdapter } from './local'
 export { GithubAdapter } from './github'
 export { GitlabAdapter } from './gitlab'
 
+// Cache utilities
+export {
+  adapterCache,
+  RequestBatcher,
+  getCachedIssues,
+  cacheIssues,
+  getCachedPullRequests,
+  cachePullRequests,
+  getCachedLabels,
+  cacheLabels,
+  invalidateRepoCache,
+  getAdapterCacheStats,
+  issuesKey,
+  issueKey,
+  pullRequestsKey,
+  labelsKey,
+  authKey,
+  projectStatusKey
+} from './cache'
+
 // ============================================================================
 // Auto-registration
 // ============================================================================

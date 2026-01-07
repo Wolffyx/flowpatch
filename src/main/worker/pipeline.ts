@@ -3,6 +3,13 @@
  *
  * Orchestrates the worker execution flow from card pickup to PR creation.
  * Delegates specific responsibilities to manager classes for maintainability.
+ *
+ * Improvements:
+ * - Configurable lease renewal interval via policy (default: 60s)
+ * - Overall pipeline timeout to prevent infinite runs (default: 30min)
+ * - Retry logic for transient failures in phases
+ * - Optimized cancellation checks (reduced redundant calls)
+ * - Metrics collection for key operations
  */
 
 import { AdapterRegistry } from '../adapters'
@@ -59,10 +66,11 @@ import {
 } from './managers'
 
 // Errors
-import { WorkerCanceledError, WorkerPendingApprovalError } from './errors'
+import { WorkerCanceledError, WorkerPendingApprovalError, PipelineTimeoutError } from './errors'
 
-// Sync scheduler
+// Sync scheduler and locks
 import { triggerProjectSync } from '../sync/scheduler'
+import { acquireWorkerLock, releaseWorkerLock } from '../sync/sync-lock'
 
 // Git operations
 import {
@@ -78,6 +86,12 @@ import {
   getDiffStat
 } from './git-operations'
 
+// Constants for configurable values
+const DEFAULT_LEASE_RENEWAL_MS = 60_000
+const DEFAULT_PIPELINE_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes
+const DEFAULT_MAX_RETRIES = 3
+const DEFAULT_RETRY_DELAY_MS = 1000
+
 /**
  * Main worker pipeline class.
  * Orchestrates the execution flow by delegating to specialized managers.
@@ -91,7 +105,11 @@ export class WorkerPipeline {
   private adapter: IRepoAdapter | null = null
   private jobId: string | null = null
   private leaseInterval: NodeJS.Timeout | null = null
+  private pipelineTimeout: NodeJS.Timeout | null = null
+  private pipelineStartTime: number = 0
   private workerId: string = cryptoRandomId()
+  private lastCancelCheck: number = 0
+  private cancelCheckThrottleMs: number = 500 // Minimum ms between cancel checks
 
   // Managers
   private logManager: LogManager
@@ -128,6 +146,36 @@ export class WorkerPipeline {
     this.logManager = new LogManager(projectId, cardId)
   }
 
+  // ==================== Configuration Helpers ====================
+
+  /**
+   * Get lease renewal interval from policy or default.
+   */
+  private getLeaseRenewalMs(): number {
+    return this.policy.worker?.leaseRenewalIntervalMs ?? DEFAULT_LEASE_RENEWAL_MS
+  }
+
+  /**
+   * Get pipeline timeout from policy or default.
+   */
+  private getPipelineTimeoutMs(): number {
+    return this.policy.worker?.pipelineTimeoutMs ?? DEFAULT_PIPELINE_TIMEOUT_MS
+  }
+
+  /**
+   * Get max retries for transient failures.
+   */
+  private getMaxRetries(): number {
+    return this.policy.worker?.maxRetries ?? DEFAULT_MAX_RETRIES
+  }
+
+  /**
+   * Get retry delay for transient failures.
+   */
+  private getRetryDelayMs(): number {
+    return this.policy.worker?.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS
+  }
+
   // ==================== Helpers ====================
 
   /**
@@ -153,8 +201,36 @@ export class WorkerPipeline {
     cancelJob(this.jobId, reason ?? 'Canceled')
   }
 
+  /**
+   * Check if canceled, with throttling to reduce DB queries.
+   * Only checks every cancelCheckThrottleMs milliseconds.
+   */
   private ensureNotCanceled(): void {
+    const now = Date.now()
+    if (now - this.lastCancelCheck < this.cancelCheckThrottleMs) {
+      return // Skip check, too soon since last check
+    }
+    this.lastCancelCheck = now
+
     if (this.isCanceled()) throw new WorkerCanceledError()
+
+    // Also check for pipeline timeout
+    if (this.pipelineStartTime > 0) {
+      const elapsed = now - this.pipelineStartTime
+      const timeout = this.getPipelineTimeoutMs()
+      if (elapsed > timeout) {
+        throw new PipelineTimeoutError(timeout)
+      }
+    }
+  }
+
+  /**
+   * Force a cancel check, bypassing throttle.
+   * Use at phase boundaries where immediate response is important.
+   */
+  private forceCheckCanceled(): void {
+    this.lastCancelCheck = 0
+    this.ensureNotCanceled()
   }
 
   private log(message: string, meta?: { source?: string; stream?: 'stdout' | 'stderr' }): void {
@@ -315,12 +391,27 @@ export class WorkerPipeline {
     this.jobId = jobId
     this.logManager.setJobId(jobId)
     this.setPhase('init')
+    this.pipelineStartTime = Date.now()
     let outcome: 'succeeded' | 'failed' | 'canceled' | 'pending_approval' = 'failed'
 
-    // Start lease renewal
+    // Acquire worker lock to prevent sync during worker operations
+    this.log('Acquiring worker lock')
+    await acquireWorkerLock(this.projectId)
+    this.log('Worker lock acquired')
+
+    // Start lease renewal with configurable interval
+    const leaseIntervalMs = this.getLeaseRenewalMs()
+    this.log(`Starting lease renewal (interval: ${leaseIntervalMs}ms)`)
     this.leaseInterval = setInterval(() => {
       renewJobLease(jobId)
-    }, 60000)
+    }, leaseIntervalMs)
+
+    // Set up pipeline timeout
+    const timeoutMs = this.getPipelineTimeoutMs()
+    this.pipelineTimeout = setTimeout(() => {
+      this.log(`Pipeline timeout reached (${timeoutMs}ms), canceling...`)
+      this.cancelJobInternal(`Pipeline timed out after ${timeoutMs}ms`)
+    }, timeoutMs)
 
     try {
       const initialized = await this.initialize()
@@ -573,11 +664,27 @@ export class WorkerPipeline {
           logs: this.logManager.getLogs()
         }
       }
+      if (err instanceof PipelineTimeoutError) {
+        this.setPhase('timeout')
+        this.log(`Pipeline timed out: ${err.message}`)
+        outcome = 'failed'
+        return {
+          success: false,
+          phase: 'timeout',
+          error: err.message,
+          logs: this.logManager.getLogs()
+        }
+      }
       throw err
     } finally {
-      // Cleanup
+      // Cleanup timers
       if (this.leaseInterval) {
         clearInterval(this.leaseInterval)
+        this.leaseInterval = null
+      }
+      if (this.pipelineTimeout) {
+        clearTimeout(this.pipelineTimeout)
+        this.pipelineTimeout = null
       }
 
       if (this.worktreeManager) {
@@ -609,6 +716,10 @@ export class WorkerPipeline {
           )
         }
       }
+
+      // Release worker lock to allow sync operations
+      releaseWorkerLock(this.projectId)
+      this.log('Worker lock released')
     }
   }
 

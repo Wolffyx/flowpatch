@@ -221,6 +221,34 @@ function readSyncSettings(project: Project | null): SyncSettings {
   }
 }
 
+interface WorkerPipelineSettings {
+  leaseRenewalIntervalMs: number
+  pipelineTimeoutMs: number
+  maxRetries: number
+  retryDelayMs: number
+}
+
+function readWorkerPipelineSettings(project: Project | null): WorkerPipelineSettings {
+  const defaults: WorkerPipelineSettings = {
+    leaseRenewalIntervalMs: 60000,
+    pipelineTimeoutMs: 30 * 60 * 1000, // 30 minutes
+    maxRetries: 3,
+    retryDelayMs: 1000
+  }
+  if (!project?.policy_json) return defaults
+  try {
+    const policy = JSON.parse(project.policy_json) as PolicyConfig
+    return {
+      leaseRenewalIntervalMs: policy?.worker?.leaseRenewalIntervalMs ?? defaults.leaseRenewalIntervalMs,
+      pipelineTimeoutMs: policy?.worker?.pipelineTimeoutMs ?? defaults.pipelineTimeoutMs,
+      maxRetries: policy?.worker?.maxRetries ?? defaults.maxRetries,
+      retryDelayMs: policy?.worker?.retryDelayMs ?? defaults.retryDelayMs
+    }
+  } catch {
+    return defaults
+  }
+}
+
 interface SettingsModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -348,6 +376,20 @@ export function SettingsModal({
   )
   const [autoSyncOnAction, setAutoSyncOnAction] = useState(
     () => readSyncSettings(project).autoSyncOnAction
+  )
+
+  // Worker Pipeline Settings state
+  const [leaseRenewalInterval, setLeaseRenewalInterval] = useState(
+    () => Math.round(readWorkerPipelineSettings(project).leaseRenewalIntervalMs / 1000)
+  )
+  const [pipelineTimeout, setPipelineTimeout] = useState(
+    () => Math.round(readWorkerPipelineSettings(project).pipelineTimeoutMs / 60000)
+  )
+  const [pipelineMaxRetries, setPipelineMaxRetries] = useState(
+    () => readWorkerPipelineSettings(project).maxRetries
+  )
+  const [pipelineRetryDelay, setPipelineRetryDelay] = useState(
+    () => Math.round(readWorkerPipelineSettings(project).retryDelayMs / 1000)
   )
 
   // Usage Limits state
@@ -519,6 +561,13 @@ export function SettingsModal({
       setSoundOnComplete(notifications.soundOnComplete)
       setSoundOnError(notifications.soundOnError)
       setSoundOnApproval(notifications.soundOnApproval)
+
+      // Sync worker pipeline settings
+      const pipeline = readWorkerPipelineSettings(proj)
+      setLeaseRenewalInterval(Math.round(pipeline.leaseRenewalIntervalMs / 1000))
+      setPipelineTimeout(Math.round(pipeline.pipelineTimeoutMs / 60000))
+      setPipelineMaxRetries(pipeline.maxRetries)
+      setPipelineRetryDelay(Math.round(pipeline.retryDelayMs / 1000))
     } catch {
       setToolPreference('auto')
       setRollbackOnCancel(false)
@@ -546,6 +595,11 @@ export function SettingsModal({
       setSoundOnComplete(true)
       setSoundOnError(true)
       setSoundOnApproval(true)
+      // Reset pipeline settings to defaults
+      setLeaseRenewalInterval(60)
+      setPipelineTimeout(30)
+      setPipelineMaxRetries(3)
+      setPipelineRetryDelay(1)
     }
   }
 
@@ -1064,6 +1118,67 @@ export function SettingsModal({
       updateSyncSetting({ autoSyncOnAction: enabled })
     },
     [updateSyncSetting]
+  )
+
+  // Worker Pipeline Settings handlers
+  const updateWorkerPipelineSetting = useCallback(
+    async (update: Partial<WorkerPipelineSettings>): Promise<void> => {
+      if (!project) return
+      try {
+        await window.electron.ipcRenderer.invoke('updateProjectPolicy', {
+          projectId: project.id,
+          policy: { worker: update }
+        })
+        toast.success('Pipeline settings updated')
+      } catch (err) {
+        // Rollback state on error
+        const pipeline = readWorkerPipelineSettings(project)
+        setLeaseRenewalInterval(Math.round(pipeline.leaseRenewalIntervalMs / 1000))
+        setPipelineTimeout(Math.round(pipeline.pipelineTimeoutMs / 60000))
+        setPipelineMaxRetries(pipeline.maxRetries)
+        setPipelineRetryDelay(Math.round(pipeline.retryDelayMs / 1000))
+        toast.error('Failed to update pipeline settings', {
+          description: err instanceof Error ? err.message : 'Unknown error'
+        })
+      }
+    },
+    [project]
+  )
+
+  const handleLeaseRenewalIntervalChange = useCallback(
+    (seconds: number): void => {
+      const clamped = Math.max(10, Math.min(300, seconds))
+      setLeaseRenewalInterval(clamped)
+      updateWorkerPipelineSetting({ leaseRenewalIntervalMs: clamped * 1000 })
+    },
+    [updateWorkerPipelineSetting]
+  )
+
+  const handlePipelineTimeoutChange = useCallback(
+    (minutes: number): void => {
+      const clamped = Math.max(5, Math.min(120, minutes))
+      setPipelineTimeout(clamped)
+      updateWorkerPipelineSetting({ pipelineTimeoutMs: clamped * 60000 })
+    },
+    [updateWorkerPipelineSetting]
+  )
+
+  const handlePipelineMaxRetriesChange = useCallback(
+    (retries: number): void => {
+      const clamped = Math.max(0, Math.min(10, retries))
+      setPipelineMaxRetries(clamped)
+      updateWorkerPipelineSetting({ maxRetries: clamped })
+    },
+    [updateWorkerPipelineSetting]
+  )
+
+  const handlePipelineRetryDelayChange = useCallback(
+    (seconds: number): void => {
+      const clamped = Math.max(1, Math.min(30, seconds))
+      setPipelineRetryDelay(clamped)
+      updateWorkerPipelineSetting({ retryDelayMs: clamped * 1000 })
+    },
+    [updateWorkerPipelineSetting]
   )
 
   // AI Profiles handlers
@@ -1863,6 +1978,94 @@ export function SettingsModal({
                       checked={autoSyncOnAction}
                       onCheckedChange={handleAutoSyncOnActionChange}
                     />
+                  </div>
+                </div>
+
+                {/* Worker Pipeline Settings */}
+                <div className="grid gap-2">
+                  <div className="flex items-center gap-2">
+                    <Settings2 className="h-4 w-4 text-foreground/70" />
+                    <h3 className="text-sm font-medium">Worker Pipeline Settings</h3>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Configure worker pipeline timeouts, retry behavior, and lease management.
+                  </p>
+
+                  <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                    <div className="flex-1">
+                      <div className="font-medium text-sm">Pipeline Timeout</div>
+                      <div className="text-xs text-muted-foreground">
+                        Maximum time for a worker pipeline to complete (5-120 minutes)
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number"
+                        min={5}
+                        max={120}
+                        value={pipelineTimeout}
+                        onChange={(e) => handlePipelineTimeoutChange(Number(e.target.value))}
+                        className="w-20"
+                      />
+                      <span className="text-xs text-muted-foreground">min</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                    <div className="flex-1">
+                      <div className="font-medium text-sm">Max Retries</div>
+                      <div className="text-xs text-muted-foreground">
+                        Number of retry attempts for transient failures (0-10)
+                      </div>
+                    </div>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={10}
+                      value={pipelineMaxRetries}
+                      onChange={(e) => handlePipelineMaxRetriesChange(Number(e.target.value))}
+                      className="w-20"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                    <div className="flex-1">
+                      <div className="font-medium text-sm">Retry Delay</div>
+                      <div className="text-xs text-muted-foreground">
+                        Initial delay between retry attempts (1-30 seconds)
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number"
+                        min={1}
+                        max={30}
+                        value={pipelineRetryDelay}
+                        onChange={(e) => handlePipelineRetryDelayChange(Number(e.target.value))}
+                        className="w-20"
+                      />
+                      <span className="text-xs text-muted-foreground">sec</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                    <div className="flex-1">
+                      <div className="font-medium text-sm">Lease Renewal Interval</div>
+                      <div className="text-xs text-muted-foreground">
+                        How often to renew job leases to prevent timeouts (10-300 seconds)
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number"
+                        min={10}
+                        max={300}
+                        value={leaseRenewalInterval}
+                        onChange={(e) => handleLeaseRenewalIntervalChange(Number(e.target.value))}
+                        className="w-20"
+                      />
+                      <span className="text-xs text-muted-foreground">sec</span>
+                    </div>
                   </div>
                 </div>
               </>

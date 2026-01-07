@@ -2,12 +2,22 @@
  * Process Runner
  *
  * Handles streaming process execution with timeout and cancellation support.
- * 
+ *
  * Security: All process execution goes through the command guard to prevent
  * unauthorized or dangerous command execution.
+ *
+ * Improvements:
+ * - Configurable cancellation poll interval
+ * - Adaptive polling (starts fast, slows down over time)
  */
 
 import { spawn, execFile, execFileSync } from 'child_process'
+
+// Cancellation polling configuration
+const DEFAULT_CANCEL_POLL_INTERVAL_MS = 500
+const MIN_CANCEL_POLL_INTERVAL_MS = 100
+const MAX_CANCEL_POLL_INTERVAL_MS = 2000
+const CANCEL_POLL_BACKOFF_FACTOR = 1.2
 import {
   validateCommand,
   createCommandGuardConfig,
@@ -64,6 +74,10 @@ export interface ProcessStreamingOptions {
   guardConfig?: CommandGuardConfig
   /** Skip security checks (only for internal trusted operations) */
   skipSecurityCheck?: boolean
+  /** Cancellation poll interval in ms (default: 500, uses adaptive polling) */
+  cancelPollIntervalMs?: number
+  /** Use adaptive polling that backs off over time (default: true) */
+  useAdaptivePolling?: boolean
 }
 
 /**
@@ -85,7 +99,9 @@ export async function runProcessStreaming(options: ProcessStreamingOptions): Pro
     isCanceled,
     origin = 'worker_pipeline',
     guardConfig,
-    skipSecurityCheck = false
+    skipSecurityCheck = false,
+    cancelPollIntervalMs = DEFAULT_CANCEL_POLL_INTERVAL_MS,
+    useAdaptivePolling = true
   } = options
 
   // Security validation (unless explicitly skipped for internal operations)
@@ -158,30 +174,49 @@ export async function runProcessStreaming(options: ProcessStreamingOptions): Pro
     }, timeoutMs)
 
     let killedByCancel = false
-    const cancelTimer = isCanceled
-      ? setInterval(() => {
-          if (!isCanceled()) return
-          if (!child.pid) return
+    let cancelTimerHandle: ReturnType<typeof setTimeout> | null = null
 
-          killedByCancel = true
-          try {
-            if (process.platform === 'win32') {
-              execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], () => {})
-            } else {
-              child.kill('SIGTERM')
-              setTimeout(() => {
-                try {
-                  child.kill('SIGKILL')
-                } catch {
-                  // ignore
-                }
-              }, 2000)
-            }
-          } catch {
-            // ignore
+    // Adaptive cancellation polling - starts fast, slows down over time
+    const scheduleCancelCheck = (currentInterval: number): void => {
+      if (!isCanceled || killedByCancel || killedByTimeout) return
+
+      cancelTimerHandle = setTimeout(() => {
+        if (!isCanceled()) {
+          // Not canceled, schedule next check with backoff
+          const nextInterval = useAdaptivePolling
+            ? Math.min(currentInterval * CANCEL_POLL_BACKOFF_FACTOR, MAX_CANCEL_POLL_INTERVAL_MS)
+            : currentInterval
+          scheduleCancelCheck(nextInterval)
+          return
+        }
+
+        if (!child.pid) return
+
+        killedByCancel = true
+        try {
+          if (process.platform === 'win32') {
+            execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], () => {})
+          } else {
+            child.kill('SIGTERM')
+            setTimeout(() => {
+              try {
+                child.kill('SIGKILL')
+              } catch {
+                // ignore
+              }
+            }, 2000)
           }
-        }, 500)
-      : null
+        } catch {
+          // ignore
+        }
+      }, currentInterval)
+    }
+
+    // Start cancellation polling if callback provided
+    if (isCanceled) {
+      const initialInterval = Math.max(cancelPollIntervalMs, MIN_CANCEL_POLL_INTERVAL_MS)
+      scheduleCancelCheck(initialInterval)
+    }
 
     const buffers = { stdout: '', stderr: '' }
     const tail = { stdout: [] as string[], stderr: [] as string[] }
@@ -212,13 +247,13 @@ export async function runProcessStreaming(options: ProcessStreamingOptions): Pro
 
     child.on('error', (err) => {
       clearTimeout(timer)
-      if (cancelTimer) clearInterval(cancelTimer)
+      if (cancelTimerHandle) clearTimeout(cancelTimerHandle)
       reject(err)
     })
 
     child.on('close', (code) => {
       clearTimeout(timer)
-      if (cancelTimer) clearInterval(cancelTimer)
+      if (cancelTimerHandle) clearTimeout(cancelTimerHandle)
 
       flushLine(buffers.stdout, 'stdout')
       flushLine(buffers.stderr, 'stderr')

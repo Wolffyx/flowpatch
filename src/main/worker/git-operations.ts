@@ -2,13 +2,109 @@
  * Git Operations
  *
  * Common git command wrappers for worker operations.
+ *
+ * Improvements:
+ * - Retry logic for transient network failures
+ * - Parallel execution for independent operations
+ * - Error classification for better handling
  */
 
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { resolve } from 'path'
+import { GitOperationError } from './errors'
 
 const execFileAsync = promisify(execFile)
+
+// Retry configuration
+const DEFAULT_MAX_RETRIES = 3
+const DEFAULT_RETRY_DELAY_MS = 1000
+const MAX_RETRY_DELAY_MS = 30000
+
+/**
+ * Check if an error is transient and can be retried.
+ */
+export function isTransientGitError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  const message = error.message.toLowerCase()
+
+  // Network-related errors
+  if (message.includes('could not resolve host')) return true
+  if (message.includes('unable to access')) return true
+  if (message.includes('connection refused')) return true
+  if (message.includes('connection timed out')) return true
+  if (message.includes('connection reset')) return true
+  if (message.includes('network is unreachable')) return true
+  if (message.includes('ssl')) return true
+  if (message.includes('tls')) return true
+  if (message.includes('certificate')) return true
+
+  // Lock-related errors (another process might be using the repo)
+  if (message.includes('cannot lock ref')) return true
+  if (message.includes('unable to create')) return true
+  if (message.includes('.lock')) return true
+
+  // Remote server errors
+  if (message.includes('500')) return true
+  if (message.includes('502')) return true
+  if (message.includes('503')) return true
+  if (message.includes('504')) return true
+  if (message.includes('remote end hung up')) return true
+  if (message.includes('the remote end hung up unexpectedly')) return true
+
+  return false
+}
+
+/**
+ * Retry a git operation with exponential backoff.
+ */
+export async function retryGitOperation<T>(
+  operation: () => Promise<T>,
+  options: {
+    maxRetries?: number
+    initialDelayMs?: number
+    operationName?: string
+  } = {}
+): Promise<T> {
+  const {
+    maxRetries = DEFAULT_MAX_RETRIES,
+    initialDelayMs = DEFAULT_RETRY_DELAY_MS,
+    operationName = 'git operation'
+  } = options
+
+  let lastError: Error | undefined
+  let delay = initialDelayMs
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation()
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error))
+
+      // Don't retry if not transient
+      if (!isTransientGitError(error)) {
+        throw error
+      }
+
+      // Don't retry on last attempt
+      if (attempt === maxRetries) {
+        break
+      }
+
+      // Wait before retrying
+      await new Promise((resolve) => setTimeout(resolve, delay))
+
+      // Exponential backoff with cap
+      delay = Math.min(delay * 2, MAX_RETRY_DELAY_MS)
+    }
+  }
+
+  throw new GitOperationError(
+    `${operationName} failed after ${maxRetries} attempts: ${lastError?.message}`,
+    operationName,
+    undefined
+  )
+}
 
 export interface GitEnv {
   GIT_TERMINAL_PROMPT: string
@@ -57,6 +153,20 @@ export async function fetchOrigin(cwd: string, branch?: string): Promise<void> {
   const args = ['fetch', 'origin']
   if (branch) args.push(branch)
   await execFileAsync('git', args, { cwd, env: getGitEnv() })
+}
+
+/**
+ * Fetch from remote with retry for transient failures.
+ */
+export async function fetchOriginWithRetry(
+  cwd: string,
+  branch?: string,
+  maxRetries = DEFAULT_MAX_RETRIES
+): Promise<void> {
+  return retryGitOperation(
+    () => fetchOrigin(cwd, branch),
+    { maxRetries, operationName: `fetch origin${branch ? ` ${branch}` : ''}` }
+  )
 }
 
 /**
@@ -331,6 +441,20 @@ export async function pullRebase(cwd: string, branch: string): Promise<void> {
 }
 
 /**
+ * Pull from remote with rebase and retry for transient failures.
+ */
+export async function pullRebaseWithRetry(
+  cwd: string,
+  branch: string,
+  maxRetries = DEFAULT_MAX_RETRIES
+): Promise<void> {
+  return retryGitOperation(
+    () => pullRebase(cwd, branch),
+    { maxRetries, operationName: `pull --rebase origin ${branch}` }
+  )
+}
+
+/**
  * Get HEAD SHA.
  */
 export async function getHeadSha(cwd: string): Promise<string | null> {
@@ -376,6 +500,20 @@ export async function commit(cwd: string, message: string): Promise<void> {
  */
 export async function push(cwd: string, branch: string): Promise<void> {
   await execFileAsync('git', ['push', '-u', 'origin', branch], { cwd, env: getGitEnv() })
+}
+
+/**
+ * Push to remote with retry for transient failures.
+ */
+export async function pushWithRetry(
+  cwd: string,
+  branch: string,
+  maxRetries = DEFAULT_MAX_RETRIES
+): Promise<void> {
+  return retryGitOperation(
+    () => push(cwd, branch),
+    { maxRetries, operationName: `push -u origin ${branch}` }
+  )
 }
 
 /**
@@ -642,5 +780,19 @@ export class GitOperations {
     remoteExists: boolean
   }> {
     return fetchAndCheckBranch(this.cwd, branchName)
+  }
+
+  // ==================== Retry-Enabled Operations ====================
+
+  async fetchOriginWithRetry(branch?: string, maxRetries?: number): Promise<void> {
+    return fetchOriginWithRetry(this.cwd, branch, maxRetries)
+  }
+
+  async pullRebaseWithRetry(branch: string, maxRetries?: number): Promise<void> {
+    return pullRebaseWithRetry(this.cwd, branch, maxRetries)
+  }
+
+  async pushWithRetry(branch: string, maxRetries?: number): Promise<void> {
+    return pushWithRetry(this.cwd, branch, maxRetries)
   }
 }

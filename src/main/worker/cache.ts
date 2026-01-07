@@ -140,11 +140,24 @@ export function getCommandCacheStats(): { size: number; ttlMs: number } {
 export interface AIToolAvailability {
   claude: boolean
   codex: boolean
+  opencode: boolean
+  cursor: boolean
   checkedAt: number
 }
 
 let aiToolsCache: AIToolAvailability | null = null
 const AI_TOOLS_TTL = 5 * 60 * 1000 // 5 minutes
+
+/**
+ * Known CLI tool commands.
+ * This list should match the registered providers in cli-providers/index.ts.
+ */
+const CLI_TOOL_COMMANDS = {
+  claude: 'claude',
+  codex: 'codex',
+  opencode: 'opencode',
+  cursor: 'cursor'
+} as const
 
 /**
  * Get available AI tools (cached).
@@ -155,15 +168,19 @@ export async function getAvailableAITools(): Promise<AIToolAvailability> {
     return aiToolsCache
   }
 
-  // Check both tools in parallel
-  const [hasClaude, hasCodex] = await Promise.all([
-    hasCommand('claude'),
-    hasCommand('codex')
+  // Check all tools in parallel
+  const [hasClaude, hasCodex, hasOpencode, hasCursor] = await Promise.all([
+    hasCommand(CLI_TOOL_COMMANDS.claude),
+    hasCommand(CLI_TOOL_COMMANDS.codex),
+    hasCommand(CLI_TOOL_COMMANDS.opencode),
+    hasCommand(CLI_TOOL_COMMANDS.cursor)
   ])
 
   aiToolsCache = {
     claude: hasClaude,
     codex: hasCodex,
+    opencode: hasOpencode,
+    cursor: hasCursor,
     checkedAt: Date.now()
   }
 

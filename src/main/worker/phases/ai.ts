@@ -1,49 +1,34 @@
 /**
  * AI Phase
  *
- * Handles AI tool execution (Claude Code or Codex).
+ * Handles AI tool execution using the CLIProviderRegistry.
  */
 
-import { writeFileSync, unlinkSync } from 'fs'
+import { writeFileSync } from 'fs'
 import { join } from 'path'
-import { runProcessStreaming, WorkerCanceledError } from '../process-runner'
+import {
+  CLIProviderRegistry,
+  type ICLIProvider,
+  type CLIExecutionResult,
+  type LogFn as CLILogFn
+} from '../../cli-providers'
 import { getWorkingDir, type PipelineContext, type LogFn } from './types'
 import { buildContextBundle, buildPromptContext } from '../../services/patchwork-context'
 import { ensureRunDir } from '../../services/patchwork-runs'
-import { updateWorkerProgress, createUsageRecord, getHourlyUsage, getDailyUsage, getMonthlyUsage, getToolLimits } from '../../db'
-import { hasCommand, getAvailableAITools } from '../cache'
+import {
+  updateWorkerProgress,
+  createUsageRecord,
+  getHourlyUsage,
+  getDailyUsage,
+  getMonthlyUsage,
+  getToolLimits
+} from '../../db'
 import type { ThinkingMode, AIToolType } from '../../../shared/types'
+import { WorkerCanceledError } from '../process-runner'
 
 // ============================================================================
 // Usage Tracking
 // ============================================================================
-
-/** Pricing per 1M tokens (approximate, may vary by model) */
-const PRICING = {
-  claude: { input: 3.0, output: 15.0 }, // Claude Sonnet 4 pricing
-  codex: { input: 2.5, output: 10.0 } // Codex/GPT-4 approximate pricing
-}
-
-/**
- * Estimate token count from text (rough approximation: ~4 chars per token).
- */
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4)
-}
-
-/**
- * Calculate estimated cost in USD.
- */
-function calculateCost(
-  toolType: 'claude' | 'codex',
-  inputTokens: number,
-  outputTokens: number
-): number {
-  const pricing = PRICING[toolType]
-  const inputCost = (inputTokens / 1_000_000) * pricing.input
-  const outputCost = (outputTokens / 1_000_000) * pricing.output
-  return inputCost + outputCost
-}
 
 /**
  * Check if usage limits are exceeded for a tool.
@@ -114,14 +99,6 @@ export function checkLimitsExceeded(
   }
 
   return { exceeded: false }
-}
-
-/**
- * Check if a command is available on the system (cached).
- * @deprecated Use hasCommand from cache.ts for better performance.
- */
-export async function checkCommand(cmd: string): Promise<boolean> {
-  return hasCommand(cmd)
 }
 
 /**
@@ -236,6 +213,10 @@ ${repoContext}
 Please implement the changes now.`
 }
 
+// ============================================================================
+// Deprecated Types (backward compatibility)
+// ============================================================================
+
 export interface ClaudeCodeOptions {
   /** Prompt to send to Claude */
   prompt: string
@@ -265,71 +246,43 @@ export interface AIExecutionResult {
   outputLength: number
 }
 
+// ============================================================================
+// Deprecated Functions (backward compatibility)
+// ============================================================================
+
 /**
  * Run Claude Code CLI.
+ * @deprecated Use CLIProviderRegistry.get('claude').execute() instead
  */
 export async function runClaudeCode(options: ClaudeCodeOptions): Promise<AIExecutionResult> {
-  const { prompt, timeoutMs, cwd, log, isCanceled, thinkingMode, thinkingBudget } = options
+  const provider = CLIProviderRegistry.get('claude')
+  if (!provider) throw new Error('Claude provider not registered')
 
-  // Build CLI arguments
-  const args = ['--print', '--dangerously-skip-permissions', '-p', prompt]
+  const result = await provider.execute({
+    prompt: options.prompt,
+    timeoutMs: options.timeoutMs,
+    cwd: options.cwd,
+    log: options.log as CLILogFn,
+    isCanceled: options.isCanceled,
+    thinkingMode: options.thinkingMode,
+    thinkingBudget: options.thinkingBudget
+  })
 
-  // Add extended thinking arguments if enabled
-  const budgetTokens = thinkingMode ? getThinkingBudgetTokens(thinkingMode, thinkingBudget) : undefined
-  if (budgetTokens) {
-    args.push('--thinking-budget', budgetTokens.toString())
-    log(`Extended thinking enabled: ${thinkingMode} mode (${budgetTokens} tokens)`)
+  if (!result.success && result.error) {
+    throw new Error(result.error)
   }
 
-  log('Invoking Claude Code CLI...')
-
-  // Write prompt to a temp file for Claude to read
-  const promptPath = join(cwd, '.patchwork-prompt.md')
-  writeFileSync(promptPath, prompt)
-
-  const startTime = Date.now()
-  let outputLength = 0
-
-  try {
-    await runProcessStreaming({
-      command: 'claude',
-      args,
-      cwd,
-      timeoutMs,
-      source: 'claude',
-      env: {
-        ...process.env,
-        CLAUDE_CODE_ENTRYPOINT: 'cli'
-      },
-      onLog: (message, meta) => {
-        // Track output length for token estimation
-        outputLength += message.length
-        log(message, meta)
-      },
-      isCanceled
-    })
-
-    const durationMs = Date.now() - startTime
-    const inputTokens = estimateTokens(prompt)
-    const outputTokens = estimateTokens(outputLength.toString()) || Math.ceil(outputLength / 4)
-
-    return {
-      inputTokens,
-      outputTokens,
-      durationMs,
-      outputLength
-    }
-  } finally {
-    try {
-      unlinkSync(promptPath)
-    } catch {
-      // Ignore cleanup errors
-    }
+  return {
+    inputTokens: result.inputTokens,
+    outputTokens: result.outputTokens,
+    durationMs: result.durationMs,
+    outputLength: result.outputLength
   }
 }
 
 /**
  * Run Codex CLI.
+ * @deprecated Use CLIProviderRegistry.get('codex').execute() instead
  */
 export async function runCodex(
   prompt: string,
@@ -338,65 +291,57 @@ export async function runCodex(
   log: LogFn,
   isCanceled: () => boolean
 ): Promise<AIExecutionResult> {
-  log('Invoking Codex CLI...')
+  const provider = CLIProviderRegistry.get('codex')
+  if (!provider) throw new Error('Codex provider not registered')
 
-  const startTime = Date.now()
-  let outputLength = 0
+  const result = await provider.execute({
+    prompt,
+    timeoutMs,
+    cwd,
+    log: log as CLILogFn,
+    isCanceled
+  })
 
-  try {
-    await runProcessStreaming({
-      command: 'codex',
-      args: ['exec', '--full-auto', '-'],
-      cwd,
-      timeoutMs,
-      source: 'codex',
-      stdin: prompt,
-      onLog: (message, meta) => {
-        outputLength += message.length
-        log(message, meta)
-      },
-      isCanceled
-    })
+  if (!result.success && result.error) {
+    throw new Error(result.error)
+  }
 
-    const durationMs = Date.now() - startTime
-    const inputTokens = estimateTokens(prompt)
-    const outputTokens = Math.ceil(outputLength / 4)
-
-    return {
-      inputTokens,
-      outputTokens,
-      durationMs,
-      outputLength
-    }
-  } finally {
-    // Cleanup if needed
+  return {
+    inputTokens: result.inputTokens,
+    outputTokens: result.outputTokens,
+    durationMs: result.durationMs,
+    outputLength: result.outputLength
   }
 }
+
+// ============================================================================
+// Usage Recording
+// ============================================================================
 
 /**
  * Record usage after AI execution.
  */
 function recordAIUsage(
   ctx: PipelineContext,
-  tool: 'claude' | 'codex',
-  result: AIExecutionResult,
+  provider: ICLIProvider,
+  result: CLIExecutionResult,
   log: LogFn
 ): void {
   try {
     const totalTokens = result.inputTokens + result.outputTokens
-    const costUsd = calculateCost(tool, result.inputTokens, result.outputTokens)
+    const costUsd = provider.calculateCost(result.inputTokens, result.outputTokens, result.thinkingTokens)
 
     createUsageRecord({
       projectId: ctx.project!.id,
       jobId: ctx.jobId ?? undefined,
       cardId: ctx.card?.id,
-      toolType: tool,
+      toolType: provider.metadata.toolType,
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
       totalTokens,
       costUsd,
       durationMs: result.durationMs,
-      model: tool === 'claude' ? 'claude-sonnet-4' : 'codex'
+      model: provider.metadata.defaultModel
     })
 
     log(
@@ -408,8 +353,12 @@ function recordAIUsage(
   }
 }
 
+// ============================================================================
+// Main Entry Point
+// ============================================================================
+
 /**
- * Run AI implementation (Claude or Codex).
+ * Run AI implementation using the provider registry.
  */
 export async function runAI(
   ctx: PipelineContext,
@@ -419,142 +368,85 @@ export async function runAI(
 ): Promise<boolean> {
   if (!ctx.project || !ctx.card) return false
 
-  const toolPreference = ctx.policy.worker?.toolPreference || 'auto'
   const maxMinutes = ctx.policy.worker?.maxMinutes || 25
   const timeoutMs = maxMinutes * 60 * 1000
-
-  // Detect available tools (cached for efficiency)
-  const aiTools = await getAvailableAITools()
-  const hasClaude = aiTools.claude
-  const hasCodex = aiTools.codex
-
-  let tool: 'claude' | 'codex' | null = null
-  if (toolPreference === 'claude' && hasClaude) tool = 'claude'
-  else if (toolPreference === 'codex' && hasCodex) tool = 'codex'
-  else if (toolPreference === 'auto') {
-    if (hasClaude) tool = 'claude'
-    else if (hasCodex) tool = 'codex'
-  }
-
   const workingDir = getWorkingDir(ctx)
 
-  if (!tool) {
-    log('No AI tool available (claude or codex)')
-    // Create a stub file with the plan
-    const planPath = join(workingDir, 'IMPLEMENTATION_PLAN.md')
-    const fullPlan = `# Implementation Plan (AI tool not available)
+  // Use registry to select provider
+  const { provider, fallbackUsed, reason } = await CLIProviderRegistry.selectProvider(
+    ctx.policy,
+    checkLimitsExceeded
+  )
 
-## Task
-${ctx.card.title}
-
-## Description
-${ctx.card.body || 'No description'}
-
-## Plan
-${plan}
-
-## Note
-This PR was created without AI implementation because no AI tool (Claude Code or Codex) was detected.
-Please implement the changes manually following the plan above.
-
-## Commands
-Allowed: ${(ctx.policy.worker?.allowedCommands || []).join(', ')}
-Forbidden paths: ${(ctx.policy.worker?.forbidPaths || []).join(', ')}
-`
-    writeFileSync(planPath, fullPlan)
-    return true // Return true to continue with stub PR
+  if (!provider) {
+    log(`No AI tool available: ${reason}`)
+    await createStubPlan(ctx, plan, workingDir, reason || 'No AI tool available')
+    return false
   }
 
-  // Check usage limits before running
-  const limitCheck = checkLimitsExceeded(tool)
-  if (limitCheck.exceeded) {
-    log(`⚠️ ${tool} limit exceeded: ${limitCheck.reason}`)
-
-    // Try fallback tool if allowed
-    const fallbackTool = tool === 'claude' ? 'codex' : 'claude'
-    const hasFallback = fallbackTool === 'claude' ? hasClaude : hasCodex
-
-    if (limitCheck.fallbackAllowed && hasFallback) {
-      const fallbackCheck = checkLimitsExceeded(fallbackTool)
-      if (!fallbackCheck.exceeded) {
-        log(`↪️ Falling back to ${fallbackTool}...`)
-        tool = fallbackTool
-      } else {
-        log(`⚠️ ${fallbackTool} also exceeded: ${fallbackCheck.reason}`)
-        log('❌ All AI tools have exceeded their limits. Cannot proceed.')
-        // Create a stub file explaining the limit
-        const planPath = join(workingDir, 'IMPLEMENTATION_PLAN.md')
-        const fullPlan = `# Implementation Plan (Usage limits exceeded)
-
-## Task
-${ctx.card.title}
-
-## Description
-${ctx.card.body || 'No description'}
-
-## Plan
-${plan}
-
-## Note
-This PR was created without AI implementation because usage limits have been exceeded.
-- ${limitCheck.reason}
-- ${fallbackCheck.reason}
-
-Please implement the changes manually or wait for limits to reset.
-`
-        writeFileSync(planPath, fullPlan)
-        return false
-      }
-    } else if (!hasFallback) {
-      log('❌ No fallback tool available. Cannot proceed.')
-      return false
-    }
+  if (fallbackUsed) {
+    log(`↪️ Note: ${reason}`)
   }
 
   try {
-    log(`Running ${tool} with ${maxMinutes} minute timeout`)
+    log(`Running ${provider.metadata.displayName} with ${maxMinutes} minute timeout`)
 
     // Build the prompt for the AI tool
     const prompt = await buildAIPrompt(ctx, plan)
 
     // Get thinking mode configuration from policy
     const thinkingConfig = ctx.policy.features?.thinking
-    const thinkingEnabled = thinkingConfig?.enabled !== false
+    const thinkingEnabled = thinkingConfig?.enabled !== false && provider.capabilities.supportsThinking
     const thinkingMode = thinkingEnabled ? thinkingConfig?.mode : undefined
     const thinkingBudget = thinkingConfig?.budgetTokens
 
-    let executionResult: AIExecutionResult | null = null
-    let usedTool: 'claude' | 'codex' = tool
+    // Execute using provider
+    const result = await provider.execute({
+      prompt,
+      timeoutMs,
+      cwd: workingDir,
+      log: log as CLILogFn,
+      isCanceled,
+      thinkingMode,
+      thinkingBudget
+    })
 
-    if (tool === 'claude') {
-      try {
-        executionResult = await runClaudeCode({
-          prompt,
-          timeoutMs,
-          cwd: workingDir,
-          log,
-          isCanceled,
-          thinkingMode,
-          thinkingBudget
-        })
-      } catch (error) {
-        if (hasCodex && isClaudeRetryableLimitError(error)) {
-          log('Claude failed due to rate/usage limit; falling back to Codex...')
-          executionResult = await runCodex(prompt, timeoutMs, workingDir, log, isCanceled)
-          usedTool = 'codex'
-        } else {
-          throw error
+    // Handle failure with potential fallback
+    if (!result.success) {
+      if (result.error && provider.isRetryableLimitError(result.error)) {
+        // Try to find a fallback provider
+        const { provider: fallback } = await CLIProviderRegistry.selectProvider(
+          { ...ctx.policy, worker: { ...ctx.policy.worker, toolPreference: 'auto' } },
+          (toolType) =>
+            toolType === provider.metadata.toolType
+              ? { exceeded: true, reason: 'Rate limited' }
+              : checkLimitsExceeded(toolType)
+        )
+
+        if (fallback && fallback.metadata.key !== provider.metadata.key) {
+          log(`${provider.metadata.displayName} rate limited; falling back to ${fallback.metadata.displayName}...`)
+
+          const fallbackResult = await fallback.execute({
+            prompt,
+            timeoutMs,
+            cwd: workingDir,
+            log: log as CLILogFn,
+            isCanceled
+          })
+
+          if (fallbackResult.success) {
+            recordAIUsage(ctx, fallback, fallbackResult, log)
+            log('AI implementation completed')
+            return true
+          }
         }
       }
-    } else if (tool === 'codex') {
-      executionResult = await runCodex(prompt, timeoutMs, workingDir, log, isCanceled)
+
+      throw new Error(result.error || 'AI execution failed')
     }
 
-    // Record usage after successful execution
-    if (executionResult) {
-      recordAIUsage(ctx, usedTool, executionResult, log)
-    }
-
+    // Record usage for successful execution
+    recordAIUsage(ctx, provider, result, log)
     log('AI implementation completed')
     return true
   } catch (error) {
@@ -563,25 +455,40 @@ Please implement the changes manually or wait for limits to reset.
     }
 
     log(`AI error: ${error}`)
-    // On AI failure, still create the plan file so PR can be created as WIP
-    const planPath = join(workingDir, 'IMPLEMENTATION_PLAN.md')
-    const fullPlan = `# Implementation Plan (AI execution failed)
+    await createStubPlan(ctx, plan, workingDir, error instanceof Error ? error.message : String(error))
+    return false
+  }
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/**
+ * Create a stub plan file when AI execution cannot proceed.
+ */
+async function createStubPlan(
+  ctx: PipelineContext,
+  plan: string,
+  workingDir: string,
+  reason: string
+): Promise<void> {
+  const planPath = join(workingDir, 'IMPLEMENTATION_PLAN.md')
+  const fullPlan = `# Implementation Plan (AI execution unavailable)
 
 ## Task
-${ctx.card.title}
+${ctx.card!.title}
 
 ## Description
-${ctx.card.body || 'No description'}
+${ctx.card!.body || 'No description'}
 
 ## Plan
 ${plan}
 
-## Error
-AI execution failed: ${error instanceof Error ? error.message : String(error)}
+## Note
+${reason}
 
 Please implement the changes manually following the plan above.
 `
-    writeFileSync(planPath, fullPlan)
-    return false
-  }
+  writeFileSync(planPath, fullPlan)
 }

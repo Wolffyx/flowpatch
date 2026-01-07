@@ -22,16 +22,210 @@ import type {
 } from '../types'
 import { DEFAULT_POLICY } from '../types'
 
+// ============================================================================
+// Policy Cache
+// ============================================================================
+
+interface CachedPolicy {
+  policy: PolicyConfig
+  hash: string
+  cachedAt: number
+}
+
+const POLICY_CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
+const MAX_POLICY_CACHE_SIZE = 100
+
+const policyCache = new Map<string, CachedPolicy>()
+
+/**
+ * Simple hash function for cache keys.
+ */
+function simpleHash(str: string): string {
+  let hash = 0
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i)
+    hash = ((hash << 5) - hash) + char
+    hash = hash & hash // Convert to 32-bit integer
+  }
+  return hash.toString(36)
+}
+
+/**
+ * Evict oldest entries if cache is full.
+ */
+function evictOldestCache(): void {
+  if (policyCache.size < MAX_POLICY_CACHE_SIZE) return
+
+  let oldestKey: string | null = null
+  let oldestTime = Infinity
+
+  for (const [key, entry] of policyCache) {
+    if (entry.cachedAt < oldestTime) {
+      oldestTime = entry.cachedAt
+      oldestKey = key
+    }
+  }
+
+  if (oldestKey) {
+    policyCache.delete(oldestKey)
+  }
+}
+
+/**
+ * Get policy from cache if valid.
+ */
+function getCachedPolicy(json: string): PolicyConfig | null {
+  const hash = simpleHash(json)
+  const cached = policyCache.get(hash)
+
+  if (!cached) return null
+
+  // Check TTL
+  if (Date.now() - cached.cachedAt > POLICY_CACHE_TTL_MS) {
+    policyCache.delete(hash)
+    return null
+  }
+
+  return cached.policy
+}
+
+/**
+ * Cache a parsed policy.
+ */
+function cachePolicy(json: string, policy: PolicyConfig): void {
+  evictOldestCache()
+
+  const hash = simpleHash(json)
+  policyCache.set(hash, {
+    policy,
+    hash,
+    cachedAt: Date.now()
+  })
+}
+
+/**
+ * Clear the policy cache.
+ */
+export function clearPolicyCache(): void {
+  policyCache.clear()
+}
+
+/**
+ * Get policy cache stats.
+ */
+export function getPolicyCacheStats(): { size: number; maxSize: number } {
+  return {
+    size: policyCache.size,
+    maxSize: MAX_POLICY_CACHE_SIZE
+  }
+}
+
+// ============================================================================
+// Policy Validation
+// ============================================================================
+
+export interface PolicyValidationResult {
+  valid: boolean
+  errors: string[]
+  warnings: string[]
+}
+
+/**
+ * Validate a policy configuration.
+ */
+export function validatePolicy(policy: PolicyConfig): PolicyValidationResult {
+  const errors: string[] = []
+  const warnings: string[] = []
+
+  // Check version
+  if (typeof policy.version !== 'number') {
+    errors.push('Policy version must be a number')
+  }
+
+  // Validate worker config
+  if (policy.worker) {
+    if (policy.worker.maxMinutes !== undefined) {
+      if (typeof policy.worker.maxMinutes !== 'number' || policy.worker.maxMinutes <= 0) {
+        errors.push('worker.maxMinutes must be a positive number')
+      }
+      if (policy.worker.maxMinutes > 120) {
+        warnings.push('worker.maxMinutes > 120 may cause long-running jobs')
+      }
+    }
+
+    if (policy.worker.pool?.maxWorkers !== undefined) {
+      if (typeof policy.worker.pool.maxWorkers !== 'number' || policy.worker.pool.maxWorkers <= 0) {
+        errors.push('worker.pool.maxWorkers must be a positive number')
+      }
+      if (policy.worker.pool.maxWorkers > 8) {
+        warnings.push('worker.pool.maxWorkers > 8 may cause resource contention')
+      }
+    }
+
+    if (policy.worker.leaseRenewalIntervalMs !== undefined) {
+      if (typeof policy.worker.leaseRenewalIntervalMs !== 'number' || policy.worker.leaseRenewalIntervalMs < 10000) {
+        errors.push('worker.leaseRenewalIntervalMs must be at least 10000ms')
+      }
+    }
+
+    if (policy.worker.pipelineTimeoutMs !== undefined) {
+      if (typeof policy.worker.pipelineTimeoutMs !== 'number' || policy.worker.pipelineTimeoutMs < 60000) {
+        errors.push('worker.pipelineTimeoutMs must be at least 60000ms (1 minute)')
+      }
+    }
+  }
+
+  // Validate sync config
+  if (policy.sync?.statusLabels) {
+    const labels = policy.sync.statusLabels
+    const labelValues = Object.values(labels).filter(Boolean)
+    const uniqueLabels = new Set(labelValues)
+    if (labelValues.length !== uniqueLabels.size) {
+      warnings.push('Duplicate status labels detected - this may cause confusion')
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    warnings
+  }
+}
+
+// ============================================================================
+// Policy Parsing
+// ============================================================================
+
 /**
  * Parse a policy JSON string, returning DEFAULT_POLICY if parsing fails.
+ * Uses caching to avoid repeated parsing of the same JSON.
  */
 export function parsePolicyJson(json: string | null | undefined): PolicyConfig {
   if (!json) return DEFAULT_POLICY
+
+  // Check cache first
+  const cached = getCachedPolicy(json)
+  if (cached) return cached
+
   try {
-    return JSON.parse(json) as PolicyConfig
+    const policy = JSON.parse(json) as PolicyConfig
+    cachePolicy(json, policy)
+    return policy
   } catch {
     return DEFAULT_POLICY
   }
+}
+
+/**
+ * Parse and validate a policy JSON string.
+ * Returns the policy and validation results.
+ */
+export function parsePolicyJsonWithValidation(
+  json: string | null | undefined
+): { policy: PolicyConfig; validation: PolicyValidationResult } {
+  const policy = parsePolicyJson(json)
+  const validation = validatePolicy(policy)
+  return { policy, validation }
 }
 
 /**
@@ -269,6 +463,6 @@ export function isWorkerEnabled(policy: PolicyConfig): boolean {
 /**
  * Get the tool preference from policy.
  */
-export function getToolPreference(policy: PolicyConfig): 'auto' | 'claude' | 'codex' {
+export function getToolPreference(policy: PolicyConfig): 'auto' | 'claude' | 'codex' | 'opencode' | 'cursor' {
   return policy.worker?.toolPreference ?? 'auto'
 }
