@@ -994,7 +994,35 @@ export interface PolicyConfig {
     session?: AISessionConfig
     /** E2E testing configuration */
     e2e?: E2ETestConfig
+    /** Unit testing configuration */
+    unitTest?: UnitTestConfig
+    /** Pre-commit hooks configuration */
+    preCommit?: PreCommitConfig
   }
+}
+
+/**
+ * Unit testing configuration.
+ */
+export interface UnitTestConfig {
+  enabled: boolean
+  /** Custom test command (default: npm test) */
+  command?: string
+  /** Run related tests on file save */
+  runOnSave?: boolean
+}
+
+/**
+ * Pre-commit hooks configuration.
+ */
+export interface PreCommitConfig {
+  enabled: boolean
+  /** Run ESLint on staged files */
+  lint: boolean
+  /** Run related unit tests on staged files */
+  test: boolean
+  /** Run TypeScript type checking */
+  typecheck: boolean
 }
 
 // IPC Request/Response types

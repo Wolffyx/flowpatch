@@ -91,6 +91,37 @@ export class CardStatusManager {
   }
 
   /**
+   * Move card to Testing status.
+   * Called when E2E phase begins execution.
+   */
+  async moveToTesting(): Promise<void> {
+    const current = getCard(this.ctx.cardId)
+    if (!current) return
+    if (current.status === 'testing') return
+
+    updateCardStatus(this.ctx.cardId, 'testing')
+    createEvent(this.ctx.projectId, 'status_changed', this.ctx.cardId, {
+      from: current.status,
+      to: 'testing',
+      source: 'worker'
+    })
+
+    // Update remote if adapter available
+    if (this.ctx.adapter && this.ctx.card?.remote_number_or_iid) {
+      const issueNumber = parseInt(this.ctx.card.remote_number_or_iid, 10)
+      const newLabel = this.ctx.adapter.getStatusLabel('testing')
+      const allLabels = this.ctx.adapter.getAllStatusLabels()
+      await this.ctx.adapter.updateLabels(
+        issueNumber,
+        [newLabel],
+        allLabels.filter((l) => l !== newLabel)
+      )
+    }
+
+    broadcastToRenderers('card-updated', { cardId: this.ctx.cardId })
+  }
+
+  /**
    * Move card to Ready status.
    */
   async moveToReady(reason: string): Promise<void> {

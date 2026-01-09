@@ -592,9 +592,13 @@ export class WorkerPipeline {
       if (this.policy.worker?.e2e?.enabled) {
         this.setPhase('e2e')
         this.log('Running E2E tests')
+
+        // Move card to testing status during E2E phase
+        await this.cardStatusManager!.moveToTesting()
+
         const e2eResult = await this.runE2EPhase()
         this.ensureNotCanceled()
-        this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
+        this.cardStatusManager!.ensureCardStatusAllowed(['testing', 'in_progress'])
         e2ePass = e2eResult.success
         if (!e2ePass) {
           this.log(`E2E tests failed after ${e2eResult.fixAttempts} fix attempts`)

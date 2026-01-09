@@ -196,4 +196,90 @@ export function registerProjectHandlers(notifyRenderer: () => void): void {
       return { success: true, project: getProject(payload.projectId) }
     }
   )
+
+  // Update Unit Test settings
+  ipcMain.handle(
+    'updateUnitTestSettings',
+    (
+      _e,
+      payload: {
+        projectId: string
+        unitTestConfig: Partial<{ enabled: boolean; command: string; runOnSave: boolean }>
+      }
+    ) => {
+      logAction('updateUnitTestSettings', payload)
+
+      if (!payload?.projectId) return { error: 'Project ID required' }
+      if (!payload?.unitTestConfig) return { error: 'Unit test config required' }
+
+      const project = getProject(payload.projectId)
+      if (!project) return { error: 'Project not found' }
+
+      // Update database (policy_json)
+      const currentPolicy = parsePolicyJson(project.policy_json)
+      const currentUnitTest = currentPolicy.worker?.unitTest ?? {
+        enabled: false,
+        command: '',
+        runOnSave: false
+      }
+      const updatedPolicy = mergePolicyUpdate(currentPolicy, {
+        worker: {
+          unitTest: {
+            ...currentUnitTest,
+            ...payload.unitTestConfig
+          }
+        }
+      })
+      updateProjectPolicyJson(payload.projectId, JSON.stringify(updatedPolicy))
+
+      notifyRenderer()
+      return { success: true, project: getProject(payload.projectId) }
+    }
+  )
+
+  // Update Pre-commit Hooks settings
+  ipcMain.handle(
+    'updatePreCommitSettings',
+    (
+      _e,
+      payload: {
+        projectId: string
+        preCommitConfig: Partial<{
+          enabled: boolean
+          lint: boolean
+          test: boolean
+          typecheck: boolean
+        }>
+      }
+    ) => {
+      logAction('updatePreCommitSettings', payload)
+
+      if (!payload?.projectId) return { error: 'Project ID required' }
+      if (!payload?.preCommitConfig) return { error: 'Pre-commit config required' }
+
+      const project = getProject(payload.projectId)
+      if (!project) return { error: 'Project not found' }
+
+      // Update database (policy_json)
+      const currentPolicy = parsePolicyJson(project.policy_json)
+      const currentPreCommit = currentPolicy.worker?.preCommit ?? {
+        enabled: false,
+        lint: true,
+        test: true,
+        typecheck: false
+      }
+      const updatedPolicy = mergePolicyUpdate(currentPolicy, {
+        worker: {
+          preCommit: {
+            ...currentPreCommit,
+            ...payload.preCommitConfig
+          }
+        }
+      })
+      updateProjectPolicyJson(payload.projectId, JSON.stringify(updatedPolicy))
+
+      notifyRenderer()
+      return { success: true, project: getProject(payload.projectId) }
+    }
+  )
 }
