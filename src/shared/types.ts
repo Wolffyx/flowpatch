@@ -4,6 +4,24 @@
 export type ThemePreference = 'light' | 'dark' | 'system'
 export type ResolvedTheme = 'light' | 'dark'
 
+/** Theme name identifier - extensible for custom themes */
+export type ThemeName = 'neutral' | 'slate' | 'stone' | 'zinc' | 'rose' | 'orange' | 'green' | 'blue' | 'violet' | 'yellow' | 'red' | 'cyan' | 'gray' | (string & {})
+
+/** Theme configuration for the theme selector UI */
+export interface ThemeConfig {
+  /** Unique theme name/identifier */
+  name: ThemeName
+  /** Display label for the theme */
+  label: string
+  /** Preview colors for the theme selector swatch */
+  colors: {
+    /** Primary color (oklch format) */
+    primary: string
+    /** Secondary/accent color (oklch format) */
+    secondary: string
+  }
+}
+
 export type CardStatus = 'draft' | 'ready' | 'in_progress' | 'in_review' | 'testing' | 'done'
 
 export type Provider = 'github' | 'gitlab' | 'local'

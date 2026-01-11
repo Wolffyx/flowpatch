@@ -89,8 +89,6 @@ import {
 // Constants for configurable values
 const DEFAULT_LEASE_RENEWAL_MS = 60_000
 const DEFAULT_PIPELINE_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes
-const DEFAULT_MAX_RETRIES = 3
-const DEFAULT_RETRY_DELAY_MS = 1000
 
 /**
  * Main worker pipeline class.
@@ -162,20 +160,6 @@ export class WorkerPipeline {
     return this.policy.worker?.pipelineTimeoutMs ?? DEFAULT_PIPELINE_TIMEOUT_MS
   }
 
-  /**
-   * Get max retries for transient failures.
-   */
-  private getMaxRetries(): number {
-    return this.policy.worker?.maxRetries ?? DEFAULT_MAX_RETRIES
-  }
-
-  /**
-   * Get retry delay for transient failures.
-   */
-  private getRetryDelayMs(): number {
-    return this.policy.worker?.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS
-  }
-
   // ==================== Helpers ====================
 
   /**
@@ -222,15 +206,6 @@ export class WorkerPipeline {
         throw new PipelineTimeoutError(timeout)
       }
     }
-  }
-
-  /**
-   * Force a cancel check, bypassing throttle.
-   * Use at phase boundaries where immediate response is important.
-   */
-  private forceCheckCanceled(): void {
-    this.lastCancelCheck = 0
-    this.ensureNotCanceled()
   }
 
   private log(message: string, meta?: { source?: string; stream?: 'stdout' | 'stderr' }): void {

@@ -17,7 +17,7 @@ export {
 } from '../cache'
 
 // AI execution
-export { checkCommand, isClaudeRetryableLimitError, buildAIPrompt, runAI } from './ai'
+export { isClaudeRetryableLimitError, buildAIPrompt, runAI } from './ai'
 
 // Branch synchronization
 export { runBranchSyncPhase } from './branch-sync'

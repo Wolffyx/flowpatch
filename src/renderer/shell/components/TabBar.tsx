@@ -2,16 +2,18 @@
  * Chrome-like Tab Bar Component
  *
  * Features:
- * - Draggable tabs for reordering
- * - Close button on each tab
- * - New tab button
- * - Tab overflow with scroll
+ * - Draggable tabs for reordering with smooth animations
+ * - Close button appears on hover
+ * - Rounded tab design with soft styling
+ * - New tab button clearly visible
+ * - Tab overflow with horizontal scroll
  * - Context menu (close, close others, close to right, duplicate)
  */
 
 import { useState, useRef, useEffect } from 'react'
-import { X, Plus, Loader2 } from 'lucide-react'
+import { X, Plus, Loader2, Circle } from 'lucide-react'
 import { cn } from '../../src/lib/utils'
+import { Tooltip, TooltipContent, TooltipTrigger } from '../../src/components/ui/tooltip'
 
 export interface TabData {
   id: string
@@ -91,13 +93,13 @@ export function TabBar({
 
   return (
     <div
-      className="flex h-9 bg-muted/50 border-b select-none overflow-hidden"
+      className="flex h-10 bg-muted/40 border-b select-none overflow-hidden"
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
       {/* Tabs Container */}
       <div
         ref={tabsContainerRef}
-        className="flex-1 flex items-end overflow-x-auto overflow-y-hidden scrollbar-none"
+        className="flex-1 flex items-end gap-0.5 px-1 overflow-x-auto overflow-y-hidden scrollbar-thin"
       >
         {tabs.map((tab, index) => {
           const isActive = tab.id === activeTabId
@@ -115,39 +117,66 @@ export function TabBar({
               onContextMenu={(e) => handleContextMenu(e, tab.id)}
               style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
               className={cn(
-                'group relative flex items-center gap-2 px-3 h-8 min-w-[120px] max-w-[200px]',
-                'border-r border-border/50 cursor-pointer transition-colors',
-                'rounded-t-lg -mb-px',
-                isActive
-                  ? 'bg-background border-t border-l border-r border-border z-10'
-                  : 'bg-muted/30 hover:bg-muted/60',
-                isDragging && 'opacity-50',
-                isDropTarget && 'border-l-2 border-l-primary'
+                'group relative flex items-center gap-2 px-3 h-8 min-w-[140px] max-w-[220px]',
+                'cursor-pointer transition-all duration-200 ease-out',
+                'rounded-t-xl mt-1',
+                // Active state - elevated with clear background
+                isActive && [
+                  'bg-background',
+                  'shadow-[0_-2px_8px_-2px_rgba(0,0,0,0.1)]',
+                  'border-t border-l border-r border-border/60',
+                  'z-10'
+                ],
+                // Inactive state
+                !isActive && [
+                  'bg-muted/30 hover:bg-muted/60',
+                  'border border-transparent',
+                  'hover:border-border/30'
+                ],
+                // Dragging state
+                isDragging && 'opacity-40 scale-95',
+                // Drop target indicator
+                isDropTarget && 'ml-4 before:absolute before:left-[-8px] before:top-1 before:bottom-1 before:w-1 before:rounded-full before:bg-primary'
               )}
             >
+              {/* Tab indicator dot for inactive tabs */}
+              {!isActive && !tab.isLoading && (
+                <Circle className="h-1.5 w-1.5 fill-muted-foreground/40 text-transparent shrink-0" />
+              )}
+
               {/* Loading indicator */}
               {tab.isLoading && (
-                <Loader2 className="h-3 w-3 animate-spin text-muted-foreground shrink-0" />
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-primary shrink-0" />
               )}
 
               {/* Tab title */}
-              <span className="truncate text-sm flex-1">{tab.projectName}</span>
+              <span
+                className={cn(
+                  'truncate text-sm flex-1 transition-colors',
+                  isActive ? 'font-medium text-foreground' : 'text-muted-foreground group-hover:text-foreground'
+                )}
+              >
+                {tab.projectName}
+              </span>
 
-              {/* Close button */}
+              {/* Close button - visible on hover or when active */}
               <button
                 onClick={(e) => handleCloseClick(e, tab.id)}
                 className={cn(
-                  'p-0.5 rounded hover:bg-muted-foreground/20 transition-opacity',
+                  'p-1 rounded-lg transition-all duration-150',
+                  'hover:bg-destructive/10 hover:text-destructive',
+                  // Visibility
                   'opacity-0 group-hover:opacity-100',
-                  isActive && 'opacity-60 group-hover:opacity-100'
+                  isActive && 'opacity-50 group-hover:opacity-100'
                 )}
                 style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+                title="Close tab"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
 
               {/* Active tab bottom border cover */}
-              {isActive && <div className="absolute bottom-0 left-0 right-0 h-px bg-background" />}
+              {isActive && <div className="absolute -bottom-px left-0 right-0 h-px bg-background" />}
             </div>
           )
         })}
@@ -157,24 +186,35 @@ export function TabBar({
           <div
             onDragOver={(e) => handleDragOver(e, tabs.length)}
             className={cn(
-              'w-8 h-8 flex items-center justify-center',
-              dragOverIndex === tabs.length && 'border-l-2 border-l-primary'
+              'w-6 h-8 flex items-center justify-center transition-all',
+              dragOverIndex === tabs.length && 'ml-4 before:absolute before:left-0 before:top-1 before:bottom-1 before:w-1 before:rounded-full before:bg-primary'
             )}
           />
         )}
 
-        {/* New Tab Button - sits after the last tab */}
-        <button
-          onClick={onNewTab}
-          className="flex items-center justify-center w-9 h-9 hover:bg-muted/60 transition-colors"
-          title="Open new project"
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-        >
-          <Plus className="h-4 w-4" />
-        </button>
+        {/* New Tab Button */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={onNewTab}
+              className={cn(
+                'flex items-center justify-center w-8 h-8 ml-1 mt-1',
+                'rounded-lg transition-all duration-150',
+                'text-muted-foreground hover:text-foreground',
+                'hover:bg-muted/80 active:scale-95'
+              )}
+              style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            <p>New project tab</p>
+          </TooltipContent>
+        </Tooltip>
 
         {/* Spacer (draggable empty area) */}
-        <div className="flex-1" />
+        <div className="flex-1 min-w-4" />
       </div>
 
       {/* Context Menu */}
@@ -253,15 +293,18 @@ function ContextMenu({
   return (
     <div
       ref={menuRef}
-      className="fixed z-50 min-w-[160px] bg-popover border rounded-md shadow-md py-1"
+      className={cn(
+        'fixed z-50 min-w-[180px] bg-popover border rounded-xl shadow-lg py-1.5',
+        'animate-in fade-in-0 zoom-in-95 duration-150'
+      )}
       style={{ left: x, top: y, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       onClick={(e) => e.stopPropagation()}
     >
-      <MenuItem onClick={() => handleClick(onClose)}>Close</MenuItem>
+      <MenuItem onClick={() => handleClick(onClose)}>Close Tab</MenuItem>
 
       {onCloseOthers && (
         <MenuItem onClick={() => handleClick(onCloseOthers)} disabled={!hasOtherTabs}>
-          Close Others
+          Close Other Tabs
         </MenuItem>
       )}
 
@@ -273,7 +316,7 @@ function ContextMenu({
 
       {onDuplicate && (
         <>
-          <div className="h-px bg-border my-1" />
+          <div className="h-px bg-border/50 my-1.5 mx-2" />
           <MenuItem onClick={() => handleClick(onDuplicate)}>Duplicate Tab</MenuItem>
         </>
       )}
@@ -291,9 +334,10 @@ function MenuItem({ children, onClick, disabled }: MenuItemProps): React.JSX.Ele
   return (
     <button
       className={cn(
-        'w-full text-left px-3 py-1.5 text-sm',
+        'w-full text-left px-3 py-2 text-sm rounded-lg mx-1.5 transition-colors',
+        'w-[calc(100%-0.75rem)]',
         disabled
-          ? 'text-muted-foreground cursor-not-allowed'
+          ? 'text-muted-foreground/50 cursor-not-allowed'
           : 'hover:bg-accent hover:text-accent-foreground'
       )}
       onClick={onClick}

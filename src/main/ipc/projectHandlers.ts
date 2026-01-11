@@ -206,6 +206,8 @@ export function registerProjectHandlers(): void {
     if (tab) {
       sendToTab(tab.id, 'workerToggled', { enabled })
     }
+
+    return { success: true }
   })
 
   ipcMain.handle('project:runWorker', async (event, { cardId }: { cardId?: string }) => {
@@ -250,6 +252,7 @@ export function registerProjectHandlers(): void {
 
     logAction('project:cancelWorker', { jobId })
     // The actual cancel is handled by the existing cancelJob handler
+    return { success: true }
   })
 
   // -------------------------------------------------------------------------

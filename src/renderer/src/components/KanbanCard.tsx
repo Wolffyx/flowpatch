@@ -9,7 +9,8 @@ import {
   AlertCircle,
   Link2,
   Clock,
-  GitBranch
+  GitBranch,
+  CheckCircle2
 } from 'lucide-react'
 import { Badge } from './ui/badge'
 import { cn } from '../lib/utils'
@@ -21,6 +22,29 @@ interface KanbanCardProps {
   linkedPRs?: CardLink[]
   isSelected: boolean
   onClick: () => void
+}
+
+/**
+ * Get priority color from labels
+ * Returns a color class for the priority indicator stripe
+ */
+function getPriorityColor(labelsJson: string | null): string | null {
+  const labels = parseLabels(labelsJson)
+  const priorityLabels = labels.map((l) => l.toLowerCase())
+
+  if (priorityLabels.some((l) => l.includes('critical') || l.includes('urgent') || l.includes('p0'))) {
+    return 'bg-red-500'
+  }
+  if (priorityLabels.some((l) => l.includes('high') || l.includes('p1'))) {
+    return 'bg-orange-500'
+  }
+  if (priorityLabels.some((l) => l.includes('medium') || l.includes('p2'))) {
+    return 'bg-yellow-500'
+  }
+  if (priorityLabels.some((l) => l.includes('low') || l.includes('p3'))) {
+    return 'bg-blue-500'
+  }
+  return null
 }
 
 export function KanbanCard({
@@ -42,29 +66,31 @@ export function KanbanCard({
   const getProviderIcon = (): React.ReactNode => {
     switch (card.provider) {
       case 'github':
-        return <Github className="h-3 w-3" />
+        return <Github className="h-3.5 w-3.5" />
       case 'gitlab':
-        return <GitlabIcon className="h-3 w-3" />
+        return <GitlabIcon className="h-3.5 w-3.5" />
       default:
-        return <FileText className="h-3 w-3" />
+        return <FileText className="h-3.5 w-3.5" />
     }
   }
 
   const getTypeIcon = (): React.ReactNode => {
     switch (card.type) {
       case 'pr':
-        return <GitPullRequest className="h-3 w-3 text-chart-2" />
+        return <GitPullRequest className="h-3.5 w-3.5 text-chart-2" />
       case 'mr':
-        return <GitMerge className="h-3 w-3 text-chart-5" />
+        return <GitMerge className="h-3.5 w-3.5 text-chart-5" />
       case 'draft':
-        return <FileText className="h-3 w-3 text-muted-foreground" />
+        return <FileText className="h-3.5 w-3.5 text-muted-foreground" />
       default:
-        return <FileText className="h-3 w-3 text-chart-1" />
+        return <FileText className="h-3.5 w-3.5 text-chart-1" />
     }
   }
 
   const labels = parseLabels(card.labels_json)
   const hasConflicts = card.has_conflicts === 1
+  const priorityColor = getPriorityColor(card.labels_json)
+  const hasLinkedPRs = linkedPRs && linkedPRs.length > 0
 
   return (
     <div
@@ -73,84 +99,132 @@ export function KanbanCard({
       {...attributes}
       {...listeners}
       className={cn(
-        'rounded-lg border bg-card p-3 shadow-sm cursor-grab active:cursor-grabbing transition-all',
-        isDragging && 'opacity-50 shadow-lg',
-        isSelected && 'ring-2 ring-primary',
-        hasConflicts && 'border-orange-500 border-2',
-        card.sync_state === 'error' && !hasConflicts && 'border-destructive',
-        card.sync_state === 'pending' && 'border-chart-4'
+        'group relative rounded-xl border bg-card shadow-sm cursor-grab active:cursor-grabbing',
+        'transition-all duration-200 ease-out',
+        // Hover effect - subtle lift
+        'hover:shadow-md hover:-translate-y-0.5',
+        // Dragging state
+        isDragging && 'opacity-60 shadow-lg scale-[1.02] rotate-1',
+        // Selected state
+        isSelected && 'ring-2 ring-primary shadow-md',
+        // Error states
+        hasConflicts && 'border-orange-500/70 border-2',
+        card.sync_state === 'error' && !hasConflicts && 'border-destructive/70',
+        card.sync_state === 'pending' && 'border-chart-4/50'
       )}
       onClick={(e) => {
         e.stopPropagation()
         onClick()
       }}
     >
-      {/* Header with icons */}
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-1.5">
-          {getProviderIcon()}
-          {getTypeIcon()}
-          {card.type !== 'draft' && card.remote_number_or_iid && (
-            <span className="text-xs text-muted-foreground">#{card.remote_number_or_iid}</span>
-          )}
-        </div>
-        <div className="flex items-center gap-1">
-          {linkedPRs && linkedPRs.length > 0 && (
-            <Badge
-              variant="outline"
-              className="text-xs py-0 px-1.5 gap-1 text-chart-2 border-chart-2/50"
-              title={`${linkedPRs.length} linked PR${linkedPRs.length > 1 ? 's' : ''}`}
-            >
-              <GitPullRequest className="h-3 w-3" />#{linkedPRs[0].linked_number_or_iid}
-              {linkedPRs.length > 1 && <span>+{linkedPRs.length - 1}</span>}
-            </Badge>
-          )}
-          {hasConflicts && (
-            <span title="Merge conflicts - needs resolution">
-              <GitBranch className="h-3 w-3 text-orange-500" />
-            </span>
-          )}
-          {card.sync_state === 'error' && !hasConflicts && (
-            <span title={card.last_error || 'Error'}>
-              <AlertCircle className="h-3 w-3 text-destructive" />
-            </span>
-          )}
-          {card.sync_state === 'pending' && (
-            <span title="Pending sync">
-              <Clock className="h-3 w-3 text-chart-4" />
-            </span>
-          )}
-          {card.remote_url && <Link2 className="h-3 w-3 text-muted-foreground" />}
-        </div>
-      </div>
-
-      {/* Title */}
-      <h3 className="text-sm font-medium mb-2 line-clamp-2">{card.title}</h3>
-
-      {/* Labels */}
-      {labels.length > 0 && (
-        <div className="flex flex-wrap gap-1 mb-2">
-          {labels.slice(0, 3).map((label) => (
-            <Badge key={label} variant="secondary" className="text-xs py-0 px-1.5">
-              {truncate(formatLabel(label), 15)}
-            </Badge>
-          ))}
-          {labels.length > 3 && (
-            <Badge variant="secondary" className="text-xs py-0 px-1.5">
-              +{labels.length - 3}
-            </Badge>
-          )}
-        </div>
+      {/* Priority indicator stripe */}
+      {priorityColor && (
+        <div
+          className={cn('absolute left-0 top-3 bottom-3 w-1 rounded-full', priorityColor)}
+          aria-hidden="true"
+        />
       )}
 
-      {/* Footer */}
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>{formatRelativeTime(card.updated_local_at)}</span>
-        {card.ready_eligible === 1 && (
-          <Badge variant="default" className="text-xs py-0 px-1.5">
-            Ready
-          </Badge>
+      <div className={cn('p-3', priorityColor && 'pl-4')}>
+        {/* Header with icons and number */}
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 text-muted-foreground">
+              {getProviderIcon()}
+              {getTypeIcon()}
+            </div>
+            {card.type !== 'draft' && card.remote_number_or_iid && (
+              <span className="text-xs font-medium text-muted-foreground">
+                #{card.remote_number_or_iid}
+              </span>
+            )}
+          </div>
+
+          {/* Status indicators */}
+          <div className="flex items-center gap-1.5">
+            {hasConflicts && (
+              <span
+                title="Merge conflicts - needs resolution"
+                className="flex items-center justify-center h-5 w-5 rounded-full bg-orange-500/10"
+              >
+                <GitBranch className="h-3 w-3 text-orange-500" />
+              </span>
+            )}
+            {card.sync_state === 'error' && !hasConflicts && (
+              <span
+                title={card.last_error || 'Error'}
+                className="flex items-center justify-center h-5 w-5 rounded-full bg-destructive/10"
+              >
+                <AlertCircle className="h-3 w-3 text-destructive" />
+              </span>
+            )}
+            {card.sync_state === 'pending' && (
+              <span
+                title="Pending sync"
+                className="flex items-center justify-center h-5 w-5 rounded-full bg-chart-4/10"
+              >
+                <Clock className="h-3 w-3 text-chart-4" />
+              </span>
+            )}
+            {card.remote_url && (
+              <Link2 className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+            )}
+          </div>
+        </div>
+
+        {/* Title */}
+        <h3 className="text-sm font-medium mb-2 line-clamp-2 leading-snug">{card.title}</h3>
+
+        {/* Linked PRs indicator */}
+        {hasLinkedPRs && (
+          <div className="flex items-center gap-1.5 mb-2">
+            <Badge
+              variant="outline"
+              className="text-xs py-0.5 px-2 gap-1.5 text-chart-2 border-chart-2/30 bg-chart-2/5"
+              title={`${linkedPRs.length} linked PR${linkedPRs.length > 1 ? 's' : ''}`}
+            >
+              <GitPullRequest className="h-3 w-3" />
+              <span className="font-medium">#{linkedPRs[0].linked_number_or_iid}</span>
+              {linkedPRs.length > 1 && (
+                <span className="text-chart-2/70">+{linkedPRs.length - 1}</span>
+              )}
+            </Badge>
+          </div>
         )}
+
+        {/* Labels */}
+        {labels.length > 0 && (
+          <div className="flex flex-wrap gap-1 mb-2">
+            {labels.slice(0, 3).map((label) => (
+              <Badge
+                key={label}
+                variant="secondary"
+                className="text-xs py-0.5 px-1.5 font-normal"
+              >
+                {truncate(formatLabel(label), 15)}
+              </Badge>
+            ))}
+            {labels.length > 3 && (
+              <Badge variant="secondary" className="text-xs py-0.5 px-1.5 font-normal">
+                +{labels.length - 3}
+              </Badge>
+            )}
+          </div>
+        )}
+
+        {/* Footer */}
+        <div className="flex items-center justify-between text-xs text-muted-foreground pt-1">
+          <span className="opacity-70">{formatRelativeTime(card.updated_local_at)}</span>
+          {card.ready_eligible === 1 && (
+            <Badge
+              variant="default"
+              className="text-xs py-0.5 px-2 gap-1 bg-green-500/90 hover:bg-green-500"
+            >
+              <CheckCircle2 className="h-3 w-3" />
+              Ready
+            </Badge>
+          )}
+        </div>
       </div>
     </div>
   )

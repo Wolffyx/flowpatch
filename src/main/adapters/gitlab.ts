@@ -7,7 +7,7 @@
 
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import type { Card, CardStatus, PolicyConfig, Provider, RepoLabel } from '../../shared/types'
+import type { Card, PolicyConfig, Provider, RepoLabel } from '../../shared/types'
 import { cryptoRandomId } from '../db'
 import { BaseAdapter } from './base'
 import type { AuthResult, IssueResult, LabelResult, PRResult } from './types'

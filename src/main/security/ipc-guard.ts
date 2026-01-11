@@ -47,8 +47,9 @@ let sessionSecret: Buffer | null = null
 /** Registry of trusted WebContents IDs */
 const trustedWebContents = new Set<number>()
 
-/** Reference to the main window */
+/** Reference to the main window (used for security verification) */
 let mainWindowRef: BrowserWindow | null = null
+void mainWindowRef // Suppress unused warning - kept for future security checks
 
 /** Security configuration */
 let securityConfig: SecurityConfig = { ...DEFAULT_SECURITY_CONFIG }

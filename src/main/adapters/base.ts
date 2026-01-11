@@ -78,6 +78,7 @@ export abstract class BaseAdapter implements IRepoAdapter {
     labelsToRemove: string[]
   ): Promise<boolean>
   abstract commentOnIssue(issueId: number, comment: string): Promise<boolean>
+  abstract updateIssueBody(issueNumber: number, body: string | null): Promise<boolean>
 
   // ──────────────────────────────────────────────────────────────────────────
   // Status Label Methods (shared implementation)

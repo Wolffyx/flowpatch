@@ -16,7 +16,8 @@ import { LogsPanel } from './components/LogsPanel'
 import { SettingsModal } from './components/settings'
 import { ActivityDialog } from './components/ActivityDialog'
 import { RepoStartDialog } from '../src/components/RepoStartDialog'
-import { Settings, Terminal, Minus, Square, X, Home, ListChecks, Trash2, MessageSquare, History } from 'lucide-react'
+import { HomeView } from './components/HomeView'
+import { Settings, Terminal, Minus, Square, X, Home, ListChecks, MessageSquare, History } from 'lucide-react'
 import { Button } from '../src/components/ui/button'
 import { Badge } from '../src/components/ui/badge'
 import { GlobalAgentChatDialog } from './components/GlobalAgentChatDialog'
@@ -626,64 +627,12 @@ export default function App(): React.JSX.Element {
       <div className="flex-1 relative overflow-hidden">
         {/* Home View - shown above WebContentsViews when active */}
         {isHomeVisible && (
-          <div className="absolute inset-0 z-10 bg-background flex flex-col items-center justify-center text-muted-foreground p-8 overflow-auto">
-            <div className="text-center mb-8">
-              <h1 className="text-2xl font-semibold text-foreground mb-2">Welcome to Patchwork</h1>
-              <p className="text-sm">Select a project below or open/create a new one</p>
-            </div>
-
-            {/* Existing Projects List */}
-            {projects.length > 0 && (
-              <div className="w-full max-w-md mb-6">
-                <h3 className="text-sm font-medium text-foreground mb-3">Recent Projects</h3>
-                <div className="space-y-2 max-h-64 overflow-auto">
-                  {projects.map((project) => (
-                    <div
-                      key={project.id}
-                      className="w-full flex items-center gap-3 p-3 rounded-lg border hover:bg-muted/50 transition-colors"
-                    >
-                      <button
-                        onClick={() => handleOpenExistingProject(project)}
-                        className="flex-1 min-w-0 text-left"
-                      >
-                        <div className="font-medium text-foreground truncate">{project.name}</div>
-                        <div
-                          className={`text-xs truncate ${
-                            project.local_path_exists === false
-                              ? 'text-destructive'
-                              : 'text-muted-foreground'
-                          }`}
-                        >
-                          {project.local_path}
-                        </div>
-                      </button>
-
-                      {project.local_path_exists === false && (
-                        <div
-                          className="h-2 w-2 rounded-full bg-destructive shrink-0"
-                          title="Folder not found"
-                        />
-                      )}
-
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          void handleRemoveRecentProject(project)
-                        }}
-                        className="p-1.5 rounded hover:bg-muted shrink-0"
-                        title="Remove from recent projects"
-                      >
-                        <Trash2 className="h-4 w-4 text-muted-foreground" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <Button onClick={() => setRepoDialogOpen(true)}>Open / Create Project</Button>
-          </div>
+          <HomeView
+            projects={projects}
+            onOpenProject={handleOpenExistingProject}
+            onRemoveProject={handleRemoveRecentProject}
+            onOpenCreateDialog={() => setRepoDialogOpen(true)}
+          />
         )}
 
         {/* WebContentsViews are positioned here by main process */}

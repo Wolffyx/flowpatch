@@ -58,7 +58,6 @@ class MetricsCollectorClass {
   private history: MetricValue[] = []
   private healthChecks = new Map<string, HealthCheckFn>()
   private flushInterval: NodeJS.Timeout | null = null
-  private flushCallback: ((snapshot: MetricsSnapshot) => void) | null = null
 
   // Default histogram buckets (response times in ms)
   private readonly defaultBuckets = [10, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
@@ -357,7 +356,6 @@ class MetricsCollectorClass {
    * Start periodic flushing.
    */
   startPeriodicFlush(callback: (snapshot: MetricsSnapshot) => void, intervalMs = METRICS_FLUSH_INTERVAL_MS): void {
-    this.flushCallback = callback
     this.flushInterval = setInterval(() => {
       callback(this.getSnapshot())
     }, intervalMs)
@@ -371,7 +369,6 @@ class MetricsCollectorClass {
       clearInterval(this.flushInterval)
       this.flushInterval = null
     }
-    this.flushCallback = null
   }
 
   /**

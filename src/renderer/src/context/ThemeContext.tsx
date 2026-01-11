@@ -1,10 +1,20 @@
 import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from 'react'
-import type { ThemePreference, ResolvedTheme } from '../../../shared/types'
+import type { ThemePreference, ResolvedTheme, ThemeName, ThemeConfig } from '../../../shared/types'
+import { loadTheme, AVAILABLE_THEMES, DEFAULT_THEME, isValidTheme } from '../lib/themes'
 
 interface ThemeContextValue {
+  /** Current theme appearance preference (light/dark/system) */
   theme: ThemePreference
+  /** Resolved theme (light or dark) after applying system preference */
   resolvedTheme: ResolvedTheme
+  /** Current color theme name */
+  themeName: ThemeName
+  /** List of available themes for the theme selector */
+  availableThemes: ThemeConfig[]
+  /** Set the appearance preference (light/dark/system) */
   setTheme: (theme: ThemePreference) => Promise<void>
+  /** Set the color theme by name */
+  setThemeName: (name: ThemeName) => Promise<void>
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null)
@@ -21,9 +31,45 @@ interface ThemeProviderProps {
   children: ReactNode
 }
 
+/** LocalStorage key for theme settings */
+const THEME_STORAGE_KEY = 'patchwork-theme-settings'
+
+interface ThemeSettings {
+  appearance: ThemePreference
+  themeName: ThemeName
+}
+
+function loadThemeSettings(): ThemeSettings {
+  try {
+    const stored = localStorage.getItem(THEME_STORAGE_KEY)
+    if (stored) {
+      const parsed = JSON.parse(stored) as Partial<ThemeSettings>
+      return {
+        appearance: parsed.appearance || 'system',
+        themeName: isValidTheme(parsed.themeName || '') ? parsed.themeName! : DEFAULT_THEME
+      }
+    }
+  } catch {
+    // Ignore parse errors
+  }
+  // Also check legacy key for backwards compatibility
+  const legacyTheme = localStorage.getItem('theme-preference') as ThemePreference | null
+  return {
+    appearance: legacyTheme || 'system',
+    themeName: DEFAULT_THEME
+  }
+}
+
+function saveThemeSettings(settings: ThemeSettings): void {
+  localStorage.setItem(THEME_STORAGE_KEY, JSON.stringify(settings))
+  // Also update legacy key for backwards compatibility
+  localStorage.setItem('theme-preference', settings.appearance)
+}
+
 export function ThemeProvider({ children }: ThemeProviderProps): React.JSX.Element {
   const [theme, setThemeState] = useState<ThemePreference>('system')
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>('light')
+  const [themeName, setThemeNameState] = useState<ThemeName>(DEFAULT_THEME)
   const [isInitialized, setIsInitialized] = useState(false)
 
   // Resolve the actual theme based on preference and system setting
@@ -49,15 +95,27 @@ export function ThemeProvider({ children }: ThemeProviderProps): React.JSX.Eleme
   // Initialize theme from stored preference
   useEffect(() => {
     async function init(): Promise<void> {
-      const savedTheme = await window.electron.ipcRenderer.invoke('getThemePreference')
-      const preference = (savedTheme as ThemePreference) || 'system'
+      // Load settings from localStorage first for fast initial render
+      const settings = loadThemeSettings()
 
-      // Sync localStorage for flash prevention on next load
-      localStorage.setItem('theme-preference', preference)
+      // Then check IPC for authoritative appearance preference
+      const savedTheme = await window.electron.ipcRenderer.invoke('getThemePreference')
+      const preference = (savedTheme as ThemePreference) || settings.appearance
+
+      // Update settings with IPC value
+      settings.appearance = preference
+      saveThemeSettings(settings)
 
       setThemeState(preference)
+      setThemeNameState(settings.themeName)
+
+      // Load the color theme CSS
+      await loadTheme(settings.themeName)
+
+      // Apply the appearance (light/dark)
       const resolved = await resolveTheme(preference)
       applyTheme(resolved)
+
       setIsInitialized(true)
     }
     init()
@@ -84,11 +142,21 @@ export function ThemeProvider({ children }: ThemeProviderProps): React.JSX.Eleme
 
     const handleThemeChanged = (
       _event: unknown,
-      data: { preference: ThemePreference; resolved: ResolvedTheme }
+      data: { preference: ThemePreference; resolved: ResolvedTheme; themeName?: ThemeName }
     ): void => {
       setThemeState(data.preference)
       applyTheme(data.resolved)
-      localStorage.setItem('theme-preference', data.preference)
+
+      // Update theme name if provided
+      if (data.themeName && isValidTheme(data.themeName)) {
+        setThemeNameState(data.themeName)
+        loadTheme(data.themeName)
+      }
+
+      saveThemeSettings({
+        appearance: data.preference,
+        themeName: data.themeName || themeName
+      })
     }
 
     // Check if we have access to electron IPC (project views)
@@ -104,26 +172,61 @@ export function ThemeProvider({ children }: ThemeProviderProps): React.JSX.Eleme
     }
 
     return undefined
-  }, [isInitialized, applyTheme])
+  }, [isInitialized, applyTheme, themeName])
 
   // Set theme preference
   const setTheme = useCallback(
     async (newTheme: ThemePreference): Promise<void> => {
-      // Update localStorage for flash prevention on next load
-      localStorage.setItem('theme-preference', newTheme)
-
       await window.electron.ipcRenderer.invoke('setThemePreference', newTheme)
       setThemeState(newTheme)
       const resolved = await resolveTheme(newTheme)
       applyTheme(resolved)
+
+      saveThemeSettings({
+        appearance: newTheme,
+        themeName
+      })
     },
-    [resolveTheme, applyTheme]
+    [resolveTheme, applyTheme, themeName]
+  )
+
+  // Set color theme name
+  const setThemeNameFn = useCallback(
+    async (name: ThemeName): Promise<void> => {
+      if (!isValidTheme(name)) {
+        console.warn(`Invalid theme name: ${name}`)
+        return
+      }
+
+      await loadTheme(name)
+      setThemeNameState(name)
+
+      saveThemeSettings({
+        appearance: theme,
+        themeName: name
+      })
+
+      // Broadcast theme change to other windows via IPC
+      try {
+        await window.electron.ipcRenderer.invoke('broadcastThemeChange', {
+          preference: theme,
+          resolved: resolvedTheme,
+          themeName: name
+        })
+      } catch {
+        // broadcastThemeChange might not be implemented yet, that's ok
+      }
+    },
+    [theme, resolvedTheme]
   )
 
   const value: ThemeContextValue = {
     theme,
     resolvedTheme,
-    setTheme
+    themeName,
+    availableThemes: AVAILABLE_THEMES,
+    setTheme,
+    setThemeName: setThemeNameFn
   }
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
