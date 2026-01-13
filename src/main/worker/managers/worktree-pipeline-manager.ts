@@ -170,7 +170,7 @@ export class WorktreePipelineManager {
         card.provider,
         card.remote_number_or_iid,
         card.title,
-        policy.worker?.worktree?.branchPrefix ?? 'patchwork/'
+        policy.worker?.worktree?.branchPrefix ?? 'flowpatch/'
       )
 
       // Check for existing record by branch name

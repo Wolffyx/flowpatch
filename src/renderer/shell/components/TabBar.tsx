@@ -11,7 +11,7 @@
  */
 
 import { useState, useRef, useEffect } from 'react'
-import { X, Plus, Loader2, Circle } from 'lucide-react'
+import { X, Plus, Loader2, Circle, Pause, CheckCircle2 } from 'lucide-react'
 import { cn } from '../../src/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../src/components/ui/tooltip'
 
@@ -20,6 +20,8 @@ export interface TabData {
   projectId: string
   projectName: string
   isLoading?: boolean
+  workerStatus?: 'idle' | 'running' | 'ready' | null
+  activeRuns?: number
 }
 
 interface TabBarProps {
@@ -139,15 +141,23 @@ export function TabBar({
                 isDropTarget && 'ml-4 before:absolute before:left-[-8px] before:top-1 before:bottom-1 before:w-1 before:rounded-full before:bg-primary'
               )}
             >
-              {/* Tab indicator dot for inactive tabs */}
-              {!isActive && !tab.isLoading && (
+              {/* Worker status indicator */}
+              {tab.isLoading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0" />
+              ) : tab.workerStatus === 'running' ? (
+                <div className="flex items-center gap-0.5 shrink-0">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                  {tab.activeRuns && tab.activeRuns > 0 && (
+                    <span className="text-[10px] font-medium text-primary">{tab.activeRuns}</span>
+                  )}
+                </div>
+              ) : tab.workerStatus === 'idle' ? (
+                <Pause className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+              ) : tab.workerStatus === 'ready' ? (
+                <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
+              ) : !isActive ? (
                 <Circle className="h-1.5 w-1.5 fill-muted-foreground/40 text-transparent shrink-0" />
-              )}
-
-              {/* Loading indicator */}
-              {tab.isLoading && (
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-primary shrink-0" />
-              )}
+              ) : null}
 
               {/* Tab title */}
               <span

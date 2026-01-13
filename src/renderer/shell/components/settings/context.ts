@@ -24,6 +24,10 @@ export interface SettingsContextValue {
   // Unlink confirmation dialog
   showUnlinkConfirm: boolean
   setShowUnlinkConfirm: (show: boolean) => void
+
+  // Reset confirmation dialog
+  showResetConfirm: boolean
+  setShowResetConfirm: (show: boolean) => void
 }
 
 export const SettingsContext = createContext<SettingsContextValue | null>(null)

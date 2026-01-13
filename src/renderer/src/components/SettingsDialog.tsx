@@ -1039,7 +1039,7 @@ export function SettingsDialog({
     try {
       await window.electron.ipcRenderer.invoke('unlinkProject', { projectId: project.id })
       toast.success('Project unlinked', {
-        description: `"${project.name}" has been removed from Patchwork`
+        description: `"${project.name}" has been removed from FlowPatch`
       })
       setShowUnlinkConfirm(false)
       onOpenChange(false)
@@ -1248,7 +1248,7 @@ export function SettingsDialog({
             <div>
               <h3 className="text-sm font-medium mb-1">Theme</h3>
               <p className="text-xs text-muted-foreground mb-3">
-                Choose how Patchwork looks to you.
+                Choose how FlowPatch looks to you.
               </p>
             </div>
             <div className="grid gap-2">
@@ -2174,8 +2174,8 @@ export function SettingsDialog({
                 <h3 className="text-sm font-medium text-destructive">Unlink Project</h3>
               </div>
               <p className="text-xs text-muted-foreground mb-4">
-                Remove this project from Patchwork. Your files and repository will not be deleted —
-                only the project entry in Patchwork will be removed.
+                Remove this project from FlowPatch. Your files and repository will not be deleted —
+                only the project entry in FlowPatch will be removed.
               </p>
               <Button
                 variant="outline"
@@ -2284,7 +2284,7 @@ export function SettingsDialog({
             </DialogTitle>
             <DialogDescription>
               Are you sure you want to unlink &quot;{project.name}&quot;? This will remove the
-              project from Patchwork but will not delete your files.
+              project from FlowPatch but will not delete your files.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

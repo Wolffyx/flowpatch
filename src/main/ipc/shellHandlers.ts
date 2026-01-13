@@ -65,11 +65,11 @@ import { registerProjectHandlers } from './projectHandlers'
 import { broadcastToRenderers } from './broadcast'
 import { getAllShortcuts, setShortcuts } from '../shortcuts'
 import {
-  ensurePatchworkWorkspace,
-  getPatchworkWorkspaceStatus
-} from '../services/patchwork-workspace'
-import { buildIndex } from '../services/patchwork-indexer'
-import { registerProject, setActiveProject } from '../services/patchwork-index-scheduler'
+  ensureFlowPatchWorkspace,
+  getFlowPatchWorkspaceStatus
+} from '../services/flowpatch-workspace'
+import { buildIndex } from '../services/flowpatch-indexer'
+import { registerProject, setActiveProject } from '../services/flowpatch-index-scheduler'
 
 function cryptoId(): string {
   const buf = Buffer.alloc(16)
@@ -277,7 +277,7 @@ export function registerShellHandlers(mainWindow: BrowserWindow): void {
         setActiveProject(project.id)
       }
 
-      // Ensure .patchwork workspace exists (non-blocking) and index once on open.
+      // Ensure .flowpatch workspace exists (non-blocking) and index once on open.
       void (async () => {
         const ensureJob = createJob(project.id, 'workspace_ensure')
         broadcastToRenderers('stateUpdated')
@@ -285,7 +285,7 @@ export function registerShellHandlers(mainWindow: BrowserWindow): void {
           updateJobState(ensureJob.id, 'running')
           broadcastToRenderers('stateUpdated')
 
-          const status = await getPatchworkWorkspaceStatus(project.local_path)
+          const status = await getFlowPatchWorkspaceStatus(project.local_path)
           if (!status.writable) {
             updateJobState(
               ensureJob.id,
@@ -297,7 +297,7 @@ export function registerShellHandlers(mainWindow: BrowserWindow): void {
             return
           }
 
-          const ensured = ensurePatchworkWorkspace(project.local_path)
+          const ensured = ensureFlowPatchWorkspace(project.local_path)
           updateJobState(ensureJob.id, 'succeeded', {
             summary: ensured.createdPaths.length
               ? 'Workspace created/updated'
@@ -555,6 +555,15 @@ export function registerShellHandlers(mainWindow: BrowserWindow): void {
 
   ipcMain.on('ui:setModalOpen', (_event, open: boolean) => {
     setModalOpen(open)
+  })
+
+  // -------------------------------------------------------------------------
+  // App Reset (Dev only)
+  // -------------------------------------------------------------------------
+
+  ipcMain.handle('app:resetEverything', async () => {
+    const { performFullReset } = await import('../services/reset')
+    return performFullReset()
   })
 }
 

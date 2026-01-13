@@ -33,7 +33,7 @@ export function Sidebar({
   return (
     <div className="flex h-full w-48 shrink-0 flex-col border-r bg-sidebar">
       <div className="flex items-center justify-between border-b p-4">
-        <h1 className="text-lg font-semibold">Patchwork</h1>
+        <h1 className="text-lg font-semibold">FlowPatch</h1>
         <Button variant="ghost" size="icon" onClick={onOpenRepo} title="Open or Create Repository">
           <FolderOpen className="h-4 w-4" />
         </Button>

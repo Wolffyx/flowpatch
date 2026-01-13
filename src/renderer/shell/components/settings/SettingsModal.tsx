@@ -23,6 +23,7 @@ import { SettingsProvider } from './SettingsContext'
 import { useSettingsContext } from './hooks/useSettingsContext'
 import { SettingsSidebar } from './SettingsSidebar'
 import { UnlinkConfirmDialog } from './UnlinkConfirmDialog'
+import { ResetConfirmDialog } from './ResetConfirmDialog'
 import {
   AppearanceSection,
   FeaturesSection,
@@ -85,7 +86,7 @@ function SettingsModalInner({
     <>
       <DialogHeader className="px-6 pt-6 pb-4 border-b shrink-0">
         <DialogTitle className="text-xl">Settings</DialogTitle>
-        <DialogDescription>Configure appearance and project settings.</DialogDescription>
+        <DialogDescription>Configure appearance and project settings.sdad</DialogDescription>
       </DialogHeader>
 
       <div className="flex flex-1 min-h-0">
@@ -105,8 +106,14 @@ function SettingsModalInner({
       </DialogFooter>
 
       <UnlinkConfirmDialog />
+      <ResetConfirmDialogWrapper />
     </>
   )
+}
+
+function ResetConfirmDialogWrapper(): React.JSX.Element {
+  const { showResetConfirm, setShowResetConfirm } = useSettingsContext()
+  return <ResetConfirmDialog open={showResetConfirm} onOpenChange={setShowResetConfirm} />
 }
 
 export function SettingsModal({

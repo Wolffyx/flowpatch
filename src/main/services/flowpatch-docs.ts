@@ -2,13 +2,13 @@ import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import {
   getIndexPaths,
-  type PatchworkIndexMeta,
-  type PatchworkFileIndexEntry
-} from './patchwork-indexer'
-import { gitDiffNameOnly, gitHeadSha } from './patchwork-git'
+  type FlowPatchIndexMeta,
+  type FlowPatchFileIndexEntry
+} from './flowpatch-indexer'
+import { gitDiffNameOnly, gitHeadSha } from './flowpatch-git'
 
-const BEGIN = '<!-- PATCHWORK:BEGIN generated -->'
-const END = '<!-- PATCHWORK:END generated -->'
+const BEGIN = '<!-- FLOWPATCH:BEGIN generated -->'
+const END = '<!-- FLOWPATCH:END generated -->'
 
 function replaceGeneratedSection(original: string, generated: string): string {
   const start = original.indexOf(BEGIN)
@@ -29,22 +29,22 @@ function replaceGeneratedSection(original: string, generated: string): string {
 }
 
 function loadIndex(repoRoot: string): {
-  meta: PatchworkIndexMeta | null
-  files: PatchworkFileIndexEntry[]
+  meta: FlowPatchIndexMeta | null
+  files: FlowPatchFileIndexEntry[]
 } {
   const { metaPath, fileIndexPath } = getIndexPaths(repoRoot)
-  let meta: PatchworkIndexMeta | null = null
-  let files: PatchworkFileIndexEntry[] = []
+  let meta: FlowPatchIndexMeta | null = null
+  let files: FlowPatchFileIndexEntry[] = []
   try {
     if (existsSync(metaPath))
-      meta = JSON.parse(readFileSync(metaPath, 'utf-8')) as PatchworkIndexMeta
+      meta = JSON.parse(readFileSync(metaPath, 'utf-8')) as FlowPatchIndexMeta
   } catch {
     meta = null
   }
   try {
     if (existsSync(fileIndexPath)) {
       const parsed = JSON.parse(readFileSync(fileIndexPath, 'utf-8')) as {
-        files?: PatchworkFileIndexEntry[]
+        files?: FlowPatchFileIndexEntry[]
       }
       files = parsed.files ?? []
     }
@@ -54,7 +54,7 @@ function loadIndex(repoRoot: string): {
   return { meta, files }
 }
 
-function computeTopDirs(files: PatchworkFileIndexEntry[]): { dir: string; files: number }[] {
+function computeTopDirs(files: FlowPatchFileIndexEntry[]): { dir: string; files: number }[] {
   const counts = new Map<string, number>()
   for (const f of files) {
     const parts = f.path.split('/')
@@ -68,8 +68,8 @@ function computeTopDirs(files: PatchworkFileIndexEntry[]): { dir: string; files:
     .slice(0, 12)
 }
 
-export async function refreshPatchworkDocs(repoRoot: string): Promise<{ updated: string[] }> {
-  const docsDir = join(repoRoot, '.patchwork', 'docs')
+export async function refreshFlowPatchDocs(repoRoot: string): Promise<{ updated: string[] }> {
+  const docsDir = join(repoRoot, '.flowpatch', 'docs')
   const wherePath = join(docsDir, 'WHERE_TO_CHANGE.md')
   const agentsPath = join(docsDir, 'AGENTS.md')
 
@@ -140,8 +140,8 @@ export async function refreshPatchworkDocs(repoRoot: string): Promise<{ updated:
       const text = readFileSync(p, 'utf-8')
       const lines = text.split(/\r?\n/).length
       if (lines > 800) {
-        const warning = `\n\n> PATCHWORK WARNING: This doc is ${lines} lines; consider trimming to keep agent context small.\n`
-        if (!text.includes('PATCHWORK WARNING')) {
+        const warning = `\n\n> FLOWPATCH WARNING: This doc is ${lines} lines; consider trimming to keep agent context small.\n`
+        if (!text.includes('FLOWPATCH WARNING')) {
           writeFileSync(p, text + warning, { encoding: 'utf-8' })
           updated.push(p)
         }

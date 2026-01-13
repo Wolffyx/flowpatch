@@ -306,21 +306,6 @@ function App(): React.JSX.Element {
       {/* Main content */}
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Top bar */}
-        <TopBar
-          project={selectedProject?.project || null}
-          jobs={selectedProject?.jobs || []}
-          cards={selectedProject?.cards || []}
-          isLoading={store.isLoading}
-          onSync={store.syncProject}
-          onToggleWorker={store.toggleWorker}
-          onOpenCommandPalette={() => setCommandPaletteOpen(true)}
-          commandPaletteShortcut={shortcutById['commandPalette.open']}
-          onSetWorkerToolPreference={store.setWorkerToolPreference}
-          onSetWorkerRollbackOnCancel={store.setWorkerRollbackOnCancel}
-          onSetShowPullRequestsSection={store.setShowPullRequestsSection}
-          onOpenWorkerLogs={() => setWorkerLogsOpen(true)}
-        />
-
         {/* Board and drawer */}
         <div className="flex flex-1 overflow-hidden min-h-0">
           {selectedProject ? (
@@ -361,7 +346,7 @@ function App(): React.JSX.Element {
           ) : (
             <div className="flex flex-1 items-center justify-center">
               <div className="text-center">
-                <h2 className="text-xl font-semibold mb-2">Welcome to Patchwork</h2>
+                <h2 className="text-xl font-semibold mb-2">Welcome to FlowPatch</h2>
                 <p className="text-muted-foreground mb-4">
                   Open a repository to get started with your Kanban board.
                 </p>

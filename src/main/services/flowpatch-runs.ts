@@ -13,7 +13,7 @@ export interface WorkerRunCheckpoint {
 }
 
 export function getRunDir(repoRoot: string, jobId: string): string {
-  return join(repoRoot, '.patchwork', 'state', 'runs', jobId)
+  return join(repoRoot, '.flowpatch', 'state', 'runs', jobId)
 }
 
 export function ensureRunDir(repoRoot: string, jobId: string): string {

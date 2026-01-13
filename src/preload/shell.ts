@@ -96,6 +96,10 @@ export interface ShellAPI {
   markChatAsRead: (jobId: string) => Promise<{ success: boolean; error?: string }>
   clearChatHistory: (jobId: string) => Promise<{ success: boolean; count: number; error?: string }>
   onChatMessage: (callback: (data: { type: string; message: AgentChatMessage; jobId: string }) => void) => () => void
+
+  // App Reset (Dev only)
+  resetEverything: () => Promise<{ success: boolean; error?: string }>
+  onDevResetTrigger: (callback: () => void) => () => void
 }
 
 // Re-export types from shared (these would be imported in actual usage)
@@ -474,6 +478,20 @@ const shellAPI: ShellAPI = {
     return () => {
       ipcRenderer.removeListener('agentChatMessage', handler)
     }
+  },
+
+  // -------------------------------------------------------------------------
+  // App Reset (Dev only)
+  // -------------------------------------------------------------------------
+
+  resetEverything: () => {
+    return ipcRenderer.invoke('app:resetEverything')
+  },
+
+  onDevResetTrigger: (callback: () => void) => {
+    const handler = (_event: IpcRendererEvent) => callback()
+    ipcRenderer.on('dev:triggerReset', handler)
+    return () => ipcRenderer.removeListener('dev:triggerReset', handler)
   }
 }
 

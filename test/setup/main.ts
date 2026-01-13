@@ -10,14 +10,14 @@ vi.mock('electron', () => ({
     getPath: vi.fn((name: string) => {
       switch (name) {
         case 'userData':
-          return '/tmp/patchwork-test'
+          return '/tmp/flowpatch-test'
         case 'temp':
           return '/tmp'
         default:
           return `/tmp/${name}`
       }
     }),
-    getName: vi.fn(() => 'Patchwork'),
+    getName: vi.fn(() => 'FlowPatch'),
     getVersion: vi.fn(() => '1.0.0'),
     isPackaged: false,
     quit: vi.fn(),

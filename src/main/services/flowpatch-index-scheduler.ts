@@ -1,9 +1,9 @@
 import { createJob, getProject, listProjects, updateJobState } from '../db'
 import { broadcastToRenderers } from '../ipc/broadcast'
 import { getResolvedBool } from '../settingsStore'
-import { buildIndex, IndexCanceledError } from './patchwork-indexer'
-import { ensurePatchworkWorkspace, getPatchworkWorkspaceStatus } from './patchwork-workspace'
-import { startIndexWatch, stopIndexWatch } from './patchwork-watch-manager'
+import { buildIndex, IndexCanceledError } from './flowpatch-indexer'
+import { ensureFlowPatchWorkspace, getFlowPatchWorkspaceStatus } from './flowpatch-workspace'
+import { startIndexWatch, stopIndexWatch } from './flowpatch-watch-manager'
 
 interface ProjectIndexState {
   projectId: string
@@ -44,12 +44,12 @@ async function runIndex(projectId: string, reason: string): Promise<void> {
   broadcastToRenderers('stateUpdated')
 
   try {
-    const status = await getPatchworkWorkspaceStatus(state.repoRoot)
+    const status = await getFlowPatchWorkspaceStatus(state.repoRoot)
     if (!status.writable) {
       updateJobState(job.id, 'blocked', { summary: 'Repo not writable' }, 'Repo not writable')
       return
     }
-    ensurePatchworkWorkspace(state.repoRoot)
+    ensureFlowPatchWorkspace(state.repoRoot)
     const { meta } = await buildIndex(state.repoRoot, { isCanceled: () => state.cancelRequested })
     updateJobState(job.id, 'succeeded', {
       summary: `Indexed ${meta.totalFiles} files`,
@@ -154,9 +154,9 @@ export function setProjectIndexingEnabled(projectId: string, enabled: boolean): 
   void (async () => {
     const project = getProject(projectId)
     if (!project) return
-    const status = await getPatchworkWorkspaceStatus(state.repoRoot)
+    const status = await getFlowPatchWorkspaceStatus(state.repoRoot)
     if (!status.writable) return
-    ensurePatchworkWorkspace(state.repoRoot)
+    ensureFlowPatchWorkspace(state.repoRoot)
     void runIndex(projectId, 'manual:enabled')
   })()
 

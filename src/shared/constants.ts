@@ -162,7 +162,7 @@ export const DEFAULT_COMMIT_MESSAGE = '#{issue} {title}'
 /**
  * Default worktree branch prefix.
  */
-export const DEFAULT_WORKTREE_BRANCH_PREFIX = 'patchwork/'
+export const DEFAULT_WORKTREE_BRANCH_PREFIX = 'flowpatch/'
 
 /**
  * Default maximum concurrent worktrees.

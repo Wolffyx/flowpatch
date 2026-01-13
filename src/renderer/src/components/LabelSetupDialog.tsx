@@ -126,7 +126,7 @@ export function LabelSetupDialog({
           return
         }
         toast.success('Labels configured', {
-          description: 'Patchwork will use these labels for status.'
+          description: 'FlowPatch will use these labels for status.'
         })
         onApplied?.()
         onOpenChange(false)
@@ -155,7 +155,7 @@ export function LabelSetupDialog({
         <DialogHeader className="shrink-0">
           <DialogTitle>Set up issue labels</DialogTitle>
           <DialogDescription>
-            Patchwork uses issue labels to map remote issues into Kanban columns and to push status
+            FlowPatch uses issue labels to map remote issues into Kanban columns and to push status
             changes back.
           </DialogDescription>
         </DialogHeader>
@@ -167,7 +167,7 @@ export function LabelSetupDialog({
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium">Create missing labels</div>
                   <div className="text-xs text-muted-foreground">
-                    If the chosen labels don&apos;t exist yet, Patchwork will create them in your
+                    If the chosen labels don&apos;t exist yet, FlowPatch will create them in your
                     repo.
                   </div>
                 </div>
@@ -212,7 +212,7 @@ export function LabelSetupDialog({
                   )
                 }
               >
-                Use Patchwork defaults
+                Use FlowPatch defaults
               </Button>
               <Button
                 type="button"

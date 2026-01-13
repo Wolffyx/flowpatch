@@ -22,7 +22,7 @@ import { stopWorkerLoop } from '../../worker/loop'
 import { getTabByProjectId, closeTab } from '../../tabManager'
 import { parsePolicyJson, mergePolicyUpdate, logAction } from '@shared/utils'
 import type { PolicyConfig, E2ETestConfig } from '@shared/types'
-import type { PatchworkConfig } from '../../services/patchwork-config'
+import type { FlowPatchConfig } from '../../services/flowpatch-config'
 
 // ============================================================================
 // Handler Registration
@@ -140,7 +140,7 @@ export function registerProjectHandlers(notifyRenderer: () => void): void {
     }
   )
 
-  // Update E2E settings (saves to both database and .patchwork/config.yml)
+  // Update E2E settings (saves to both database and .flowpatch/config.yml)
   ipcMain.handle(
     'updateE2ESettings',
     (_e, payload: { projectId: string; e2eConfig: Partial<E2ETestConfig> }) => {
@@ -159,14 +159,14 @@ export function registerProjectHandlers(notifyRenderer: () => void): void {
       })
       updateProjectPolicyJson(payload.projectId, JSON.stringify(updatedPolicy))
 
-      // 2. Update .patchwork/config.yml
+      // 2. Update .flowpatch/config.yml
       const repoRoot = project.local_path
-      const configPath = join(repoRoot, '.patchwork', 'config.yml')
+      const configPath = join(repoRoot, '.flowpatch', 'config.yml')
 
       if (existsSync(configPath)) {
         try {
           const configContent = readFileSync(configPath, 'utf-8')
-          const config = YAML.parse(configContent) as PatchworkConfig
+          const config = YAML.parse(configContent) as FlowPatchConfig
 
           // Merge E2E settings
           config.e2e = {

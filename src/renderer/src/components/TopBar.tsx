@@ -326,14 +326,14 @@ export function TopBar({
         </div>
       </div>
 
-      <SettingsDialog
-        open={settingsOpen}
-        onOpenChange={setSettingsOpen}
-        project={project}
-        onSetWorkerToolPreference={onSetWorkerToolPreference}
-        onSetWorkerRollbackOnCancel={onSetWorkerRollbackOnCancel}
-        onSetShowPullRequestsSection={onSetShowPullRequestsSection}
-      />
+      {/*<SettingsDialog*/}
+      {/*  open={settingsOpen}*/}
+      {/*  onOpenChange={setSettingsOpen}*/}
+      {/*  project={project}*/}
+      {/*  onSetWorkerToolPreference={onSetWorkerToolPreference}*/}
+      {/*  onSetWorkerRollbackOnCancel={onSetWorkerRollbackOnCancel}*/}
+      {/*  onSetShowPullRequestsSection={onSetShowPullRequestsSection}*/}
+      {/*/>*/}
     </>
   )
 }

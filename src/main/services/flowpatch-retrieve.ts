@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
-import type { PatchworkChunk, PatchworkSymbol } from './patchwork-indexer'
-import { semanticSearch } from './patchwork-semantic'
+import type { FlowPatchChunk, FlowPatchSymbol } from './flowpatch-indexer'
+import { semanticSearch } from './flowpatch-semantic'
 
 export interface RetrieveSymbolMatch {
   kind: 'symbol'
@@ -25,29 +25,29 @@ function normalize(s: string): string {
   return (s || '').toLowerCase()
 }
 
-function loadSymbols(repoRoot: string): PatchworkSymbol[] {
-  const symbolsPath = join(repoRoot, '.patchwork', 'state', 'index', 'symbols.json')
+function loadSymbols(repoRoot: string): FlowPatchSymbol[] {
+  const symbolsPath = join(repoRoot, '.flowpatch', 'state', 'index', 'symbols.json')
   if (!existsSync(symbolsPath)) return []
   try {
-    const parsed = JSON.parse(readFileSync(symbolsPath, 'utf-8')) as { symbols?: PatchworkSymbol[] }
+    const parsed = JSON.parse(readFileSync(symbolsPath, 'utf-8')) as { symbols?: FlowPatchSymbol[] }
     return parsed.symbols ?? []
   } catch {
     return []
   }
 }
 
-function loadChunks(repoRoot: string, limitBytes = 5_000_000): PatchworkChunk[] {
-  const chunksPath = join(repoRoot, '.patchwork', 'state', 'index', 'chunks.jsonl')
+function loadChunks(repoRoot: string, limitBytes = 5_000_000): FlowPatchChunk[] {
+  const chunksPath = join(repoRoot, '.flowpatch', 'state', 'index', 'chunks.jsonl')
   if (!existsSync(chunksPath)) return []
   try {
     const buf = readFileSync(chunksPath)
     if (buf.length > limitBytes) return []
     const text = buf.toString('utf-8')
     const lines = text.split(/\r?\n/).filter(Boolean)
-    const chunks: PatchworkChunk[] = []
+    const chunks: FlowPatchChunk[] = []
     for (const line of lines) {
       try {
-        chunks.push(JSON.parse(line) as PatchworkChunk)
+        chunks.push(JSON.parse(line) as FlowPatchChunk)
       } catch {
         // ignore
       }
@@ -97,7 +97,7 @@ export function retrieveText(repoRoot: string, query: string, limit = 20): Retri
   const semantic = semanticSearch(repoRoot, q, Math.min(40, limit))
   if (semantic.length > 0) {
     const chunks = loadChunks(repoRoot)
-    const chunkByKey = new Map<string, PatchworkChunk>()
+    const chunkByKey = new Map<string, FlowPatchChunk>()
     for (const c of chunks) chunkByKey.set(`${c.path}:${c.startLine}:${c.endLine}`, c)
 
     const matches: RetrieveTextMatch[] = []

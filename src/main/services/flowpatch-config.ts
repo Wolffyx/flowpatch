@@ -14,21 +14,21 @@ import type {
 
 export type PrivacyMode = 'strict' | 'standard' | 'off'
 
-export interface PatchworkBudgets {
+export interface FlowPatchBudgets {
   maxFiles: number
   maxLinesPerFile: number
   maxTotalLines: number
   maxTotalBytes?: number
 }
 
-export interface PatchworkPrivacyOverride {
+export interface FlowPatchPrivacyOverride {
   mode?: PrivacyMode
   denyCategories?: string[]
   allowGlobs?: string[]
   denyGlobs?: string[]
 }
 
-export interface PatchworkE2EConfig {
+export interface FlowPatchE2EConfig {
   enabled?: boolean
   framework?: 'playwright'
   maxRetries?: number
@@ -39,21 +39,21 @@ export interface PatchworkE2EConfig {
 }
 
 // Feature configuration interfaces for YAML
-export interface PatchworkThinkingConfig {
+export interface FlowPatchThinkingConfig {
   enabled?: boolean
   defaultMode?: ThinkingMode
   budgetTokens?: number
   showInUI?: boolean
 }
 
-export interface PatchworkPlanningConfig {
+export interface FlowPatchPlanningConfig {
   enabled?: boolean
   defaultMode?: PlanningMode
   autoSaveSpecs?: boolean
   specsDirectory?: string
 }
 
-export interface PatchworkMultiAgentConfig {
+export interface FlowPatchMultiAgentConfig {
   enabled?: boolean
   maxAgents?: number
   mergeStrategy?: MergeStrategy
@@ -61,21 +61,21 @@ export interface PatchworkMultiAgentConfig {
   showAgentActivity?: boolean
 }
 
-export interface PatchworkChatConfig {
+export interface FlowPatchChatConfig {
   enabled?: boolean
   maxHistoryMessages?: number
   streamResponses?: boolean
   showTimestamps?: boolean
 }
 
-export interface PatchworkNotificationsConfig {
+export interface FlowPatchNotificationsConfig {
   enabled?: boolean
   showToasts?: boolean
   soundEnabled?: boolean
   position?: 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left'
 }
 
-export interface PatchworkDiffViewerConfig {
+export interface FlowPatchDiffViewerConfig {
   enabled?: boolean
   defaultMode?: DiffViewMode
   syntaxHighlighting?: boolean
@@ -83,14 +83,14 @@ export interface PatchworkDiffViewerConfig {
   wordWrap?: boolean
 }
 
-export interface PatchworkGraphViewConfig {
+export interface FlowPatchGraphViewConfig {
   enabled?: boolean
   defaultLayout?: GraphLayout
   showLabels?: boolean
   animateTransitions?: boolean
 }
 
-export interface PatchworkUsageTrackingConfig {
+export interface FlowPatchUsageTrackingConfig {
   enabled?: boolean
   trackTokens?: boolean
   trackCosts?: boolean
@@ -98,64 +98,64 @@ export interface PatchworkUsageTrackingConfig {
   retentionDays?: number
 }
 
-export interface PatchworkImagesConfig {
+export interface FlowPatchImagesConfig {
   enabled?: boolean
   maxSizeMB?: number
   allowedFormats?: string[]
   compressionQuality?: number
 }
 
-export interface PatchworkAIProfilesConfig {
+export interface FlowPatchAIProfilesConfig {
   enabled?: boolean
   maxProfiles?: number
   allowCustomInstructions?: boolean
 }
 
-export interface PatchworkFeatureSuggestionsConfig {
+export interface FlowPatchFeatureSuggestionsConfig {
   enabled?: boolean
   autoSuggest?: boolean
   maxSuggestions?: number
 }
 
-export interface PatchworkDependenciesConfig {
+export interface FlowPatchDependenciesConfig {
   enabled?: boolean
   autoDetect?: boolean
   showOutdated?: boolean
 }
 
-export interface PatchworkFollowUpInstructionsConfig {
+export interface FlowPatchFollowUpInstructionsConfig {
   enabled?: boolean
   maxInstructions?: number
   persistAcrossSessions?: boolean
 }
 
-export interface PatchworkSyncConfig {
+export interface FlowPatchSyncConfig {
   configPriority?: ConfigSyncPriority
   syncOnStartup?: boolean
   watchFileChanges?: boolean
 }
 
-export interface PatchworkFeaturesConfig {
-  thinking?: PatchworkThinkingConfig
-  planning?: PatchworkPlanningConfig
-  multiAgent?: PatchworkMultiAgentConfig
-  chat?: PatchworkChatConfig
-  notifications?: PatchworkNotificationsConfig
-  diffViewer?: PatchworkDiffViewerConfig
-  graphView?: PatchworkGraphViewConfig
-  usageTracking?: PatchworkUsageTrackingConfig
-  images?: PatchworkImagesConfig
-  aiProfiles?: PatchworkAIProfilesConfig
-  featureSuggestions?: PatchworkFeatureSuggestionsConfig
-  dependencies?: PatchworkDependenciesConfig
-  followUpInstructions?: PatchworkFollowUpInstructionsConfig
+export interface FlowPatchFeaturesConfig {
+  thinking?: FlowPatchThinkingConfig
+  planning?: FlowPatchPlanningConfig
+  multiAgent?: FlowPatchMultiAgentConfig
+  chat?: FlowPatchChatConfig
+  notifications?: FlowPatchNotificationsConfig
+  diffViewer?: FlowPatchDiffViewerConfig
+  graphView?: FlowPatchGraphViewConfig
+  usageTracking?: FlowPatchUsageTrackingConfig
+  images?: FlowPatchImagesConfig
+  aiProfiles?: FlowPatchAIProfilesConfig
+  featureSuggestions?: FlowPatchFeatureSuggestionsConfig
+  dependencies?: FlowPatchDependenciesConfig
+  followUpInstructions?: FlowPatchFollowUpInstructionsConfig
 }
 
-export interface PatchworkConfig {
+export interface FlowPatchConfig {
   schemaVersion: number
   generatedBy?: string
-  budgets: PatchworkBudgets
-  privacy?: PatchworkPrivacyOverride
+  budgets: FlowPatchBudgets
+  privacy?: FlowPatchPrivacyOverride
   workspaces?: string[]
   approval?: {
     confirmIndexBuild?: boolean
@@ -166,33 +166,33 @@ export interface PatchworkConfig {
     confirmRepair?: boolean
     confirmMigrate?: boolean
   }
-  e2e?: PatchworkE2EConfig
-  sync?: PatchworkSyncConfig
-  features?: PatchworkFeaturesConfig
+  e2e?: FlowPatchE2EConfig
+  sync?: FlowPatchSyncConfig
+  features?: FlowPatchFeaturesConfig
 }
 
-export interface PatchworkConfigDiagnostics {
+export interface FlowPatchConfigDiagnostics {
   errors: string[]
   warnings: string[]
 }
 
-export const DEFAULT_BUDGETS: PatchworkBudgets = {
+export const DEFAULT_BUDGETS: FlowPatchBudgets = {
   maxFiles: 12,
   maxLinesPerFile: 200,
   maxTotalLines: 1200,
   maxTotalBytes: 250_000
 }
 
-export function readPatchworkConfig(repoRoot: string): {
-  config: PatchworkConfig
-  diagnostics: PatchworkConfigDiagnostics
+export function readFlowPatchConfig(repoRoot: string): {
+  config: FlowPatchConfig
+  diagnostics: FlowPatchConfigDiagnostics
 } {
   const errors: string[] = []
   const warnings: string[] = []
 
-  const configPath = join(repoRoot, '.patchwork', 'config.yml')
+  const configPath = join(repoRoot, '.flowpatch', 'config.yml')
   if (!existsSync(configPath)) {
-    warnings.push('Missing .patchwork/config.yml; using defaults')
+    warnings.push('Missing .flowpatch/config.yml; using defaults')
     return {
       config: { schemaVersion: 1, budgets: { ...DEFAULT_BUDGETS } },
       diagnostics: { errors, warnings }
@@ -216,7 +216,7 @@ export function readPatchworkConfig(repoRoot: string): {
   }
 
   const budgetsRaw = parsed?.budgets ?? {}
-  const budgets: PatchworkBudgets = {
+  const budgets: FlowPatchBudgets = {
     maxFiles: Number(budgetsRaw.maxFiles ?? DEFAULT_BUDGETS.maxFiles),
     maxLinesPerFile: Number(budgetsRaw.maxLinesPerFile ?? DEFAULT_BUDGETS.maxLinesPerFile),
     maxTotalLines: Number(budgetsRaw.maxTotalLines ?? DEFAULT_BUDGETS.maxTotalLines),
@@ -239,7 +239,7 @@ export function readPatchworkConfig(repoRoot: string): {
     errors.push('budgets.maxTotalBytes must be > 0')
   }
 
-  let privacy: PatchworkPrivacyOverride | undefined
+  let privacy: FlowPatchPrivacyOverride | undefined
   if (parsed?.privacy && typeof parsed.privacy === 'object') {
     const mode = parsed.privacy.mode as PrivacyMode | undefined
     if (mode && mode !== 'strict' && mode !== 'standard' && mode !== 'off') {
@@ -303,7 +303,7 @@ export function readPatchworkConfig(repoRoot: string): {
         }
 
   // Parse E2E configuration
-  let e2e: PatchworkE2EConfig | undefined
+  let e2e: FlowPatchE2EConfig | undefined
   if (parsed?.e2e && typeof parsed.e2e === 'object') {
     e2e = {
       enabled: typeof parsed.e2e.enabled === 'boolean' ? parsed.e2e.enabled : undefined,
@@ -329,7 +329,7 @@ export function readPatchworkConfig(repoRoot: string): {
   }
 
   // Parse sync configuration
-  let sync: PatchworkSyncConfig | undefined
+  let sync: FlowPatchSyncConfig | undefined
   if (parsed?.sync && typeof parsed.sync === 'object') {
     const priority = parsed.sync.configPriority
     sync = {
@@ -343,7 +343,7 @@ export function readPatchworkConfig(repoRoot: string): {
   }
 
   // Parse features configuration
-  let features: PatchworkFeaturesConfig | undefined
+  let features: FlowPatchFeaturesConfig | undefined
   if (parsed?.features && typeof parsed.features === 'object') {
     features = parseFeatures(parsed.features, warnings)
   }
@@ -367,8 +367,8 @@ export function readPatchworkConfig(repoRoot: string): {
 /**
  * Parse features configuration from YAML with validation.
  */
-function parseFeatures(raw: any, warnings: string[]): PatchworkFeaturesConfig {
-  const features: PatchworkFeaturesConfig = {}
+function parseFeatures(raw: any, warnings: string[]): FlowPatchFeaturesConfig {
+  const features: FlowPatchFeaturesConfig = {}
 
   // Parse thinking config
   if (raw.thinking && typeof raw.thinking === 'object') {

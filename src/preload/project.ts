@@ -174,8 +174,8 @@ export interface ProjectAPI {
   // Events
   getEvents: (limit?: number) => Promise<Event[]>
 
-  // Patchwork workspace (.patchwork)
-  getWorkspaceStatus: () => Promise<import('../shared/types').PatchworkWorkspaceStatus | null>
+  // FlowPatch workspace (.flowpatch)
+  getWorkspaceStatus: () => Promise<import('../shared/types').FlowPatchWorkspaceStatus | null>
   ensureWorkspace: () => Promise<unknown>
   indexBuild: () => Promise<unknown>
   indexRefresh: () => Promise<unknown>
@@ -188,7 +188,7 @@ export interface ProjectAPI {
   migrateWorkspace: () => Promise<unknown>
   openWorkspaceFolder: () => Promise<unknown>
   retrieve: (kind: 'symbol' | 'text', query: string, limit?: number) => Promise<unknown>
-  getPatchworkConfig: () => Promise<unknown>
+  getFlowPatchConfig: () => Promise<unknown>
 
   // Configuration sync
   syncConfig: (priorityOverride?: 'database' | 'file') => Promise<{
@@ -1064,7 +1064,7 @@ const projectAPI: ProjectAPI = {
   },
 
   // -------------------------------------------------------------------------
-  // Patchwork workspace (.patchwork)
+  // FlowPatch workspace (.flowpatch)
   // -------------------------------------------------------------------------
 
   getWorkspaceStatus: () => {
@@ -1119,8 +1119,8 @@ const projectAPI: ProjectAPI = {
     return ipcRenderer.invoke('project:retrieve', { kind, query, limit })
   },
 
-  getPatchworkConfig: () => {
-    return ipcRenderer.invoke('project:getPatchworkConfig')
+  getFlowPatchConfig: () => {
+    return ipcRenderer.invoke('project:getFlowPatchConfig')
   },
 
   // -------------------------------------------------------------------------
@@ -1206,6 +1206,8 @@ const allowedInvokeChannels = [
   'completeStarterCardsWizard',
   'dismissGithubProjectPrompt',
   'createGithubProjectV2',
+  'listGithubRepositoryProjects',
+  'linkGithubProjectV2',
   // Sync Scheduler
   'getSyncSchedulerStatus'
 ]

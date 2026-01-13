@@ -75,7 +75,7 @@ export async function initializeProjectWorktree(projectId: string): Promise<Work
         enabled: true,
         root: 'sibling',
         customPath: worktreeRoot,
-        branchPrefix: 'patchwork/',
+        branchPrefix: 'flowpatch/',
         maxConcurrent: 3,
         cleanup: {
           onSuccess: 'immediate',

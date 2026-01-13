@@ -18,6 +18,8 @@ import { AddCardDialog, type CreateCardType } from '../src/components/AddCardDia
 import { LabelSetupDialog } from '../src/components/LabelSetupDialog'
 import { GithubProjectPromptDialog } from '../src/components/GithubProjectPromptDialog'
 import { WorkerLogDialog } from '../src/components/WorkerLogDialog'
+import { FollowUpInstructionDialog } from '../src/components/FollowUpInstructionDialog'
+import { PlanApprovalDialog } from '../src/components/PlanApprovalDialog'
 import {
   StarterCardsWizardDialog,
   type StarterCardsWizardMode
@@ -30,13 +32,15 @@ import { useAudioNotifications } from '../src/hooks/useAudioNotifications'
 import { Button } from '../src/components/ui/button'
 import { Switch } from '../src/components/ui/switch'
 import { Badge } from '../src/components/ui/badge'
-import { RefreshCw, Bot, Loader2, Play, Pause, AlertCircle, Terminal, Folder, Lightbulb, Network } from 'lucide-react'
+import { RefreshCw, Bot, Loader2, Play, Pause, AlertCircle, Terminal, Folder, Lightbulb, Network, Send } from 'lucide-react'
 import { cn } from '../src/lib/utils'
 import {
   buildLinkedPullRequestIndex,
   filterOutLinkedPullRequestCards,
   isLinkedPullRequestCard
 } from '../src/lib/linkedPullRequests'
+import { PullRequestsSection } from '../src/components/PullRequestsSection'
+import type { PolicyConfig } from '@shared/types'
 import type {
   Card,
   CardLink,
@@ -46,7 +50,9 @@ import type {
   Project,
   Provider,
   WorkerLogMessage,
-  PatchworkWorkspaceStatus
+  FlowPatchWorkspaceStatus,
+  FollowUpInstructionType,
+  PlanApproval
 } from '@shared/types'
 
 // Declare the project API type
@@ -78,8 +84,24 @@ declare global {
       onStateUpdate: (callback: () => void) => () => void
       onWorkerLog: (callback: (log: WorkerLogMessage) => void) => () => void
 
-      // Patchwork workspace (.patchwork)
-      getWorkspaceStatus: () => Promise<PatchworkWorkspaceStatus | null>
+      // Plan Approval
+      getPlanApproval: (params: { approvalId: string }) => Promise<PlanApproval | null>
+      approvePlan: (approvalId: string, notes?: string) => Promise<{ success: boolean; error?: string }>
+      rejectPlan: (approvalId: string, notes?: string) => Promise<{ success: boolean; error?: string }>
+      skipPlanApproval: (approvalId: string) => Promise<{ success: boolean; error?: string }>
+      onPlanApprovalRequired: (callback: (data: { approvalId: string; jobId: string; cardId: string }) => void) => () => void
+
+      // Follow-up Instructions
+      createFollowUpInstruction: (data: {
+        jobId: string
+        cardId: string
+        instructionType: FollowUpInstructionType
+        content: string
+        priority?: number
+      }) => Promise<{ success: boolean; error?: string }>
+
+      // FlowPatch workspace (.flowpatch)
+      getWorkspaceStatus: () => Promise<FlowPatchWorkspaceStatus | null>
       ensureWorkspace: () => Promise<unknown>
       indexBuild: () => Promise<unknown>
       indexRefresh: () => Promise<unknown>
@@ -153,6 +175,16 @@ interface ProjectInfo {
   projectPath: string
 }
 
+function readShowPullRequestsSection(project: Project | null): boolean {
+  if (!project?.policy_json) return false
+  try {
+    const policy = JSON.parse(project.policy_json) as PolicyConfig
+    return !!policy?.ui?.showPullRequestsSection
+  } catch {
+    return false
+  }
+}
+
 export default function App(): React.JSX.Element {
   const [projectInfo, setProjectInfo] = useState<ProjectInfo | null>(null)
   const [project, setProject] = useState<Project | null>(null)
@@ -172,10 +204,13 @@ export default function App(): React.JSX.Element {
   const [workerLogsOpen, setWorkerLogsOpen] = useState(false)
   const [workerLogsByJobId, setWorkerLogsByJobId] = useState<Record<string, string[]>>({})
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
-  const [workspaceStatus, setWorkspaceStatus] = useState<PatchworkWorkspaceStatus | null>(null)
+  const [workspaceStatus, setWorkspaceStatus] = useState<FlowPatchWorkspaceStatus | null>(null)
   const [workspaceStatusLoading, setWorkspaceStatusLoading] = useState(false)
   const [featureSuggestionsOpen, setFeatureSuggestionsOpen] = useState(false)
   const [graphViewOpen, setGraphViewOpen] = useState(false)
+  const [followUpDialogOpen, setFollowUpDialogOpen] = useState(false)
+  const [pendingApproval, setPendingApproval] = useState<PlanApproval | null>(null)
+  const [approvalCard, setApprovalCard] = useState<Card | null>(null)
 
   // Audio notifications - read config from project policy
   const notificationsConfig = useMemo(() => {
@@ -262,10 +297,30 @@ export default function App(): React.JSX.Element {
   // Get selected card
   const selectedCard = selectedCardId ? (cards.find((c) => c.id === selectedCardId) ?? null) : null
 
+  // Show Pull Requests Section setting
+  const showPullRequestsSection = readShowPullRequestsSection(project)
+
   const linkedPrIndex = useMemo(() => buildLinkedPullRequestIndex(cardLinks), [cardLinks])
-  const visibleCards = useMemo(
-    () => filterOutLinkedPullRequestCards(cards, linkedPrIndex),
+
+  // Pull request cards for the PR section (unlinked PRs/MRs only)
+  const pullRequestCards = useMemo(
+    () =>
+      cards.filter(
+        (c) => (c.type === 'pr' || c.type === 'mr') && !isLinkedPullRequestCard(c, linkedPrIndex)
+      ),
     [cards, linkedPrIndex]
+  )
+
+  // Board cards - filter out PRs when showing in separate section
+  const visibleCards = useMemo(
+    () =>
+      filterOutLinkedPullRequestCards(
+        showPullRequestsSection
+          ? cards.filter((c) => c.type !== 'pr' && c.type !== 'mr')
+          : cards,
+        linkedPrIndex
+      ),
+    [cards, linkedPrIndex, showPullRequestsSection]
   )
 
   // Worker status calculations
@@ -319,11 +374,17 @@ export default function App(): React.JSX.Element {
 
   // Listen for state updates - refresh data without showing loading screen
   useEffect(() => {
-    const unsubscribe = window.projectAPI.onStateUpdate(() => {
+    const unsubscribe = window.projectAPI.onStateUpdate(async () => {
       refreshData() // Use refreshData instead of loadData to avoid loading flash
       void refreshWorkspaceStatus() // Use refresh to avoid loading flash
-      // Re-check onboarding state on state updates (e.g., after resetLabelWizard)
+      // Refresh project to get updated policy (e.g., showPullRequestsSection toggle)
       if (projectInfo) {
+        try {
+          const projectData = await window.projectAPI.getProject(projectInfo.projectId)
+          setProject(projectData)
+        } catch (error) {
+          console.error('Failed to refresh project:', error)
+        }
         checkOnboardingState(projectInfo.projectId)
       }
     })
@@ -384,6 +445,23 @@ export default function App(): React.JSX.Element {
     })
     return unsubscribe
   }, [])
+
+  // Listen for plan approval requests
+  useEffect(() => {
+    const unsubscribe = window.projectAPI.onPlanApprovalRequired(async (data) => {
+      try {
+        const approval = await window.projectAPI.getPlanApproval({ approvalId: data.approvalId })
+        if (approval) {
+          setPendingApproval(approval)
+          const card = cards.find(c => c.id === data.cardId) ?? null
+          setApprovalCard(card)
+        }
+      } catch (error) {
+        console.error('Failed to load plan approval:', error)
+      }
+    })
+    return unsubscribe
+  }, [cards])
 
   const clearWorkerLogs = useCallback((jobId: string) => {
     setWorkerLogsByJobId((prev) => {
@@ -540,6 +618,42 @@ export default function App(): React.JSX.Element {
     setSelectedCardId(null)
   }, [])
 
+  // Follow-up instruction handler
+  const handleFollowUpSubmit = useCallback(async (data: {
+    jobId: string
+    cardId: string
+    instructionType: FollowUpInstructionType
+    content: string
+    priority?: number
+  }): Promise<void> => {
+    await window.projectAPI.createFollowUpInstruction({
+      jobId: data.jobId,
+      cardId: data.cardId,
+      instructionType: data.instructionType,
+      content: data.content,
+      priority: data.priority
+    })
+  }, [])
+
+  // Plan approval handlers
+  const handleApprovePlan = useCallback(async (approvalId: string, notes?: string): Promise<void> => {
+    await window.projectAPI.approvePlan(approvalId, notes)
+    setPendingApproval(null)
+    setApprovalCard(null)
+  }, [])
+
+  const handleRejectPlan = useCallback(async (approvalId: string, notes?: string): Promise<void> => {
+    await window.projectAPI.rejectPlan(approvalId, notes)
+    setPendingApproval(null)
+    setApprovalCard(null)
+  }, [])
+
+  const handleSkipApproval = useCallback(async (approvalId: string): Promise<void> => {
+    await window.projectAPI.skipPlanApproval(approvalId)
+    setPendingApproval(null)
+    setApprovalCard(null)
+  }, [])
+
   if (!projectInfo) {
     return (
       <div className="flex h-screen items-center justify-center text-muted-foreground">
@@ -670,7 +784,7 @@ export default function App(): React.JSX.Element {
             onClick={() => {
               void window.projectAPI.openWorkspaceFolder()
             }}
-            title="Open .patchwork folder"
+            title="Open .flowpatch folder"
           >
             <Folder className="mr-2 h-4 w-4" />
             Workspace
@@ -685,6 +799,17 @@ export default function App(): React.JSX.Element {
           >
             <Terminal className="mr-2 h-4 w-4" />
             Logs
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setFollowUpDialogOpen(true)}
+            disabled={!activeWorkerJob}
+            title="Send instruction to worker"
+          >
+            <Send className="mr-2 h-4 w-4" />
+            Instruct
           </Button>
 
           <Button
@@ -717,6 +842,15 @@ export default function App(): React.JSX.Element {
 
       {/* Main Content - flex row with kanban and drawer */}
       <div className="flex-1 flex overflow-hidden min-h-0">
+        {/* Pull Requests Section (when enabled) */}
+        {showPullRequestsSection && (
+          <PullRequestsSection
+            cards={pullRequestCards}
+            selectedCardId={selectedCardId}
+            onSelectCard={setSelectedCardId}
+          />
+        )}
+
         {/* Kanban Board */}
         <div className="flex-1 overflow-hidden min-h-0">
           <KanbanBoard
@@ -771,6 +905,29 @@ export default function App(): React.JSX.Element {
         card={cardForLogs}
         liveLogs={jobForLogs ? (workerLogsByJobId[jobForLogs.id] ?? []) : []}
         onClearLogs={clearWorkerLogs}
+      />
+
+      <FollowUpInstructionDialog
+        open={followUpDialogOpen}
+        onOpenChange={setFollowUpDialogOpen}
+        job={activeWorkerJob ?? null}
+        card={cardForLogs}
+        onSubmit={handleFollowUpSubmit}
+      />
+
+      <PlanApprovalDialog
+        open={!!pendingApproval}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingApproval(null)
+            setApprovalCard(null)
+          }
+        }}
+        approval={pendingApproval}
+        card={approvalCard}
+        onApprove={handleApprovePlan}
+        onReject={handleRejectPlan}
+        onSkip={handleSkipApproval}
       />
 
       <WorkspaceDialog

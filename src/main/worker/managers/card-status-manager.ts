@@ -181,7 +181,7 @@ export class CardStatusManager {
       if (created) {
         await this.ctx.adapter.commentOnIssue(
           issueNumber,
-          `PR created: ${prUrl}\n\n_Automated by Patchwork_`
+          `PR created: ${prUrl}\n\n_Automated by FlowPatch_`
         )
       }
     }

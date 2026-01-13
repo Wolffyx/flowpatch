@@ -2,7 +2,7 @@
 
 ## Overview
 
-Add git worktree support to Patchwork's worker pipeline for isolated, concurrent card processing without affecting the main working tree.
+Add git worktree support to FlowPatch's worker pipeline for isolated, concurrent card processing without affecting the main working tree.
 
 ---
 
@@ -18,7 +18,7 @@ worktree?: {
   root: 'repo' | 'sibling' | 'custom'; // Where to create worktrees
   customPath?: string;                 // Only if root === 'custom'
   baseBranch?: string;                 // Override default branch (e.g., 'develop')
-  branchPrefix: string;                // Default: 'patchwork/'
+  branchPrefix: string;                // Default: 'flowpatch/'
   cleanup: {
     onSuccess: 'immediate' | 'delay' | 'never';   // Default: 'immediate'
     onFailure: 'immediate' | 'delay' | 'never';   // Default: 'delay' (for debugging)
@@ -34,13 +34,13 @@ worktree?: {
 Add to `src/shared/types.ts`:
 
 ```typescript
-// Branch naming: patchwork/<provider>-<number|id>-<slug>
+// Branch naming: flowpatch/<provider>-<number|id>-<slug>
 // Max length: 100 chars, safe charset: a-z0-9-
 export function generateWorktreeBranchName(
   provider: Provider,
   numberOrId: string | number,
   title: string,
-  prefix: string = 'patchwork/'
+  prefix: string = 'flowpatch/'
 ): string
 ```
 
@@ -222,7 +222,7 @@ branch refs/heads/feature-branch
 
 ```typescript
 // Only allow worktree operations in:
-// 1. <repoPath>/.patchwork-worktrees/
+// 1. <repoPath>/.flowpatch-worktrees/
 // 2. <repoPath>/../<repoName>-worktrees/
 // 3. Custom configured path
 // NEVER allow arbitrary paths
@@ -653,7 +653,7 @@ private getAllowedRoots(config: WorktreePolicyConfig): string[] {
 
   switch (config.root) {
     case 'repo':
-      roots.push(path.join(this.repoPath, '.patchwork-worktrees'));
+      roots.push(path.join(this.repoPath, '.flowpatch-worktrees'));
       break;
     case 'sibling':
       roots.push(path.join(path.dirname(this.repoPath), `${path.basename(this.repoPath)}-worktrees`));

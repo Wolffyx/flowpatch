@@ -1,7 +1,7 @@
 /**
  * Playwright Electron App Fixture
  *
- * Provides a test fixture for launching the Patchwork Electron app
+ * Provides a test fixture for launching the FlowPatch Electron app
  * with an isolated test database.
  */
 import { test as base, _electron as electron, ElectronApplication, Page } from '@playwright/test'
@@ -28,9 +28,9 @@ export const test = base.extend<ElectronFixtures>({
       env: {
         ...process.env,
         NODE_ENV: 'test',
-        PATCHWORK_TEST_MODE: 'true',
+        FLOWPATCH_TEST_MODE: 'true',
         // Use separate userData directory for tests
-        PATCHWORK_USER_DATA: resolve(__dirname, '../../../.test-data')
+        FLOWPATCH_USER_DATA: resolve(__dirname, '../../../.test-data')
       }
     })
 

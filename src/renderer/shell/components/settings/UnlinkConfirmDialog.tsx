@@ -28,7 +28,7 @@ export function UnlinkConfirmDialog(): React.JSX.Element {
     try {
       await window.electron.ipcRenderer.invoke('unlinkProject', { projectId: project.id })
       toast.success('Project unlinked', {
-        description: `"${project.name}" has been removed from Patchwork`
+        description: `"${project.name}" has been removed from FlowPatch`
       })
       setShowUnlinkConfirm(false)
       onClose()
@@ -52,7 +52,7 @@ export function UnlinkConfirmDialog(): React.JSX.Element {
           </DialogTitle>
           <DialogDescription>
             Are you sure you want to unlink &quot;{project?.name}&quot;? This will remove the
-            project from Patchwork but will not delete your files.
+            project from FlowPatch but will not delete your files.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>

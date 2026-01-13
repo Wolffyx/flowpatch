@@ -232,6 +232,12 @@ export function useProjects(): UseProjectsResult {
       loadState()
     }
 
+    // Use projectAPI.onStateUpdate if available (project renderer),
+    // otherwise fall back to electron.ipcRenderer (shell renderer)
+    if (typeof window.projectAPI?.onStateUpdate === 'function') {
+      return window.projectAPI.onStateUpdate(handleStateUpdate)
+    }
+
     window.electron.ipcRenderer.on('stateUpdated', handleStateUpdate)
     return () => {
       window.electron.ipcRenderer.removeAllListeners('stateUpdated')

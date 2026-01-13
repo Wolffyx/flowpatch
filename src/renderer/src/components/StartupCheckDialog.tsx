@@ -73,7 +73,7 @@ export function StartupCheckDialog({
         <DialogHeader>
           <DialogTitle>CLI Agent Required</DialogTitle>
           <DialogDescription>
-            Patchwork requires Claude CLI or Codex CLI to be installed for the worker to function.
+            FlowPatch requires Claude CLI or Codex CLI to be installed for the worker to function.
           </DialogDescription>
         </DialogHeader>
 

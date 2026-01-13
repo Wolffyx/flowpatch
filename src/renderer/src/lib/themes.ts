@@ -141,7 +141,7 @@ export async function loadTheme(themeName: ThemeName): Promise<void> {
 
   // Create new style element with theme CSS
   activeStyleElement = document.createElement('style')
-  activeStyleElement.id = 'patchwork-theme'
+  activeStyleElement.id = 'flowpatch-theme'
   activeStyleElement.setAttribute('data-theme', themeName)
   activeStyleElement.textContent = css
 

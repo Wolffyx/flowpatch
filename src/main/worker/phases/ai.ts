@@ -13,8 +13,8 @@ import {
   type LogFn as CLILogFn
 } from '../../cli-providers'
 import { getWorkingDir, type PipelineContext, type LogFn } from './types'
-import { buildContextBundle, buildPromptContext } from '../../services/patchwork-context'
-import { ensureRunDir } from '../../services/patchwork-runs'
+import { buildContextBundle, buildPromptContext } from '../../services/flowpatch-context'
+import { ensureRunDir } from '../../services/flowpatch-runs'
 import {
   updateWorkerProgress,
   createUsageRecord,
@@ -207,7 +207,7 @@ ${ctx.policy.worker?.lintCommand ? `- Lint: ${ctx.policy.worker.lintCommand}` : 
 ${ctx.policy.worker?.testCommand ? `- Test: ${ctx.policy.worker.testCommand}` : ''}
 ${ctx.policy.worker?.buildCommand ? `- Build: ${ctx.policy.worker.buildCommand}` : ''}
 
-## Project Memory (from .patchwork)
+## Project Memory (from .flowpatch)
 ${repoContext}
 
 Please implement the changes now.`

@@ -103,7 +103,7 @@ function safeEmailLocalPart(input: string): string {
     .replace(/-+/g, '-')
     .replace(/^-+/, '')
     .replace(/-+$/, '')
-  return normalized || 'patchwork'
+  return normalized || 'flowpatch'
 }
 
 function getDefaultGitUserName(): string {
@@ -122,7 +122,7 @@ function getDefaultGitUserName(): string {
     // ignore
   }
 
-  return 'Patchwork'
+  return 'FlowPatch'
 }
 
 function getDefaultGitUserEmail(userName: string): string {
@@ -456,7 +456,7 @@ export function registerRepoHandlers(): void {
         const openResult = await openRepoAtPath(repoPath)
         if (openResult.error) return { error: openResult.error, warnings, repoPath }
 
-        // New repo created by Patchwork: offer starter cards wizard on first open.
+        // New repo created by FlowPatch: offer starter cards wizard on first open.
         try {
           if (openResult.project?.id) {
             setOnboardingBool(openResult.project.id, 'starterCardsEligible', true)

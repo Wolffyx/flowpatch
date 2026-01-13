@@ -23,6 +23,7 @@ export function SettingsProvider({
   const [isLoading, setIsLoading] = useState(false)
   const [activeSection, setActiveSection] = useState<SettingsSection>('appearance')
   const [showUnlinkConfirm, setShowUnlinkConfirm] = useState(false)
+  const [showResetConfirm, setShowResetConfirm] = useState(false)
 
   const onClose = useCallback(() => {
     onOpenChange(false)
@@ -38,7 +39,9 @@ export function SettingsProvider({
         setActiveSection,
         onClose,
         showUnlinkConfirm,
-        setShowUnlinkConfirm
+        setShowUnlinkConfirm,
+        showResetConfirm,
+        setShowResetConfirm
       }}
     >
       {children}

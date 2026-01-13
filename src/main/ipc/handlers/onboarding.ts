@@ -144,7 +144,22 @@ export function registerOnboardingHandlers(notifyRenderer: () => void): void {
   // Reset GitHub project prompt
   ipcMain.handle('resetGithubProjectPrompt', (_e, payload: { projectId: string }) => {
     if (!payload?.projectId) return { error: 'Project ID required' }
+
+    // Clear the dismissed flag
     setOnboardingBool(payload.projectId, 'githubProjectDismissed', false)
+
+    // Also clear any existing projectId to allow re-detection or re-creation
+    const project = getProject(payload.projectId)
+    if (project) {
+      const policy = parsePolicyJson(project.policy_json)
+      if (policy.sync?.githubProjectsV2?.projectId) {
+        delete policy.sync.githubProjectsV2.projectId
+        // Also reset enabled to undefined (auto-detect)
+        delete policy.sync.githubProjectsV2.enabled
+        updateProjectPolicyJson(payload.projectId, JSON.stringify(policy))
+      }
+    }
+
     notifyRenderer()
     return { success: true }
   })
@@ -282,6 +297,65 @@ export function registerOnboardingHandlers(notifyRenderer: () => void): void {
     notifyRenderer()
     return { success: true, project: getProject(payload.projectId) }
   })
+
+  // List GitHub Projects V2 linked to repository
+  ipcMain.handle(
+    'listGithubRepositoryProjects',
+    async (_e, payload: { projectId: string }) => {
+      if (!payload?.projectId) return { projects: [], error: 'Project ID required' }
+
+      const project = getProject(payload.projectId)
+      if (!project) return { projects: [], error: 'Project not found' }
+      if (!project.remote_repo_key?.startsWith('github:'))
+        return { projects: [], error: 'Project is not GitHub-backed' }
+
+      const policy = parsePolicyJson(project.policy_json)
+
+      try {
+        const adapter = AdapterRegistry.create({
+          repoKey: project.remote_repo_key,
+          providerHint: project.provider_hint,
+          repoPath: project.local_path,
+          policy
+        })
+
+        // Check if adapter has listRepositoryProjects method (GitHub only)
+        if ('listRepositoryProjects' in adapter && typeof adapter.listRepositoryProjects === 'function') {
+          const projects = await (adapter as { listRepositoryProjects: () => Promise<Array<{ id: string; title: string; number: number }>> }).listRepositoryProjects()
+          return { projects }
+        }
+
+        return { projects: [] }
+      } catch (error) {
+        return { projects: [], error: error instanceof Error ? error.message : String(error) }
+      }
+    }
+  )
+
+  // Link an existing GitHub Project V2 to this project
+  ipcMain.handle(
+    'linkGithubProjectV2',
+    async (_e, payload: { projectId: string; githubProjectId: string }) => {
+      if (!payload?.projectId) return { error: 'Project ID required' }
+      if (!payload?.githubProjectId) return { error: 'GitHub Project ID required' }
+
+      const project = getProject(payload.projectId)
+      if (!project) return { error: 'Project not found' }
+      if (!project.remote_repo_key?.startsWith('github:'))
+        return { error: 'Project is not GitHub-backed' }
+
+      const policy = parsePolicyJson(project.policy_json)
+      policy.sync = policy.sync ?? {}
+      policy.sync.githubProjectsV2 = policy.sync.githubProjectsV2 ?? {}
+      policy.sync.githubProjectsV2.enabled = true
+      policy.sync.githubProjectsV2.projectId = payload.githubProjectId
+      updateProjectPolicyJson(payload.projectId, JSON.stringify(policy))
+
+      setOnboardingBool(payload.projectId, 'githubProjectDismissed', true)
+      notifyRenderer()
+      return { success: true, projectId: payload.githubProjectId }
+    }
+  )
 
   // Create GitHub Project V2
   ipcMain.handle(

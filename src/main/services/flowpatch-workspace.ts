@@ -1,20 +1,22 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'fs'
 import { join } from 'path'
-import type { PatchworkWorkspaceStatus } from '../../shared/types'
-import { getIndexStatus } from './patchwork-indexer'
-import { isIndexWatchEnabled } from './patchwork-watch-manager'
+import type { FlowPatchWorkspaceStatus } from '../../shared/types'
+import { getIndexStatus } from './flowpatch-indexer'
+import { isIndexWatchEnabled } from './flowpatch-watch-manager'
 
-export interface PatchworkWorkspaceEnsureResult {
+export interface FlowPatchWorkspaceEnsureResult {
   repoRoot: string
   createdPaths: string[]
   updatedGitignore: boolean
 }
 
-const STATE_GITIGNORE_ENTRY = '.patchwork/state/'
+//todo add in the feature the state folder
+// const STATE_GITIGNORE_ENTRY =  '.flowpatch/state/'
+const STATE_GITIGNORE_ENTRY =  '.flowpatch/'
 
 function tryWriteProbe(dir: string): boolean {
   try {
-    const probePath = join(dir, '.patchwork-write-probe.tmp')
+    const probePath = join(dir, '.flowpatch-write-probe.tmp')
     writeFileSync(probePath, 'ok', { encoding: 'utf-8' })
     try {
       // Best-effort cleanup; ignore failures.
@@ -45,7 +47,7 @@ function ensureGitignore(repoRoot: string, created: string[]): boolean {
   const line = `${STATE_GITIGNORE_ENTRY}\n`
 
   if (!existsSync(gitignorePath)) {
-    writeFileSync(gitignorePath, `# Patchwork IDE-like workspace state (generated)\n${line}`, {
+    writeFileSync(gitignorePath, `# FlowPatch IDE-like workspace state (generated)\n${line}`, {
       encoding: 'utf-8'
     })
     created.push(gitignorePath)
@@ -55,16 +57,16 @@ function ensureGitignore(repoRoot: string, created: string[]): boolean {
   const existing = readFileSync(gitignorePath, 'utf-8')
   if (existing.split(/\r?\n/).some((l) => l.trim() === STATE_GITIGNORE_ENTRY)) return false
 
-  appendFileSync(gitignorePath, `\n# Patchwork IDE-like workspace state (generated)\n${line}`, {
+  appendFileSync(gitignorePath, `\n# FlowPatch IDE-like workspace state (generated)\n${line}`, {
     encoding: 'utf-8'
   })
   return true
 }
 
-export async function getPatchworkWorkspaceStatus(
+export async function getFlowPatchWorkspaceStatus(
   repoRoot: string
-): Promise<PatchworkWorkspaceStatus> {
-  const root = join(repoRoot, '.patchwork')
+): Promise<FlowPatchWorkspaceStatus> {
+  const root = join(repoRoot, '.flowpatch')
   const configPath = join(root, 'config.yml')
   const docsPath = join(root, 'docs')
   const scriptsPath = join(root, 'scripts')
@@ -97,10 +99,10 @@ export async function getPatchworkWorkspaceStatus(
   }
 }
 
-export function ensurePatchworkWorkspace(repoRoot: string): PatchworkWorkspaceEnsureResult {
+export function ensureFlowPatchWorkspace(repoRoot: string): FlowPatchWorkspaceEnsureResult {
   const createdPaths: string[] = []
 
-  const root = join(repoRoot, '.patchwork')
+  const root = join(repoRoot, '.flowpatch')
   const docs = join(root, 'docs')
   const scripts = join(root, 'scripts')
   const state = join(root, 'state')
@@ -122,7 +124,7 @@ export function ensurePatchworkWorkspace(repoRoot: string): PatchworkWorkspaceEn
     join(root, 'config.yml'),
     [
       'schemaVersion: 1',
-      'generatedBy: patchwork',
+      'generatedBy: flowpatch',
       '',
       '# Budgets',
       'budgets:',
@@ -144,7 +146,7 @@ export function ensurePatchworkWorkspace(repoRoot: string): PatchworkWorkspaceEn
   ensureFile(
     join(docs, 'AGENTS.md'),
     [
-      '# Patchwork Agent Notes',
+      '# FlowPatch Agent Notes',
       '',
       '- Where things live:',
       '- Commands:',
@@ -166,37 +168,37 @@ export function ensurePatchworkWorkspace(repoRoot: string): PatchworkWorkspaceEn
 
   ensureFile(
     join(scripts, 'build_context.ts'),
-    ['// Placeholder: Patchwork context builder', 'export {}'].join('\n'),
+    ['// Placeholder: FlowPatch context builder', 'export {}'].join('\n'),
     createdPaths
   )
   ensureFile(
     join(scripts, 'retrieve.ts'),
-    ['// Placeholder: Patchwork retrieve API', 'export {}'].join('\n'),
+    ['// Placeholder: FlowPatch retrieve API', 'export {}'].join('\n'),
     createdPaths
   )
   ensureFile(
     join(scripts, 'watch_index.ts'),
-    ['// Placeholder: Patchwork watch index', 'export {}'].join('\n'),
+    ['// Placeholder: FlowPatch watch index', 'export {}'].join('\n'),
     createdPaths
   )
   ensureFile(
     join(scripts, 'validate_config.ts'),
-    ['// Placeholder: Patchwork config validate', 'export {}'].join('\n'),
+    ['// Placeholder: FlowPatch config validate', 'export {}'].join('\n'),
     createdPaths
   )
   ensureFile(
     join(scripts, 'context_preview.ts'),
-    ['// Placeholder: Patchwork context preview', 'export {}'].join('\n'),
+    ['// Placeholder: FlowPatch context preview', 'export {}'].join('\n'),
     createdPaths
   )
   ensureFile(
     join(scripts, 'repair.ts'),
-    ['// Placeholder: Patchwork repair', 'export {}'].join('\n'),
+    ['// Placeholder: FlowPatch repair', 'export {}'].join('\n'),
     createdPaths
   )
   ensureFile(
     join(scripts, 'migrate.ts'),
-    ['// Placeholder: Patchwork migrate', 'export {}'].join('\n'),
+    ['// Placeholder: FlowPatch migrate', 'export {}'].join('\n'),
     createdPaths
   )
 

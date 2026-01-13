@@ -201,7 +201,7 @@ async function runClaudePlan(prompt: string, cwd: string, timeoutMs: number): Pr
 }
 
 async function runCodexPlan(prompt: string, cwd: string, timeoutMs: number): Promise<string> {
-  const tmpRoot = await mkdtemp(join(tmpdir(), 'patchwork-ai-'))
+  const tmpRoot = await mkdtemp(join(tmpdir(), 'flowpatch-ai-'))
   const lastMessagePath = join(tmpRoot, 'codex-last-message.txt')
 
   try {

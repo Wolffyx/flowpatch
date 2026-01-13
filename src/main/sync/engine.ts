@@ -100,7 +100,10 @@ export class SyncEngine {
       if (isGithubAdapter(this.adapter)) {
         const githubAdapter = this.adapter as IGithubAdapter
         // Persist auto-detected Projects V2 ID so we don't re-discover every sync.
-        if (this.policy.sync?.githubProjectsV2?.enabled !== false) {
+        // Only skip if explicitly disabled AND has a configured projectId (meaning user disabled it intentionally)
+        const projectConfig = this.policy.sync?.githubProjectsV2
+        const shouldAutoDetect = !(projectConfig?.enabled === false && projectConfig?.projectId)
+        if (shouldAutoDetect) {
           const existingProjectId = this.policy.sync?.githubProjectsV2?.projectId
           if (!existingProjectId) {
             const detectedId = await githubAdapter.findRepositoryProject()
@@ -121,6 +124,7 @@ export class SyncEngine {
           githubAdapter.listPullRequests(),
           githubAdapter.listProjectDrafts()
         ])
+        console.log(`[SyncEngine] Fetched from GitHub: issues=${issues.length}, prs=${prs.length}, drafts=${drafts.length}`)
         remoteCards = [...issues, ...prs, ...drafts]
       } else {
         // GitLab or other adapters

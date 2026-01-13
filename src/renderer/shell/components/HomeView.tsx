@@ -197,7 +197,7 @@ export function HomeView({
     <div className="absolute inset-0 z-10 bg-background flex flex-col items-center p-8 overflow-hidden">
       {/* Header */}
       <div className="text-center mb-8 mt-4">
-        <h1 className="text-3xl font-bold text-foreground mb-2">Welcome to Patchwork</h1>
+        <h1 className="text-3xl font-bold text-foreground mb-2">Welcome to FlowPatch</h1>
         <p className="text-muted-foreground">Select a project or create a new one</p>
       </div>
 

@@ -38,20 +38,20 @@ import { logAction } from '@shared/utils'
 import { verifySecureRequest } from '../security'
 import { runSync } from '../sync/engine'
 import {
-  ensurePatchworkWorkspace,
-  getPatchworkWorkspaceStatus
-} from '../services/patchwork-workspace'
-import { buildIndex } from '../services/patchwork-indexer'
+  ensureFlowPatchWorkspace,
+  getFlowPatchWorkspaceStatus
+} from '../services/flowpatch-workspace'
+import { buildIndex } from '../services/flowpatch-indexer'
 import {
   ensureProjectRegistered,
   registerProject,
   requestIndexNow,
   setProjectIndexingEnabled
-} from '../services/patchwork-index-scheduler'
-import { readPatchworkConfig } from '../services/patchwork-config'
-import { retrieveSymbols, retrieveText } from '../services/patchwork-retrieve'
-import { refreshPatchworkDocs } from '../services/patchwork-docs'
-import { buildContextBundle, writeLastContext } from '../services/patchwork-context'
+} from '../services/flowpatch-index-scheduler'
+import { readFlowPatchConfig } from '../services/flowpatch-config'
+import { retrieveSymbols, retrieveText } from '../services/flowpatch-retrieve'
+import { refreshFlowPatchDocs } from '../services/flowpatch-docs'
+import { buildContextBundle, writeLastContext } from '../services/flowpatch-context'
 import { join } from 'path'
 import { shell } from 'electron'
 import type { JobResultEnvelope } from '@shared/types'
@@ -266,7 +266,7 @@ export function registerProjectHandlers(): void {
   })
 
   // -------------------------------------------------------------------------
-  // Patchwork Workspace (.patchwork)
+  // FlowPatch Workspace (.flowpatch)
   // -------------------------------------------------------------------------
 
   ipcMain.handle('project:getWorkspaceStatus', async (event) => {
@@ -274,16 +274,16 @@ export function registerProjectHandlers(): void {
     if (!projectId) return null
     const project = getProject(projectId)
     if (!project) return null
-    const status = await getPatchworkWorkspaceStatus(project.local_path)
+    const status = await getFlowPatchWorkspaceStatus(project.local_path)
     return { ...status, autoIndexingEnabled: getResolvedBool(projectId, 'index.autoIndexingEnabled') }
   })
 
-  ipcMain.handle('project:getPatchworkConfig', (event) => {
+  ipcMain.handle('project:getFlowPatchConfig', (event) => {
     const projectId = getProjectIdFromEvent(event)
     if (!projectId) return null
     const project = getProject(projectId)
     if (!project) return null
-    const { config, diagnostics } = readPatchworkConfig(project.local_path)
+    const { config, diagnostics } = readFlowPatchConfig(project.local_path)
     return { config, diagnostics }
   })
 
@@ -300,7 +300,7 @@ export function registerProjectHandlers(): void {
       updateJobState(job.id, 'running')
       notifyRendererStateUpdated()
 
-      const statusBefore = await getPatchworkWorkspaceStatus(project.local_path)
+      const statusBefore = await getFlowPatchWorkspaceStatus(project.local_path)
       if (!statusBefore.writable) {
         const result: JobResultEnvelope = { summary: 'Repo not writable' }
         updateJobState(job.id, 'blocked', result, 'Repo not writable')
@@ -308,7 +308,7 @@ export function registerProjectHandlers(): void {
         return { success: false, blocked: true, job }
       }
 
-      const ensured = ensurePatchworkWorkspace(project.local_path)
+      const ensured = ensureFlowPatchWorkspace(project.local_path)
       const result: JobResultEnvelope = {
         summary:
           ensured.createdPaths.length > 0
@@ -340,7 +340,7 @@ export function registerProjectHandlers(): void {
     notifyRendererStateUpdated()
 
     try {
-      const status = await getPatchworkWorkspaceStatus(project.local_path)
+      const status = await getFlowPatchWorkspaceStatus(project.local_path)
       if (!status.writable) {
         updateJobState(
           job.id,
@@ -353,7 +353,7 @@ export function registerProjectHandlers(): void {
       }
 
       // Ensure workspace exists before indexing
-      ensurePatchworkWorkspace(project.local_path)
+      ensureFlowPatchWorkspace(project.local_path)
 
       updateJobState(job.id, 'running', {
         progress: { stage: 'Scanning files' }
@@ -395,7 +395,7 @@ export function registerProjectHandlers(): void {
     notifyRendererStateUpdated()
 
     try {
-      const status = await getPatchworkWorkspaceStatus(project.local_path)
+      const status = await getFlowPatchWorkspaceStatus(project.local_path)
       if (!status.writable) {
         updateJobState(
           job.id,
@@ -407,7 +407,7 @@ export function registerProjectHandlers(): void {
         return { success: false, blocked: true, job }
       }
 
-      ensurePatchworkWorkspace(project.local_path)
+      ensureFlowPatchWorkspace(project.local_path)
       updateJobState(job.id, 'running', {
         progress: { stage: 'Refreshing index' }
       } satisfies JobResultEnvelope)
@@ -448,7 +448,7 @@ export function registerProjectHandlers(): void {
     notifyRendererStateUpdated()
 
     try {
-      const status = await getPatchworkWorkspaceStatus(project.local_path)
+      const status = await getFlowPatchWorkspaceStatus(project.local_path)
       if (!status.writable) {
         updateJobState(
           job.id,
@@ -460,7 +460,7 @@ export function registerProjectHandlers(): void {
         return { success: false, blocked: true, job }
       }
 
-      ensurePatchworkWorkspace(project.local_path)
+      ensureFlowPatchWorkspace(project.local_path)
       updateJobState(job.id, 'running', { summary: 'Starting watch…' } satisfies JobResultEnvelope)
       notifyRendererStateUpdated()
 
@@ -528,7 +528,7 @@ export function registerProjectHandlers(): void {
       } satisfies JobResultEnvelope)
       notifyRendererStateUpdated()
 
-      const { diagnostics: diag, config } = readPatchworkConfig(project.local_path)
+      const { diagnostics: diag, config } = readFlowPatchConfig(project.local_path)
       const diagnostics: { level: 'error' | 'warning'; message: string }[] = [
         ...diag.errors.map((m) => ({ level: 'error' as const, message: m })),
         ...diag.warnings.map((m) => ({ level: 'warning' as const, message: m }))
@@ -567,7 +567,7 @@ export function registerProjectHandlers(): void {
     try {
       updateJobState(job.id, 'running', { summary: 'Refreshing docs…' } satisfies JobResultEnvelope)
       notifyRendererStateUpdated()
-      const status = await getPatchworkWorkspaceStatus(project.local_path)
+      const status = await getFlowPatchWorkspaceStatus(project.local_path)
       if (!status.writable) {
         updateJobState(
           job.id,
@@ -578,9 +578,9 @@ export function registerProjectHandlers(): void {
         notifyRendererStateUpdated()
         return { success: false, blocked: true, job }
       }
-      ensurePatchworkWorkspace(project.local_path)
+      ensureFlowPatchWorkspace(project.local_path)
       await buildIndex(project.local_path)
-      const { updated } = await refreshPatchworkDocs(project.local_path)
+      const { updated } = await refreshFlowPatchDocs(project.local_path)
       updateJobState(job.id, 'succeeded', {
         summary: `Docs refresh completed (${updated.length} updated)`,
         artifacts: { updated }
@@ -605,7 +605,7 @@ export function registerProjectHandlers(): void {
     notifyRendererStateUpdated()
 
     try {
-      const status = await getPatchworkWorkspaceStatus(project.local_path)
+      const status = await getFlowPatchWorkspaceStatus(project.local_path)
       if (!status.writable) {
         updateJobState(
           job.id,
@@ -617,7 +617,7 @@ export function registerProjectHandlers(): void {
         return { success: false, blocked: true, job }
       }
 
-      ensurePatchworkWorkspace(project.local_path)
+      ensureFlowPatchWorkspace(project.local_path)
       updateJobState(job.id, 'running', {
         summary: 'Building preview…'
       } satisfies JobResultEnvelope)
@@ -647,10 +647,10 @@ export function registerProjectHandlers(): void {
       const project = getProject(projectId)
       if (!project) throw new Error('Project not found')
 
-      const status = await getPatchworkWorkspaceStatus(project.local_path)
+      const status = await getFlowPatchWorkspaceStatus(project.local_path)
       if (!status.writable) return { error: 'Repo not writable' }
 
-      ensurePatchworkWorkspace(project.local_path)
+      ensureFlowPatchWorkspace(project.local_path)
       try {
         await buildIndex(project.local_path)
       } catch (e) {
@@ -679,7 +679,7 @@ export function registerProjectHandlers(): void {
       updateJobState(job.id, 'running', { summary: 'Repairing…' } satisfies JobResultEnvelope)
       notifyRendererStateUpdated()
 
-      const statusBefore = await getPatchworkWorkspaceStatus(project.local_path)
+      const statusBefore = await getFlowPatchWorkspaceStatus(project.local_path)
       if (!statusBefore.writable) {
         updateJobState(
           job.id,
@@ -691,7 +691,7 @@ export function registerProjectHandlers(): void {
         return { success: false, blocked: true, job }
       }
 
-      const ensured = ensurePatchworkWorkspace(project.local_path)
+      const ensured = ensureFlowPatchWorkspace(project.local_path)
       updateJobState(job.id, 'succeeded', {
         summary: 'Repair completed',
         artifacts: { createdPaths: ensured.createdPaths }
@@ -737,7 +737,7 @@ export function registerProjectHandlers(): void {
     if (!projectId) throw new Error('No project selected')
     const project = getProject(projectId)
     if (!project) throw new Error('Project not found')
-    const path = join(project.local_path, '.patchwork')
+    const path = join(project.local_path, '.flowpatch')
     void shell.openPath(path)
     return { success: true }
   })

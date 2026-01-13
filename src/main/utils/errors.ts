@@ -13,7 +13,7 @@ import { MAX_ERROR_AGGREGATION_ENTRIES } from './constants'
 /**
  * Base error class with context.
  */
-export class PatchworkError extends Error {
+export class FlowPatchError extends Error {
   public readonly code: string
   public readonly context: Record<string, unknown>
   public readonly timestamp: number
@@ -26,7 +26,7 @@ export class PatchworkError extends Error {
     cause?: Error
   ) {
     super(message)
-    this.name = 'PatchworkError'
+    this.name = 'FlowPatchError'
     this.code = code
     this.context = context
     this.timestamp = Date.now()
@@ -65,7 +65,7 @@ export class PatchworkError extends Error {
 /**
  * Worker-related errors.
  */
-export class WorkerError extends PatchworkError {
+export class WorkerError extends FlowPatchError {
   constructor(message: string, code: string, context: Record<string, unknown> = {}, cause?: Error) {
     super(message, `WORKER_${code}`, context, cause)
     this.name = 'WorkerError'
@@ -75,7 +75,7 @@ export class WorkerError extends PatchworkError {
 /**
  * Pipeline errors.
  */
-export class PipelineError extends PatchworkError {
+export class PipelineError extends FlowPatchError {
   public readonly phase: string
 
   constructor(
@@ -93,7 +93,7 @@ export class PipelineError extends PatchworkError {
 /**
  * Git operation errors.
  */
-export class GitError extends PatchworkError {
+export class GitError extends FlowPatchError {
   public readonly command: string
   public readonly exitCode?: number
 
@@ -114,7 +114,7 @@ export class GitError extends PatchworkError {
 /**
  * API errors.
  */
-export class ApiError extends PatchworkError {
+export class ApiError extends FlowPatchError {
   public readonly provider: string
   public readonly status?: number
   public readonly endpoint?: string
@@ -153,7 +153,7 @@ export class ApiError extends PatchworkError {
 /**
  * Security errors.
  */
-export class SecurityError extends PatchworkError {
+export class SecurityError extends FlowPatchError {
   public readonly action: string
 
   constructor(
@@ -171,7 +171,7 @@ export class SecurityError extends PatchworkError {
 /**
  * Validation errors.
  */
-export class ValidationError extends PatchworkError {
+export class ValidationError extends FlowPatchError {
   public readonly field?: string
   public readonly value?: unknown
 
@@ -192,7 +192,7 @@ export class ValidationError extends PatchworkError {
 /**
  * Configuration errors.
  */
-export class ConfigError extends PatchworkError {
+export class ConfigError extends FlowPatchError {
   public readonly key: string
 
   constructor(
@@ -210,7 +210,7 @@ export class ConfigError extends PatchworkError {
 /**
  * Timeout errors.
  */
-export class TimeoutError extends PatchworkError {
+export class TimeoutError extends FlowPatchError {
   public readonly timeoutMs: number
   public readonly operation: string
 
@@ -230,7 +230,7 @@ export class TimeoutError extends PatchworkError {
 /**
  * Cancellation errors.
  */
-export class CancellationError extends PatchworkError {
+export class CancellationError extends FlowPatchError {
   public readonly reason?: string
 
   constructor(reason?: string, context: Record<string, unknown> = {}) {
@@ -243,7 +243,7 @@ export class CancellationError extends PatchworkError {
 /**
  * Resource errors.
  */
-export class ResourceError extends PatchworkError {
+export class ResourceError extends FlowPatchError {
   public readonly resourceType: string
   public readonly resourceId?: string
 
@@ -289,7 +289,7 @@ class ErrorAggregatorClass {
    * Record an error.
    * Returns true if this is a new error, false if aggregated.
    */
-  record(error: PatchworkError): boolean {
+  record(error: FlowPatchError): boolean {
     const key = `${error.code}:${error.message}`
 
     const existing = this.errors.get(key)
@@ -382,10 +382,10 @@ export function wrapError(
   error: unknown,
   message: string,
   context: Record<string, unknown> = {}
-): PatchworkError {
+): FlowPatchError {
   const cause = error instanceof Error ? error : new Error(String(error))
 
-  return new PatchworkError(
+  return new FlowPatchError(
     `${message}: ${cause.message}`,
     'WRAPPED_ERROR',
     context,
@@ -406,7 +406,7 @@ export function getErrorMessage(error: unknown): string {
  * Check if an error is a specific type.
  */
 export function isErrorCode(error: unknown, code: string): boolean {
-  return error instanceof PatchworkError && error.code === code
+  return error instanceof FlowPatchError && error.code === code
 }
 
 /**
@@ -418,9 +418,9 @@ export function logError(
   context?: Record<string, unknown>,
   aggregate = true
 ): void {
-  const patchworkError = error instanceof PatchworkError
+  const flowpatchError = error instanceof FlowPatchError
     ? error
-    : new PatchworkError(
+    : new FlowPatchError(
         getErrorMessage(error),
         'UNKNOWN_ERROR',
         context,
@@ -428,14 +428,14 @@ export function logError(
       )
 
   if (aggregate) {
-    const isNew = ErrorAggregator.record(patchworkError)
+    const isNew = ErrorAggregator.record(flowpatchError)
     if (!isNew) {
       // Don't log repeated errors, but still return
       return
     }
   }
 
-  console.error(`[${patchworkError.code}] ${patchworkError.message}`, patchworkError.toJSON())
+  console.error(`[${flowpatchError.code}] ${flowpatchError.message}`, flowpatchError.toJSON())
 }
 
 /**

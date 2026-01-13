@@ -9,11 +9,12 @@
  * - Area for WebContentsView (project renderers)
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { ShellToaster } from './components/ShellToaster'
 import { TabBar, type TabData } from './components/TabBar'
 import { LogsPanel } from './components/LogsPanel'
 import { SettingsModal } from './components/settings'
+import { ResetConfirmDialog } from './components/settings/ResetConfirmDialog'
 import { ActivityDialog } from './components/ActivityDialog'
 import { RepoStartDialog } from '../src/components/RepoStartDialog'
 import { HomeView } from './components/HomeView'
@@ -163,6 +164,10 @@ declare global {
         }
         jobId: string
       }) => void) => () => void
+
+      // App Reset (Dev only)
+      resetEverything: () => Promise<{ success: boolean; error?: string }>
+      onDevResetTrigger: (callback: () => void) => () => void
     }
 
     // For RepoStartDialog compatibility
@@ -220,6 +225,12 @@ export default function App(): React.JSX.Element {
   const [historyOpen, setHistoryOpen] = useState(false)
   const [recentJobs, setRecentJobs] = useState<Job[]>([])
   const [repoDialogOpen, setRepoDialogOpen] = useState(false)
+  const [resetDialogOpen, setResetDialogOpen] = useState(false)
+  const [projectWorkerStatus, setProjectWorkerStatus] = useState<Record<string, {
+    workerEnabled: boolean
+    activeRuns: number
+    lastJobState: 'running' | 'completed' | 'failed' | null
+  }>>({})
 
   // Get active tab info
   const activeTab = tabs.find((t) => t.id === activeTabId)
@@ -232,6 +243,29 @@ export default function App(): React.JSX.Element {
   // Show home when no tabs or explicitly requested
   const isHomeVisible = showHome || tabs.length === 0
   const isMacOS = /Mac|Macintosh|MacIntel|MacPPC/.test(navigator.userAgent)
+
+  // Enrich tabs with worker status for tab indicators
+  const tabsWithStatus = useMemo(() =>
+    tabs.map(tab => {
+      const status = projectWorkerStatus[tab.projectId]
+      let workerStatus: 'idle' | 'running' | 'ready' | null = null
+
+      if (status?.activeRuns > 0) {
+        workerStatus = 'running'
+      } else if (status?.lastJobState === 'completed') {
+        workerStatus = 'ready'
+      } else if (status?.workerEnabled) {
+        workerStatus = 'idle'
+      }
+
+      return {
+        ...tab,
+        workerStatus,
+        activeRuns: status?.activeRuns ?? 0
+      }
+    }),
+    [tabs, projectWorkerStatus]
+  )
 
   // Load initial state
   useEffect(() => {
@@ -261,9 +295,18 @@ export default function App(): React.JSX.Element {
     return unsubscribe
   }, [])
 
-  // Subscribe to activity updates
+  // Subscribe to activity updates and track per-project worker status
   useEffect(() => {
-    const unsubscribe = window.shellAPI.onActivityUpdate(() => {
+    const unsubscribe = window.shellAPI.onActivityUpdate((activityData) => {
+      // Update per-project worker status for tab indicators
+      setProjectWorkerStatus(prev => ({
+        ...prev,
+        [activityData.projectId]: {
+          workerEnabled: true, // If we get updates, worker is enabled
+          activeRuns: activityData.activeRuns,
+          lastJobState: activityData.activeRuns > 0 ? 'running' : 'completed'
+        }
+      }))
       loadActivity()
     })
     return unsubscribe
@@ -283,6 +326,14 @@ export default function App(): React.JSX.Element {
       loadProjects()
       loadActivity()
       loadRecentJobs()
+    })
+    return unsubscribe
+  }, [])
+
+  // Subscribe to dev reset trigger (Ctrl+Shift+R)
+  useEffect(() => {
+    const unsubscribe = window.shellAPI.onDevResetTrigger(() => {
+      setResetDialogOpen(true)
     })
     return unsubscribe
   }, [])
@@ -330,7 +381,7 @@ export default function App(): React.JSX.Element {
 
   const handleRemoveRecentProject = async (project: Project): Promise<void> => {
     const confirmed = window.confirm(
-      `Remove "${project.name}" from recent projects?\n\nThis deletes Patchwork's local data for this project (cards, jobs, settings) but does not delete files on disk.`
+      `Remove "${project.name}" from recent projects?\n\nThis deletes FlowPatch's local data for this project (cards, jobs, settings) but does not delete files on disk.`
     )
     if (!confirmed) return
 
@@ -506,7 +557,7 @@ export default function App(): React.JSX.Element {
         {/* Tabs strip - allow dragging on empty space */}
         <div className="flex-1">
           <TabBar
-            tabs={tabs}
+            tabs={tabsWithStatus}
             activeTabId={isHomeVisible ? null : activeTabId}
             onTabClick={handleTabClick}
             onTabClose={handleTabClose}
@@ -684,6 +735,9 @@ export default function App(): React.JSX.Element {
         onOpenRepo={handleOpenRepo}
         onCreateRepo={handleCreateRepo}
       />
+
+      {/* Reset Confirm Dialog (Dev only - triggered by Ctrl+Shift+R) */}
+      <ResetConfirmDialog open={resetDialogOpen} onOpenChange={setResetDialogOpen} />
 
       <ShellToaster />
     </div>

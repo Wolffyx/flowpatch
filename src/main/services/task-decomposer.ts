@@ -336,7 +336,7 @@ Respond with only the JSON, no markdown code blocks or other text.`
 ${subtask.description}
 
 ---
-_Auto-generated subtask from Patchwork_`
+_Auto-generated subtask from FlowPatch_`
 
     // Use unified interface - works for both GitHub and GitLab
     const result = await this.adapter.createIssue(title, body, ['subtask'])

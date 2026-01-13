@@ -1,10 +1,10 @@
 import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import type { PatchworkBudgets } from './patchwork-config'
-import { readPatchworkConfig } from './patchwork-config'
-import { buildEffectivePrivacyPolicy, decidePathPrivacy } from './patchwork-privacy'
-import { retrieveSymbols, retrieveText } from './patchwork-retrieve'
-import { buildIndex } from './patchwork-indexer'
+import type { FlowPatchBudgets } from './flowpatch-config'
+import { readFlowPatchConfig } from './flowpatch-config'
+import { buildEffectivePrivacyPolicy, decidePathPrivacy } from './flowpatch-privacy'
+import { retrieveSymbols, retrieveText } from './flowpatch-retrieve'
+import { buildIndex } from './flowpatch-indexer'
 
 export interface ContextSnippet {
   path: string
@@ -17,7 +17,7 @@ export interface ContextSnippet {
 export interface ContextBundle {
   task: string
   generatedAt: string
-  budgets: PatchworkBudgets
+  budgets: FlowPatchBudgets
   privacyMode: string
   includedFiles: { path: string; score: number; reasons: string[] }[]
   blockedFiles: { path: string; reason: string }[]
@@ -61,7 +61,7 @@ function redactSecrets(text: string): { text: string; redactions: number } {
 }
 
 function readDoc(repoRoot: string, name: string, maxChars: number): string | null {
-  const p = join(repoRoot, '.patchwork', 'docs', name)
+  const p = join(repoRoot, '.flowpatch', 'docs', name)
   if (!existsSync(p)) return null
   try {
     return cap(readFileSync(p, 'utf-8'), maxChars)
@@ -71,7 +71,7 @@ function readDoc(repoRoot: string, name: string, maxChars: number): string | nul
 }
 
 export async function buildContextBundle(repoRoot: string, task: string): Promise<ContextBundle> {
-  const { config } = readPatchworkConfig(repoRoot)
+  const { config } = readFlowPatchConfig(repoRoot)
   const budgets = config.budgets
   const privacy = buildEffectivePrivacyPolicy(config.privacy)
 
@@ -171,7 +171,7 @@ export async function buildContextBundle(repoRoot: string, task: string): Promis
 }
 
 export function writeLastContext(repoRoot: string, bundle: ContextBundle): string {
-  const p = join(repoRoot, '.patchwork', 'state', 'last_context.json')
+  const p = join(repoRoot, '.flowpatch', 'state', 'last_context.json')
   writeFileSync(p, JSON.stringify(bundle, null, 2), { encoding: 'utf-8' })
   return p
 }

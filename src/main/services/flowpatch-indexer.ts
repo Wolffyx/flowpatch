@@ -13,10 +13,10 @@ import {
 } from 'fs'
 import { join, relative } from 'path'
 import ts from 'typescript'
-import type { PatchworkIndexStatus } from '../../shared/types'
-import { readPatchworkConfig } from './patchwork-config'
-import { buildEffectivePrivacyPolicy, decidePathPrivacy, stableId } from './patchwork-privacy'
-import { buildSemanticIndex } from './patchwork-semantic'
+import type { FlowPatchIndexStatus } from '../../shared/types'
+import { readFlowPatchConfig } from './flowpatch-config'
+import { buildEffectivePrivacyPolicy, decidePathPrivacy, stableId } from './flowpatch-privacy'
+import { buildSemanticIndex } from './flowpatch-semantic'
 
 const execFileAsync = promisify(execFile)
 
@@ -27,7 +27,7 @@ export class IndexCanceledError extends Error {
   }
 }
 
-export interface PatchworkIndexMeta {
+export interface FlowPatchIndexMeta {
   schemaVersion: number
   generatedBy: string
   lastIndexedAt: string
@@ -48,14 +48,14 @@ export interface PatchworkIndexMeta {
   }
 }
 
-export interface PatchworkFileIndexEntry {
+export interface FlowPatchFileIndexEntry {
   path: string
   size: number
   mtimeMs: number
   hash?: string
 }
 
-export interface PatchworkSymbol {
+export interface FlowPatchSymbol {
   id: string
   name: string
   kind: string
@@ -64,7 +64,7 @@ export interface PatchworkSymbol {
   exported: boolean
 }
 
-export interface PatchworkChunk {
+export interface FlowPatchChunk {
   id: string
   path: string
   startLine: number
@@ -72,13 +72,13 @@ export interface PatchworkChunk {
   text: string
 }
 
-interface PatchworkFileCacheEntry {
+interface FlowPatchFileCacheEntry {
   hash: string
-  chunks: PatchworkChunk[]
-  symbols: PatchworkSymbol[]
+  chunks: FlowPatchChunk[]
+  symbols: FlowPatchSymbol[]
 }
 
-const DEFAULT_EXCLUDES = ['.git', 'node_modules', 'dist', 'out', '.patchwork/state']
+const DEFAULT_EXCLUDES = ['.git', 'node_modules', 'dist', 'out', '.flowpatch/state']
 
 async function getHeadSha(repoRoot: string): Promise<string | null> {
   try {
@@ -128,7 +128,7 @@ export function getIndexPaths(repoRoot: string): {
   chunksPath: string
   cachePath: string
 } {
-  const indexDir = join(repoRoot, '.patchwork', 'state', 'index')
+  const indexDir = join(repoRoot, '.flowpatch', 'state', 'index')
   return {
     indexDir,
     fileIndexPath: join(indexDir, 'file_index.json'),
@@ -144,8 +144,8 @@ function scanFiles(
   repoRootForRel: string,
   prefix = '',
   opts?: { isCanceled?: () => boolean }
-): { entries: PatchworkFileIndexEntry[]; excluded: number } {
-  const entries: PatchworkFileIndexEntry[] = []
+): { entries: FlowPatchFileIndexEntry[]; excluded: number } {
+  const entries: FlowPatchFileIndexEntry[] = []
   let excluded = 0
 
   const assertNotCanceled = (): void => {
@@ -190,14 +190,14 @@ function scanFiles(
   return { entries, excluded }
 }
 
-function loadPreviousFileIndex(repoRoot: string): Map<string, PatchworkFileIndexEntry> {
+function loadPreviousFileIndex(repoRoot: string): Map<string, FlowPatchFileIndexEntry> {
   const { fileIndexPath } = getIndexPaths(repoRoot)
   if (!existsSync(fileIndexPath)) return new Map()
   try {
     const parsed = JSON.parse(readFileSync(fileIndexPath, 'utf-8')) as {
-      files?: PatchworkFileIndexEntry[]
+      files?: FlowPatchFileIndexEntry[]
     }
-    const map = new Map<string, PatchworkFileIndexEntry>()
+    const map = new Map<string, FlowPatchFileIndexEntry>()
     for (const f of parsed.files ?? []) map.set(f.path, f)
     return map
   } catch {
@@ -205,13 +205,13 @@ function loadPreviousFileIndex(repoRoot: string): Map<string, PatchworkFileIndex
   }
 }
 
-function loadCache(repoRoot: string): Map<string, PatchworkFileCacheEntry> {
+function loadCache(repoRoot: string): Map<string, FlowPatchFileCacheEntry> {
   const { cachePath } = getIndexPaths(repoRoot)
   if (!existsSync(cachePath)) return new Map()
   try {
     const parsed = JSON.parse(readFileSync(cachePath, 'utf-8')) as Record<
       string,
-      PatchworkFileCacheEntry
+      FlowPatchFileCacheEntry
     >
     return new Map(Object.entries(parsed))
   } catch {
@@ -219,9 +219,9 @@ function loadCache(repoRoot: string): Map<string, PatchworkFileCacheEntry> {
   }
 }
 
-function saveCache(repoRoot: string, cache: Map<string, PatchworkFileCacheEntry>): void {
+function saveCache(repoRoot: string, cache: Map<string, FlowPatchFileCacheEntry>): void {
   const { cachePath } = getIndexPaths(repoRoot)
-  const obj: Record<string, PatchworkFileCacheEntry> = {}
+  const obj: Record<string, FlowPatchFileCacheEntry> = {}
   for (const [k, v] of cache.entries()) obj[k] = v
   writeJson(cachePath, obj)
 }
@@ -230,9 +230,9 @@ function buildChunksForFile(
   relPath: string,
   text: string,
   limits: { maxLines: number; maxChars: number }
-): PatchworkChunk[] {
+): FlowPatchChunk[] {
   const lines = text.split(/\r?\n/)
-  const chunks: PatchworkChunk[] = []
+  const chunks: FlowPatchChunk[] = []
   for (let start = 0; start < lines.length; start += limits.maxLines) {
     const slice = lines.slice(start, start + limits.maxLines)
     let chunkText = slice.join('\n')
@@ -252,9 +252,9 @@ function buildChunksForFile(
   return chunks
 }
 
-function findSymbolsInTsFile(relPath: string, text: string): PatchworkSymbol[] {
+function findSymbolsInTsFile(relPath: string, text: string): FlowPatchSymbol[] {
   const sourceFile = ts.createSourceFile(relPath, text, ts.ScriptTarget.Latest, true)
-  const symbols: PatchworkSymbol[] = []
+  const symbols: FlowPatchSymbol[] = []
 
   function pushSymbol(node: ts.Node, name: string, kind: string, exported: boolean) {
     const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile))
@@ -306,8 +306,8 @@ function isTextFile(relPath: string): boolean {
   return /\.(ts|tsx|js|jsx|json|md|txt|css|scss|html|yml|yaml|py|go)$/.test(relPath)
 }
 
-function findSymbolsInPythonFile(relPath: string, text: string): PatchworkSymbol[] {
-  const symbols: PatchworkSymbol[] = []
+function findSymbolsInPythonFile(relPath: string, text: string): FlowPatchSymbol[] {
+  const symbols: FlowPatchSymbol[] = []
   const lines = text.split(/\r?\n/)
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
@@ -339,8 +339,8 @@ function findSymbolsInPythonFile(relPath: string, text: string): PatchworkSymbol
   return symbols
 }
 
-function findSymbolsInGoFile(relPath: string, text: string): PatchworkSymbol[] {
-  const symbols: PatchworkSymbol[] = []
+function findSymbolsInGoFile(relPath: string, text: string): FlowPatchSymbol[] {
+  const symbols: FlowPatchSymbol[] = []
   const lines = text.split(/\r?\n/)
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
@@ -375,10 +375,10 @@ export async function buildIndex(
   repoRoot: string,
   opts?: { isCanceled?: () => boolean }
 ): Promise<{
-  meta: PatchworkIndexMeta
-  files: PatchworkFileIndexEntry[]
-  symbols: PatchworkSymbol[]
-  chunks: PatchworkChunk[]
+  meta: FlowPatchIndexMeta
+  files: FlowPatchFileIndexEntry[]
+  symbols: FlowPatchSymbol[]
+  chunks: FlowPatchChunk[]
   blocked: { path: string; reason: string }[]
 }> {
   const assertNotCanceled = (): void => {
@@ -387,10 +387,10 @@ export async function buildIndex(
 
   const { indexDir, fileIndexPath, metaPath, symbolsPath, chunksPath } = getIndexPaths(repoRoot)
   if (!existsSync(indexDir)) {
-    throw new Error('Missing .patchwork/state/index directory')
+    throw new Error('Missing .flowpatch/state/index directory')
   }
 
-  const lockPath = join(repoRoot, '.patchwork', 'state', 'locks', 'index.lock')
+  const lockPath = join(repoRoot, '.flowpatch', 'state', 'locks', 'index.lock')
   let lockFd: number | null = null
   try {
     try {
@@ -405,7 +405,7 @@ export async function buildIndex(
 
     assertNotCanceled()
 
-    const { config } = readPatchworkConfig(repoRoot)
+    const { config } = readFlowPatchConfig(repoRoot)
     const privacy = buildEffectivePrivacyPolicy(config.privacy)
 
     assertNotCanceled()
@@ -414,7 +414,7 @@ export async function buildIndex(
     const cache = loadCache(repoRoot)
     const workspaces = config.workspaces?.length ? config.workspaces : ['.']
     let excluded = 0
-    const entries: PatchworkFileIndexEntry[] = []
+    const entries: FlowPatchFileIndexEntry[] = []
     for (const ws of workspaces) {
       assertNotCanceled()
       const wsRoot = ws === '.' ? repoRoot : join(repoRoot, ws)
@@ -425,9 +425,9 @@ export async function buildIndex(
     }
     const blocked: { path: string; reason: string }[] = []
 
-    const files: PatchworkFileIndexEntry[] = []
-    const chunks: PatchworkChunk[] = []
-    const symbols: PatchworkSymbol[] = []
+    const files: FlowPatchFileIndexEntry[] = []
+    const chunks: FlowPatchChunk[] = []
+    const symbols: FlowPatchSymbol[] = []
 
     for (const entry of entries) {
       assertNotCanceled()
@@ -465,7 +465,7 @@ export async function buildIndex(
       ) {
         assertNotCanceled()
         const fileChunks = buildChunksForFile(entry.path, text, { maxLines: 80, maxChars: 4000 })
-        let fileSymbols: PatchworkSymbol[] = []
+        let fileSymbols: FlowPatchSymbol[] = []
         if (isCodeFile(entry.path)) {
           if (/\.(ts|tsx|js|jsx)$/.test(entry.path))
             fileSymbols = findSymbolsInTsFile(entry.path, text)
@@ -486,9 +486,9 @@ export async function buildIndex(
 
     const headSha = await getHeadSha(repoRoot)
     const now = new Date().toISOString()
-    const meta: PatchworkIndexMeta = {
+    const meta: FlowPatchIndexMeta = {
       schemaVersion: 1,
-      generatedBy: 'patchwork-indexer',
+      generatedBy: 'flowpatch-indexer',
       lastIndexedAt: now,
       lastIndexedSha: headSha,
       totalFiles: files.length,
@@ -547,14 +547,14 @@ export async function buildIndex(
   }
 }
 
-export async function getIndexStatus(repoRoot: string): Promise<PatchworkIndexStatus> {
+export async function getIndexStatus(repoRoot: string): Promise<FlowPatchIndexStatus> {
   const { fileIndexPath, metaPath } = getIndexPaths(repoRoot)
   const headSha = await getHeadSha(repoRoot)
   if (!existsSync(fileIndexPath) || !existsSync(metaPath)) {
     return { state: 'missing', headSha, lastIndexedSha: null, lastIndexedAt: null, warnings: [] }
   }
   try {
-    const meta = JSON.parse(readFileSync(metaPath, 'utf-8')) as PatchworkIndexMeta
+    const meta = JSON.parse(readFileSync(metaPath, 'utf-8')) as FlowPatchIndexMeta
     const lastIndexedSha = meta.lastIndexedSha ?? null
     const stale = headSha && lastIndexedSha && headSha !== lastIndexedSha
     const warnings: string[] = []

@@ -283,8 +283,8 @@ export function StarterCardsWizardDialog({
                         <div className="text-xs text-muted-foreground">
                           {canCreateRepoIssues
                             ? repoIssueProvider === 'gitlab'
-                              ? 'Create issues on GitLab and sync them into Patchwork'
-                              : 'Create issues on GitHub and sync them into Patchwork'
+                              ? 'Create issues on GitLab and sync them into FlowPatch'
+                              : 'Create issues on GitHub and sync them into FlowPatch'
                             : 'Requires a GitHub or GitLab remote for this project'}
                         </div>
                       </div>

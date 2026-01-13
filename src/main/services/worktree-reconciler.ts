@@ -20,7 +20,7 @@ export interface ReconciliationResult {
 }
 
 export interface ReconcileOptions {
-  cleanUntracked?: boolean // If true, remove untracked worktrees that have .patchwork-worktree marker
+  cleanUntracked?: boolean // If true, remove untracked worktrees that have .flowpatch-worktree marker
 }
 
 function normalizePath(p: string): string {
@@ -56,7 +56,7 @@ export class WorktreeReconciler {
 
   /**
    * Perform full reconciliation between DB and disk state.
-   * @param options.cleanUntracked If true, remove untracked worktrees that have .patchwork-worktree marker
+   * @param options.cleanUntracked If true, remove untracked worktrees that have .flowpatch-worktree marker
    */
   async reconcile(options?: ReconcileOptions): Promise<ReconciliationResult> {
     const result: ReconciliationResult = {
@@ -96,8 +96,8 @@ export class WorktreeReconciler {
         if (isUnderRoot(gitWt.worktreePath, worktreeRoot)) {
           result.untracked.push(gitWt.worktreePath)
 
-          // Optionally clean up untracked worktrees that have the patchwork marker
-          if (options?.cleanUntracked && this.manager.isPatchworkWorktree(gitWt.worktreePath)) {
+          // Optionally clean up untracked worktrees that have the flowpatch marker
+          if (options?.cleanUntracked && this.manager.isFlowPatchWorktree(gitWt.worktreePath)) {
             try {
               await this.manager.removeWorktree(gitWt.worktreePath, {
                 force: true,
@@ -105,7 +105,7 @@ export class WorktreeReconciler {
               })
               result.untrackedCleaned.push(gitWt.worktreePath)
               console.log(
-                `[WorktreeReconciler] Cleaned untracked patchwork worktree: ${gitWt.worktreePath}`
+                `[WorktreeReconciler] Cleaned untracked flowpatch worktree: ${gitWt.worktreePath}`
               )
             } catch (err) {
               const errorMsg = err instanceof Error ? err.message : String(err)
@@ -228,7 +228,7 @@ export class WorktreeReconciler {
 /**
  * Reconcile worktrees for all projects on startup.
  * @param projects List of projects to reconcile
- * @param options.cleanUntracked If true, remove untracked worktrees that have .patchwork-worktree marker
+ * @param options.cleanUntracked If true, remove untracked worktrees that have .flowpatch-worktree marker
  */
 export async function reconcileAllProjects(
   projects: Array<{ id: string; local_path: string; policy_json: string | null }>,

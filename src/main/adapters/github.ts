@@ -149,7 +149,10 @@ export class GithubAdapter extends BaseAdapter implements IGithubAdapter {
     try {
       // Pre-fetch project statuses once (auto-detects project if not explicitly disabled)
       const projectConfig = this.policy.sync?.githubProjectsV2
-      if (projectConfig?.enabled !== false && !this.projectStatusCache) {
+      // Only skip if explicitly disabled with a configured projectId
+      const shouldFetchProjectStatus =
+        !(projectConfig?.enabled === false && projectConfig?.projectId)
+      if (shouldFetchProjectStatus && !this.projectStatusCache) {
         await this.fetchProjectStatusMap()
       }
 
@@ -296,7 +299,10 @@ export class GithubAdapter extends BaseAdapter implements IGithubAdapter {
     try {
       // Pre-fetch project statuses if not already fetched (auto-detects project)
       const projectConfig = this.policy.sync?.githubProjectsV2
-      if (projectConfig?.enabled !== false && !this.projectStatusCache) {
+      // Only skip if explicitly disabled with a configured projectId
+      const shouldFetchProjectStatus =
+        !(projectConfig?.enabled === false && projectConfig?.projectId)
+      if (shouldFetchProjectStatus && !this.projectStatusCache) {
         await this.fetchProjectStatusMap()
       }
 
@@ -692,16 +698,20 @@ export class GithubAdapter extends BaseAdapter implements IGithubAdapter {
   // ──────────────────────────────────────────────────────────────────────────
 
   /**
-   * Find the GitHub Projects V2 associated with this repository.
-   * Returns the project ID if found, null otherwise.
+   * List all GitHub Projects V2 linked to this repository.
+   * Returns array of projects with id, title, and number.
    */
-  async findRepositoryProject(): Promise<string | null> {
+  async listRepositoryProjects(): Promise<Array<{ id: string; title: string; number: number }>> {
     try {
-      // Query projects linked to this repository
+      logAction('listRepositoryProjects: Searching for projects', {
+        owner: this.owner,
+        repo: this.repo
+      })
+
       const query = `
         query($owner: String!, $repo: String!) {
           repository(owner: $owner, name: $repo) {
-            projectsV2(first: 10) {
+            projectsV2(first: 20) {
               nodes {
                 id
                 title
@@ -728,6 +738,68 @@ export class GithubAdapter extends BaseAdapter implements IGithubAdapter {
       )
 
       const response = JSON.parse(stdout)
+      const projects = response.data?.repository?.projectsV2?.nodes || []
+
+      logAction('listRepositoryProjects: Found projects', { count: projects.length })
+      return projects
+    } catch (error) {
+      console.error('Failed to list repository projects:', error)
+      return []
+    }
+  }
+
+  /**
+   * Find the GitHub Projects V2 associated with this repository.
+   * Returns the project ID if found, null otherwise.
+   */
+  async findRepositoryProject(): Promise<string | null> {
+    try {
+      logAction('findRepositoryProject: Searching for projects', {
+        owner: this.owner,
+        repo: this.repo
+      })
+
+      // Query projects linked to this repository
+      const query = `
+        query($owner: String!, $repo: String!) {
+          repository(owner: $owner, name: $repo) {
+            projectsV2(first: 10) {
+              nodes {
+                id
+                title
+                number
+              }
+            }
+          }
+        }
+      `
+
+      const { stdout, stderr } = await execFileAsync(
+        'gh',
+        [
+          'api',
+          'graphql',
+          '-f',
+          `query=${query}`,
+          '-F',
+          `owner=${this.owner}`,
+          '-F',
+          `repo=${this.repo}`
+        ],
+        { cwd: this.repoPath }
+      )
+
+      if (stderr) {
+        logAction('findRepositoryProject: stderr', { stderr })
+      }
+
+      const response = JSON.parse(stdout)
+      logAction('findRepositoryProject: Response', {
+        hasData: !!response.data,
+        hasRepository: !!response.data?.repository,
+        projectCount: response.data?.repository?.projectsV2?.nodes?.length ?? 0
+      })
+
       const projects = response.data?.repository?.projectsV2?.nodes
 
       if (!projects || projects.length === 0) {
@@ -767,7 +839,8 @@ export class GithubAdapter extends BaseAdapter implements IGithubAdapter {
    */
   async fetchProjectStatusMap(): Promise<ProjectStatusMap> {
     const projectConfig = this.policy.sync?.githubProjectsV2
-    if (projectConfig?.enabled === false) {
+    // Only respect enabled:false if the user has explicitly configured a projectId
+    if (projectConfig?.enabled === false && projectConfig?.projectId) {
       this.projectStatusCache = new Map()
       return this.projectStatusCache
     }
@@ -913,18 +986,30 @@ export class GithubAdapter extends BaseAdapter implements IGithubAdapter {
    */
   async listProjectDrafts(): Promise<Card[]> {
     const projectConfig = this.policy.sync?.githubProjectsV2
-    if (projectConfig?.enabled === false) {
+    logAction('listProjectDrafts:start', {
+      enabled: projectConfig?.enabled,
+      projectId: projectConfig?.projectId
+    })
+
+    // Only respect enabled:false if the user has explicitly configured a projectId
+    // (meaning they set up GitHub Projects integration and then disabled it).
+    // Otherwise, always try to auto-detect to handle migration from old defaults.
+    if (projectConfig?.enabled === false && projectConfig?.projectId) {
+      logAction('listProjectDrafts: Explicitly disabled with projectId, returning empty')
       return []
     }
 
     // Auto-detect project ID if not configured
     let projectId: string | undefined = projectConfig?.projectId
     if (!projectId) {
+      logAction('listProjectDrafts: No projectId configured, auto-detecting...')
       const detectedId = await this.findRepositoryProject()
       if (!detectedId) {
+        logAction('listProjectDrafts: No project found for repository')
         return []
       }
       projectId = detectedId
+      logAction('listProjectDrafts: Using detected projectId', { projectId })
     }
 
     const statusFieldName = projectConfig?.statusFieldName || 'Status'
@@ -988,8 +1073,17 @@ export class GithubAdapter extends BaseAdapter implements IGithubAdapter {
 
         const items = response.data?.node?.items
         if (!items) {
+          logAction('listProjectDrafts: No items in response', {
+            hasNode: !!response.data?.node,
+            nodeType: response.data?.node ? Object.keys(response.data.node) : []
+          })
           break
         }
+
+        logAction('listProjectDrafts: Processing items', {
+          itemCount: items.nodes.length,
+          types: items.nodes.map((i) => i.content?.__typename)
+        })
 
         for (const item of items.nodes) {
           const content = item.content
@@ -1031,10 +1125,12 @@ export class GithubAdapter extends BaseAdapter implements IGithubAdapter {
         cursor = items.pageInfo.endCursor
       }
     } catch (error) {
+      logAction('listProjectDrafts: Error', { error: String(error) })
       console.error('Failed to list GitHub Projects V2 drafts:', error)
       return []
     }
 
+    logAction('listProjectDrafts: Complete', { count: drafts.length })
     return drafts
   }
 
@@ -1044,7 +1140,8 @@ export class GithubAdapter extends BaseAdapter implements IGithubAdapter {
    */
   async updateProjectStatus(issueNumber: number, newStatus: CardStatus): Promise<boolean> {
     const projectConfig = this.policy.sync?.githubProjectsV2
-    if (projectConfig?.enabled === false) {
+    // Only respect enabled:false if the user has explicitly configured a projectId
+    if (projectConfig?.enabled === false && projectConfig?.projectId) {
       return false
     }
 
@@ -1126,7 +1223,8 @@ export class GithubAdapter extends BaseAdapter implements IGithubAdapter {
    */
   async updateProjectDraftStatus(draftNodeId: string, newStatus: CardStatus): Promise<boolean> {
     const projectConfig = this.policy.sync?.githubProjectsV2
-    if (projectConfig?.enabled === false) {
+    // Only respect enabled:false if the user has explicitly configured a projectId
+    if (projectConfig?.enabled === false && projectConfig?.projectId) {
       return false
     }
 
@@ -1211,7 +1309,8 @@ export class GithubAdapter extends BaseAdapter implements IGithubAdapter {
     body: string | null
   ): Promise<boolean> {
     const projectConfig = this.policy.sync?.githubProjectsV2
-    if (projectConfig?.enabled === false) {
+    // Only respect enabled:false if the user has explicitly configured a projectId
+    if (projectConfig?.enabled === false && projectConfig?.projectId) {
       return false
     }
 
@@ -1760,11 +1859,14 @@ export class GithubAdapter extends BaseAdapter implements IGithubAdapter {
   private prToCard(pr: GithubPR, projectStatus?: string): Card {
     const labels = pr.labels.map((l) => l.name)
     const isDraft = pr.isDraft ?? pr.draft ?? false
-    const isClosed = pr.state === 'closed' || pr.state === 'merged'
+    // GitHub CLI returns state as uppercase: OPEN, CLOSED, MERGED
+    const stateUpper = pr.state.toUpperCase()
+    const isClosed = stateUpper === 'CLOSED' || stateUpper === 'MERGED'
+    const isMerged = stateUpper === 'MERGED'
 
-    // Priority: closed state > PR draft state > Projects V2 status > label-based status
+    // Priority: merged/closed state > PR draft state > Projects V2 status > label-based status
     let status: CardStatus
-    if (isClosed) {
+    if (isMerged || isClosed) {
       status = 'done'
     } else if (isDraft) {
       status = 'draft'

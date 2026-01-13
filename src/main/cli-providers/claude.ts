@@ -74,7 +74,7 @@ export class ClaudeProvider extends BaseCLIProvider {
   // Override to handle prompt file for audit/debugging
   async execute(options: CLIExecutionOptions): Promise<CLIExecutionResult> {
     // Write prompt to temp file for reference/audit
-    this.promptFilePath = join(options.cwd, '.patchwork-prompt.md')
+    this.promptFilePath = join(options.cwd, '.flowpatch-prompt.md')
     writeFileSync(this.promptFilePath, options.prompt)
 
     try {

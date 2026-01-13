@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { createHash } from 'crypto'
-import type { PatchworkChunk } from './patchwork-indexer'
+import type { FlowPatchChunk } from './flowpatch-indexer'
 
 export interface SemanticMatch {
   path: string
@@ -12,10 +12,10 @@ export interface SemanticMatch {
 }
 
 export function getSemanticDbPath(repoRoot: string): string {
-  return join(repoRoot, '.patchwork', 'state', 'index', 'embeddings.sqlite')
+  return join(repoRoot, '.flowpatch', 'state', 'index', 'embeddings.sqlite')
 }
 
-export function buildSemanticIndex(repoRoot: string, chunks: PatchworkChunk[]): void {
+export function buildSemanticIndex(repoRoot: string, chunks: FlowPatchChunk[]): void {
   const dbPath = getSemanticDbPath(repoRoot)
   const db = new Database(dbPath)
   db.pragma('journal_mode = WAL')

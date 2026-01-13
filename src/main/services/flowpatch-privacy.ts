@@ -1,5 +1,5 @@
 import { createHash } from 'crypto'
-import type { PatchworkPrivacyOverride, PrivacyMode } from './patchwork-config'
+import type { FlowPatchPrivacyOverride, PrivacyMode } from './flowpatch-config'
 
 export type PrivacyCategory = 'secrets' | 'privateKeys' | 'credentials' | 'localConfigs'
 
@@ -53,7 +53,7 @@ export interface EffectivePrivacyPolicy {
 }
 
 export function buildEffectivePrivacyPolicy(
-  override?: PatchworkPrivacyOverride
+  override?: FlowPatchPrivacyOverride
 ): EffectivePrivacyPolicy {
   const mode: PrivacyMode = override?.mode ?? 'standard'
   if (mode === 'off') {

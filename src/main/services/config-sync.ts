@@ -3,7 +3,7 @@
  *
  * Handles bidirectional synchronization between:
  * - Database (projects.policy_json) - PolicyConfig
- * - YAML file (.patchwork/config.yml) - PatchworkConfig
+ * - YAML file (.flowpatch/config.yml) - FlowPatchConfig
  *
  * User can choose which source has priority (database or file).
  */
@@ -15,10 +15,10 @@ import type { PolicyConfig, ConfigSyncPriority, FeaturesConfig } from '../../sha
 import { DEFAULT_POLICY } from '../../shared/types'
 import { parsePolicyJson, mergePolicyUpdate } from '../../shared/utils/policy'
 import {
-  readPatchworkConfig,
-  type PatchworkConfig,
-  type PatchworkFeaturesConfig
-} from './patchwork-config'
+  readFlowPatchConfig,
+  type FlowPatchConfig,
+  type FlowPatchFeaturesConfig
+} from './flowpatch-config'
 import { getProject, updateProjectPolicyJson } from '../db/projects'
 
 export interface ConfigSyncResult {
@@ -32,11 +32,11 @@ export interface ConfigSyncResult {
 }
 
 /**
- * Convert PatchworkFeaturesConfig (YAML) to FeaturesConfig (PolicyConfig).
+ * Convert FlowPatchFeaturesConfig (YAML) to FeaturesConfig (PolicyConfig).
  * Uses DEFAULT_POLICY values as fallbacks for required fields.
  */
 function yamlFeaturesToPolicyFeatures(
-  yamlFeatures: PatchworkFeaturesConfig | undefined
+  yamlFeatures: FlowPatchFeaturesConfig | undefined
 ): FeaturesConfig | undefined {
   if (!yamlFeatures) return undefined
 
@@ -145,15 +145,15 @@ function yamlFeaturesToPolicyFeatures(
 }
 
 /**
- * Convert FeaturesConfig (PolicyConfig) to PatchworkFeaturesConfig (YAML).
+ * Convert FeaturesConfig (PolicyConfig) to FlowPatchFeaturesConfig (YAML).
  * Maps between the different field names used in each format.
  */
 function policyFeaturesToYamlFeatures(
   policyFeatures: FeaturesConfig | undefined
-): PatchworkFeaturesConfig | undefined {
+): FlowPatchFeaturesConfig | undefined {
   if (!policyFeatures) return undefined
 
-  const features: PatchworkFeaturesConfig = {}
+  const features: FlowPatchFeaturesConfig = {}
 
   if (policyFeatures.thinking) {
     features.thinking = {
@@ -242,10 +242,10 @@ function policyFeaturesToYamlFeatures(
 }
 
 /**
- * Convert PatchworkConfig to partial PolicyConfig for merging.
+ * Convert FlowPatchConfig to partial PolicyConfig for merging.
  * Uses DEFAULT_POLICY values as fallbacks for required fields.
  */
-function yamlConfigToPolicyUpdate(yamlConfig: PatchworkConfig): Partial<PolicyConfig> {
+function yamlConfigToPolicyUpdate(yamlConfig: FlowPatchConfig): Partial<PolicyConfig> {
   const update: Partial<PolicyConfig> = {}
   const defaults = DEFAULT_POLICY
 
@@ -285,13 +285,13 @@ function yamlConfigToPolicyUpdate(yamlConfig: PatchworkConfig): Partial<PolicyCo
 }
 
 /**
- * Convert PolicyConfig to PatchworkConfig for YAML export.
+ * Convert PolicyConfig to FlowPatchConfig for YAML export.
  */
-function policyToYamlConfig(policy: PolicyConfig): PatchworkConfig {
+function policyToYamlConfig(policy: PolicyConfig): FlowPatchConfig {
   const e2eConfig = policy.worker?.e2e
   return {
     schemaVersion: 2, // New schema version for features support
-    generatedBy: 'patchwork-config-sync',
+    generatedBy: 'flowpatch-config-sync',
     budgets: {
       maxFiles: 12,
       maxLinesPerFile: 200,
@@ -340,7 +340,7 @@ export function syncProjectConfig(
   const priority = priorityOverride ?? dbPolicy.sync?.configPriority ?? 'database'
 
   // Load from YAML file
-  const { config: yamlConfig, diagnostics: yamlDiags } = readPatchworkConfig(repoRoot)
+  const { config: yamlConfig, diagnostics: yamlDiags } = readFlowPatchConfig(repoRoot)
   errors.push(...yamlDiags.errors)
   warnings.push(...yamlDiags.warnings)
 
@@ -380,10 +380,10 @@ export function syncProjectConfig(
  */
 export function writeConfigToYaml(repoRoot: string, policy: PolicyConfig): boolean {
   try {
-    const configDir = join(repoRoot, '.patchwork')
+    const configDir = join(repoRoot, '.flowpatch')
     const configPath = join(configDir, 'config.yml')
 
-    // Ensure .patchwork directory exists
+    // Ensure .flowpatch directory exists
     if (!existsSync(configDir)) {
       return false // Don't create directory, just skip
     }
@@ -501,7 +501,7 @@ export function startConfigFileWatcher(
   repoRoot: string,
   onConfigChange: (result: ConfigSyncResult) => void
 ): boolean {
-  const configPath = join(repoRoot, '.patchwork', 'config.yml')
+  const configPath = join(repoRoot, '.flowpatch', 'config.yml')
 
   if (!existsSync(configPath)) {
     return false

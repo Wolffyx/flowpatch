@@ -46,7 +46,7 @@ import type {
   PlanningMode
 } from '../../shared/types'
 import { broadcastToRenderers } from '../ipc/broadcast'
-import { writeCheckpoint, readCheckpoint } from '../services/patchwork-runs'
+import { writeCheckpoint, readCheckpoint } from '../services/flowpatch-runs'
 
 // Phase implementations
 import { runAI, buildAIPrompt } from './phases/ai'
@@ -712,7 +712,7 @@ export class WorkerPipeline {
 
       this.log('Working tree has uncommitted changes, attempting to stash...')
       try {
-        await stashPush(this.project!.local_path, 'patchwork-worker-autostash')
+        await stashPush(this.project!.local_path, 'flowpatch-worker-autostash')
         this.log('Changes stashed successfully')
         return true
       } catch (stashError) {
@@ -729,7 +729,7 @@ export class WorkerPipeline {
   private async restoreStash(): Promise<void> {
     try {
       const stashOutput = await stashList(this.project!.local_path)
-      const line = stashOutput.split(/\r?\n|\n|\r/).find((l) => l.includes('patchwork-worker-autostash'))
+      const line = stashOutput.split(/\r?\n|\n|\r/).find((l) => l.includes('flowpatch-worker-autostash'))
       if (!line) return
 
       const m = line.match(/^(stash@\{\d+\}):/)
@@ -904,7 +904,7 @@ ${checksPass ? 'All checks passed' : 'Some checks failed - needs review'}
 ---
 Closes #${this.card.remote_number_or_iid}
 
-_Automated by Patchwork_
+_Automated by FlowPatch_
 `.trim()
 
     const baseBranch = this.branchManager?.getBaseBranch() ?? await this.branchManager?.fetchBaseBranch() ?? 'main'
@@ -1053,7 +1053,7 @@ Remaining subtasks: ${pendingSubtasks.length}
 
       const commitMsg = `[WIP] Iteration ${iteration}: Progress checkpoint
 
-Automated checkpoint by Patchwork worker.
+Automated checkpoint by FlowPatch worker.
 Card: #${this.card?.remote_number_or_iid} ${this.card?.title}`
 
       await commit(workingDir, commitMsg)

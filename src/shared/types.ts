@@ -63,17 +63,17 @@ export interface JobResultEnvelope {
   artifacts?: unknown
 }
 
-export type PatchworkIndexState = 'missing' | 'ready' | 'stale' | 'building' | 'blocked'
+export type FlowPatchIndexState = 'missing' | 'ready' | 'stale' | 'building' | 'blocked'
 
-export interface PatchworkIndexStatus {
-  state: PatchworkIndexState
+export interface FlowPatchIndexStatus {
+  state: FlowPatchIndexState
   headSha: string | null
   lastIndexedSha: string | null
   lastIndexedAt: string | null
   warnings?: string[]
 }
 
-export interface PatchworkWorkspaceStatus {
+export interface FlowPatchWorkspaceStatus {
   repoRoot: string
   exists: boolean
   writable: boolean
@@ -82,7 +82,7 @@ export interface PatchworkWorkspaceStatus {
   hasDocs: boolean
   hasScripts: boolean
   hasState: boolean
-  index: PatchworkIndexStatus
+  index: FlowPatchIndexStatus
   watchEnabled: boolean
   autoIndexingEnabled: boolean
 }
@@ -955,7 +955,7 @@ export interface PolicyConfig {
     configPriority?: ConfigSyncPriority
     /** Sync config on startup */
     syncOnStartup?: boolean
-    /** Watch .patchwork/config.yml for external changes */
+    /** Watch .flowpatch/config.yml for external changes */
     watchFileChanges?: boolean
     /** Interval in milliseconds for automatic polling (default: 180000 = 3 minutes) */
     pollInterval?: number
@@ -1194,7 +1194,7 @@ export function generateWorktreeBranchName(
   provider: Provider,
   numberOrId: string | number | null,
   title: string,
-  prefix: string = 'patchwork/'
+  prefix: string = 'flowpatch/'
 ): string {
   // Normalize prefix to end with /
   const normalizedPrefix = prefix.endsWith('/') ? prefix : `${prefix}/`
@@ -1238,7 +1238,9 @@ export const DEFAULT_POLICY: PolicyConfig = {
       done: 'Done'
     },
     githubProjectsV2: {
-      enabled: false
+      // enabled: undefined means auto-detect (find project if linked to repo)
+      // enabled: true means always try to sync with GitHub Projects V2
+      // enabled: false means explicitly disabled
     },
     configPriority: 'database',
     syncOnStartup: true,
@@ -1329,7 +1331,7 @@ export const DEFAULT_POLICY: PolicyConfig = {
     worktree: {
       enabled: false,
       root: 'repo',
-      branchPrefix: 'patchwork/',
+      branchPrefix: 'flowpatch/',
       cleanup: {
         onSuccess: 'immediate',
         onFailure: 'delay',

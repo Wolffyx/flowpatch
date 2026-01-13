@@ -40,7 +40,7 @@ interface ShellThemeProviderProps {
 }
 
 /** LocalStorage key for theme settings */
-const THEME_STORAGE_KEY = 'patchwork-theme-settings'
+const THEME_STORAGE_KEY = 'flowpatch-theme-settings'
 
 interface ThemeSettings {
   appearance: ThemePreference

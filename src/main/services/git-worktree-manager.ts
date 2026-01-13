@@ -193,7 +193,7 @@ export class GitWorktreeManager {
   getWorktreeRoot(config: WorktreeConfig): string {
     switch (config.root) {
       case 'repo':
-        return path.join(this.repoPath, '.patchwork-worktrees')
+        return path.join(this.repoPath, '.flowpatch-worktrees')
       case 'sibling':
         return path.join(path.dirname(this.repoPath), `${path.basename(this.repoPath)}-worktrees`)
       case 'custom':
@@ -202,7 +202,7 @@ export class GitWorktreeManager {
         }
         return config.customPath
       default:
-        return path.join(this.repoPath, '.patchwork-worktrees')
+        return path.join(this.repoPath, '.flowpatch-worktrees')
     }
   }
 
@@ -212,7 +212,7 @@ export class GitWorktreeManager {
   computeWorktreePath(branchName: string, config: WorktreeConfig): string {
     const root = this.getWorktreeRoot(config)
     // Use the branch name (without prefix) as the folder name, sanitized
-    const folderName = branchName.replace(/^patchwork\//, '').replace(/[^a-zA-Z0-9-]/g, '-')
+    const folderName = branchName.replace(/^flowpatch\//, '').replace(/[^a-zA-Z0-9-]/g, '-')
     return path.join(root, folderName)
   }
 
@@ -302,7 +302,7 @@ export class GitWorktreeManager {
 
   private tryWriteMarker(worktreePath: string): void {
     try {
-      writeFileSync(path.join(worktreePath, '.patchwork-worktree'), 'managed\n', {
+      writeFileSync(path.join(worktreePath, '.flowpatch-worktree'), 'managed\n', {
         encoding: 'utf-8'
       })
     } catch {
@@ -588,11 +588,11 @@ export class GitWorktreeManager {
   }
 
   /**
-   * Check if a worktree has the .patchwork-worktree marker file.
+   * Check if a worktree has the .flowpatch-worktree marker file.
    */
-  isPatchworkWorktree(worktreePath: string): boolean {
+  isFlowPatchWorktree(worktreePath: string): boolean {
     try {
-      const markerPath = path.join(worktreePath, '.patchwork-worktree')
+      const markerPath = path.join(worktreePath, '.flowpatch-worktree')
       if (!existsSync(markerPath)) return false
       const content = readFileSync(markerPath, 'utf-8')
       return content.trim() === 'managed'

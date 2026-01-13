@@ -6,12 +6,12 @@ import { Input } from '../../src/components/ui/input'
 import { ScrollArea } from '../../src/components/ui/scroll-area'
 import { Switch } from '../../src/components/ui/switch'
 import { Loader2, RefreshCw, Wrench, ArrowUpRight, ShieldCheck, Eye } from 'lucide-react'
-import type { Job, PatchworkWorkspaceStatus, JobResultEnvelope } from '@shared/types'
+import type { Job, FlowPatchWorkspaceStatus, JobResultEnvelope } from '@shared/types'
 
 interface WorkspaceDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  status: PatchworkWorkspaceStatus | null
+  status: FlowPatchWorkspaceStatus | null
   jobs: Job[]
   onRefreshStatus: () => Promise<void>
 }
@@ -120,7 +120,7 @@ export function WorkspaceDialog({
 
   const loadApproval = async (): Promise<void> => {
     try {
-      const res = (await window.projectAPI.getPatchworkConfig()) as any
+      const res = (await window.projectAPI.getFlowPatchConfig()) as any
       const a = res?.config?.approval
       if (a && typeof a === 'object') {
         setApproval({
@@ -172,7 +172,7 @@ export function WorkspaceDialog({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Badge variant={status?.exists ? 'default' : 'secondary'}>
-              .patchwork {status?.exists ? 'present' : 'missing'}
+              .flowpatch {status?.exists ? 'present' : 'missing'}
             </Badge>
             <Badge variant={status?.writable ? 'default' : 'destructive'}>
               {status?.writable ? 'writable' : 'read-only'}
@@ -228,7 +228,7 @@ export function WorkspaceDialog({
                   onClick={() => window.projectAPI.openWorkspaceFolder()}
                 >
                   <ArrowUpRight className="mr-2 h-4 w-4" />
-                  Open .patchwork
+                  Open .flowpatch
                 </Button>
               </div>
             </section>
@@ -244,7 +244,7 @@ export function WorkspaceDialog({
                     maybeConfirm(
                       approval?.confirmIndexBuild,
                       'Run index build?',
-                      'This scans the repo and writes to .patchwork/state/. Continue?',
+                      'This scans the repo and writes to .flowpatch/state/. Continue?',
                       () => void run(() => window.projectAPI.indexBuild())
                     )
                   }
@@ -264,7 +264,7 @@ export function WorkspaceDialog({
                     maybeConfirm(
                       approval?.confirmIndexRefresh,
                       'Refresh index?',
-                      'This rescans the repo and rewrites .patchwork/state/index/. Continue?',
+                      'This rescans the repo and rewrites .flowpatch/state/index/. Continue?',
                       () => void run(() => window.projectAPI.indexRefresh())
                     )
                   }
@@ -327,7 +327,7 @@ export function WorkspaceDialog({
                   maybeConfirm(
                     approval?.confirmDocsRefresh,
                     'Refresh docs?',
-                    'This updates generated sections in .patchwork/docs/*. Continue?',
+                    'This updates generated sections in .flowpatch/docs/*. Continue?',
                     () => void run(() => window.projectAPI.docsRefresh())
                   )
                 }
@@ -393,7 +393,7 @@ export function WorkspaceDialog({
                     maybeConfirm(
                       approval?.confirmContextPreview,
                       'Generate context preview?',
-                      'This will build a minimal context bundle and write .patchwork/state/last_context.json.',
+                      'This will build a minimal context bundle and write .flowpatch/state/last_context.json.',
                       () => void run(() => window.projectAPI.contextPreview(previewTask))
                     )
                   }
@@ -408,7 +408,7 @@ export function WorkspaceDialog({
                 </Button>
               </div>
               <div className="text-xs text-muted-foreground">
-                Writes audit metadata to `.patchwork/state/last_context.json` in the repo.
+                Writes audit metadata to `.flowpatch/state/last_context.json` in the repo.
               </div>
               {previewPath && (
                 <div className="text-xs text-muted-foreground">
@@ -438,7 +438,7 @@ export function WorkspaceDialog({
                     maybeConfirm(
                       approval?.confirmRepair,
                       'Repair workspace?',
-                      'This will create missing .patchwork templates and ensure .gitignore contains .patchwork/state/. Continue?',
+                      'This will create missing .flowpatch templates and ensure .gitignore contains .flowpatch/state/. Continue?',
                       () => void run(() => window.projectAPI.repairWorkspace())
                     )
                   }
@@ -458,7 +458,7 @@ export function WorkspaceDialog({
                     maybeConfirm(
                       approval?.confirmMigrate,
                       'Migrate workspace?',
-                      'This may update .patchwork/config.yml and templates to a newer schema. Continue?',
+                      'This may update .flowpatch/config.yml and templates to a newer schema. Continue?',
                       () => void run(() => window.projectAPI.migrateWorkspace())
                     )
                   }

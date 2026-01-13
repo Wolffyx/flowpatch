@@ -38,7 +38,7 @@ ${checksPass ? 'All checks passed' : 'Some checks failed - needs review'}
 ---
 Closes #${ctx.card.remote_number_or_iid}
 
-_Automated by Patchwork_
+_Automated by FlowPatch_
 `.trim()
 
   // Get status label to attach to PR on creation
@@ -78,7 +78,7 @@ export async function moveToInReview(ctx: PipelineContext, prUrl: string): Promi
     // Comment on issue with PR link
     await ctx.adapter.commentOnIssue(
       issueNumber,
-      `PR created: ${prUrl}\n\n_Automated by Patchwork_`
+      `PR created: ${prUrl}\n\n_Automated by FlowPatch_`
     )
   }
 }
