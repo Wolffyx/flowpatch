@@ -98,7 +98,8 @@ function KanbanCardBase({
   const labels = useMemo(() => parseLabels(card.labels_json), [card.labels_json])
   const hasConflicts = card.has_conflicts === 1
   const priorityColor = useMemo(() => getPriorityColor(card.labels_json), [card.labels_json])
-  const hasLinkedPRs = (linkedPRs?.length ?? 0) > 0
+  const linkedPRsSafe = linkedPRs ?? []
+  const hasLinkedPRs = linkedPRsSafe.length > 0
 
   return (
     <div
@@ -195,12 +196,12 @@ function KanbanCardBase({
             <Badge
               variant="outline"
               className="text-xs py-0.5 px-2 gap-1.5 text-chart-2 border-chart-2/30 bg-chart-2/5"
-              title={`${linkedPRs.length} linked PR${linkedPRs.length > 1 ? 's' : ''}`}
+              title={`${linkedPRsSafe.length} linked PR${linkedPRsSafe.length > 1 ? 's' : ''}`}
             >
               <GitPullRequest className="h-3 w-3" />
-              <span className="font-medium">#{linkedPRs[0].linked_number_or_iid}</span>
-              {linkedPRs.length > 1 && (
-                <span className="text-chart-2/70">+{linkedPRs.length - 1}</span>
+              <span className="font-medium">#{linkedPRsSafe[0].linked_number_or_iid}</span>
+              {linkedPRsSafe.length > 1 && (
+                <span className="text-chart-2/70">+{linkedPRsSafe.length - 1}</span>
               )}
             </Badge>
           </div>
