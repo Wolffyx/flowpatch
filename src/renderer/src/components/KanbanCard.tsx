@@ -1,5 +1,6 @@
 import type { MouseEvent } from 'react'
-import { useSortable } from '@dnd-kit/sortable'
+import { useMemo } from 'react'
+import { defaultAnimateLayoutChanges, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import {
   Github,
@@ -26,6 +27,14 @@ interface KanbanCardProps {
   onContextMenu?: (event: MouseEvent, card: Card) => void
 }
 
+interface KanbanCardBaseProps extends KanbanCardProps {
+  containerProps?: React.HTMLAttributes<HTMLDivElement>
+  containerRef?: (node: HTMLDivElement | null) => void
+  style?: React.CSSProperties
+  isDragging?: boolean
+  isDragOverlay?: boolean
+}
+
 /**
  * Get priority color from labels
  * Returns a color class for the priority indicator stripe
@@ -49,22 +58,18 @@ function getPriorityColor(labelsJson: string | null): string | null {
   return null
 }
 
-export function KanbanCard({
+function KanbanCardBase({
   card,
   linkedPRs,
   isSelected,
   onClick,
-  onContextMenu
-}: KanbanCardProps): React.JSX.Element {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: card.id,
-    data: { card }
-  })
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition
-  }
+  onContextMenu,
+  containerProps,
+  containerRef,
+  style,
+  isDragging = false,
+  isDragOverlay = false
+}: KanbanCardBaseProps): React.JSX.Element {
 
   const getProviderIcon = (): React.ReactNode => {
     switch (card.provider) {
@@ -90,24 +95,24 @@ export function KanbanCard({
     }
   }
 
-  const labels = parseLabels(card.labels_json)
+  const labels = useMemo(() => parseLabels(card.labels_json), [card.labels_json])
   const hasConflicts = card.has_conflicts === 1
-  const priorityColor = getPriorityColor(card.labels_json)
-  const hasLinkedPRs = linkedPRs && linkedPRs.length > 0
+  const priorityColor = useMemo(() => getPriorityColor(card.labels_json), [card.labels_json])
+  const hasLinkedPRs = (linkedPRs?.length ?? 0) > 0
 
   return (
     <div
-      ref={setNodeRef}
+      ref={containerRef}
       style={style}
-      {...attributes}
-      {...listeners}
+      {...containerProps}
       className={cn(
         'group relative rounded-xl border bg-card shadow-sm cursor-grab active:cursor-grabbing',
-        'transition-all duration-200 ease-out',
+        !isDragging ? 'transition-all duration-200 ease-out' : 'transition-none',
         // Hover effect - subtle lift
-        'hover:shadow-md hover:-translate-y-0.5',
+        !isDragging && 'hover:shadow-md hover:-translate-y-0.5',
         // Dragging state
-        isDragging && 'opacity-60 shadow-lg scale-[1.02] rotate-1',
+        isDragging && 'shadow-lg scale-[1.02] rotate-1',
+        isDragOverlay && 'pointer-events-none',
         // Selected state
         isSelected && 'ring-2 ring-primary shadow-md',
         // Error states
@@ -236,5 +241,56 @@ export function KanbanCard({
         </div>
       </div>
     </div>
+  )
+}
+
+export function KanbanCard({
+  card,
+  linkedPRs,
+  isSelected,
+  onClick,
+  onContextMenu
+}: KanbanCardProps): React.JSX.Element {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: card.id,
+    data: { card },
+    animateLayoutChanges: (args) =>
+      args.isSorting ? false : defaultAnimateLayoutChanges(args)
+  })
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition
+  }
+
+  return (
+    <KanbanCardBase
+      card={card}
+      linkedPRs={linkedPRs}
+      isSelected={isSelected}
+      onClick={onClick}
+      onContextMenu={onContextMenu}
+      containerProps={{ ...attributes, ...listeners }}
+      containerRef={setNodeRef}
+      style={style}
+      isDragging={isDragging}
+    />
+  )
+}
+
+export function KanbanCardPreview({
+  card,
+  linkedPRs,
+  onClick
+}: Omit<KanbanCardProps, 'isSelected'> & { isSelected?: boolean }): React.JSX.Element {
+  return (
+    <KanbanCardBase
+      card={card}
+      linkedPRs={linkedPRs}
+      isSelected={false}
+      onClick={onClick}
+      isDragging
+      isDragOverlay
+    />
   )
 }

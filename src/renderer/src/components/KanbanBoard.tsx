@@ -7,6 +7,8 @@ import {
   DragMoveEvent,
   DragOverlay,
   DragStartEvent,
+  MeasuringFrequency,
+  MeasuringStrategy,
   PointerSensor,
   TouchSensor,
   useSensor,
@@ -16,7 +18,7 @@ import {
 } from '@dnd-kit/core'
 import type { CollisionDetection } from '@dnd-kit/core'
 import { KanbanColumn } from './KanbanColumn'
-import { KanbanCard } from './KanbanCard'
+import { KanbanCardPreview } from './KanbanCard'
 import { CardContextMenu } from './CardContextMenu'
 import { useDragAutoScroll } from '../hooks/useDragAutoScroll'
 import { KANBAN_COLUMNS, type Card, type CardLink, type CardStatus } from '../../../shared/types'
@@ -163,6 +165,12 @@ export function KanbanBoard({
     [cleanupAutoScroll, cards, onMoveCard]
   )
 
+  const handleDragCancel = useCallback(() => {
+    cleanupAutoScroll()
+    setOverColumnId(null)
+    setActiveCard(null)
+  }, [cleanupAutoScroll])
+
   const handleCardContextMenu = useCallback(
     (event: MouseEvent, card: Card) => {
       setContextMenuCard(card)
@@ -181,10 +189,17 @@ export function KanbanBoard({
     <DndContext
       sensors={sensors}
       collisionDetection={kanbanCollisionDetection}
+      measuring={{
+        droppable: {
+          strategy: MeasuringStrategy.BeforeDragging,
+          frequency: MeasuringFrequency.Optimized
+        }
+      }}
       onDragStart={handleDragStart}
       onDragOver={handleDragOver}
       onDragMove={handleDragMove}
       onDragEnd={handleDragEnd}
+      onDragCancel={handleDragCancel}
     >
       <div
         ref={scrollContainerRef}
@@ -228,10 +243,9 @@ export function KanbanBoard({
       <DragOverlay>
         {activeCard && (
           <div className="drag-overlay">
-            <KanbanCard
+            <KanbanCardPreview
               card={activeCard}
               linkedPRs={cardLinksByCardId[activeCard.id]}
-              isSelected={false}
               onClick={() => {}}
             />
           </div>
