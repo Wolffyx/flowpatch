@@ -10,7 +10,7 @@ import { execFileSync, spawn } from 'child_process'
 import { mkdtemp, readFile, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { getProject } from '../../db'
+import { getCard, getProject } from '../../db'
 import { verifySecureRequest } from '../../security'
 import { logAction } from '@shared/utils'
 
@@ -66,6 +66,35 @@ function buildCardListPrompt(description: string, count: number): string {
     description.trim(),
     ''
   ].join('\n')
+}
+
+function buildSplitCardListPrompt(
+  parent: { title: string; body: string | null },
+  count: number,
+  guidance?: string
+): string {
+  return [
+    'You split a parent card into child cards that can be completed independently.',
+    '',
+    `Generate exactly ${count} child cards based on the parent card.`,
+    '',
+    'Output requirements (follow exactly):',
+    '- Output ONLY valid JSON (no code fences, no markdown outside JSON).',
+    '- Output a JSON array of objects. Each object must have:',
+    '  - "title": string',
+    '  - "body": string (Markdown allowed inside this string)',
+    '- Keep titles short and action-oriented.',
+    '- Each child should be a distinct, non-overlapping slice of work.',
+    '',
+    'Parent card:',
+    `Title: ${parent.title || '(untitled)'}`,
+    `Description: ${parent.body || 'No description provided'}`,
+    '',
+    guidance?.trim() ? `Guidance: ${guidance.trim()}` : '',
+    ''
+  ]
+    .filter(Boolean)
+    .join('\n')
 }
 
 function extractLikelyJson(raw: string): string {
@@ -391,6 +420,68 @@ export function registerAIHandlers(): void {
         if (!tool) return { error: `Selected tool not available: ${toolPreference}` }
 
         const prompt = buildCardListPrompt(description, count)
+        const timeoutMs = 120_000
+
+        const raw =
+          tool === 'claude'
+            ? await runClaudePlan(prompt, project.local_path, timeoutMs)
+            : await runCodexPlan(prompt, project.local_path, timeoutMs)
+
+        const cards = parseCardListJson(raw, count)
+        return { success: true, toolUsed: tool, cards }
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'generateSplitCards',
+    async (
+      event,
+      payload: {
+        projectId: string
+        cardId: string
+        count: number
+        toolPreference?: DraftToolPreference
+        guidance?: string
+      }
+    ) => {
+      // Security check - AI operations can execute commands
+      const securityError = verifyAIRequest(event, 'generateSplitCards')
+      if (securityError) {
+        return { error: `Security: ${securityError}` }
+      }
+
+      try {
+        const project = getProject(payload.projectId)
+        if (!project) return { error: 'Project not found' }
+
+        const card = getCard(payload.cardId)
+        if (!card) return { error: 'Card not found' }
+
+        const requested = Number.isFinite(payload.count) ? Math.floor(payload.count) : 0
+        const count = Math.min(12, Math.max(1, requested))
+
+        const toolPreference: DraftToolPreference = payload.toolPreference || 'auto'
+
+        const [hasClaude, hasCodex] = await Promise.all([
+          checkCommand('claude'),
+          checkCommand('codex')
+        ])
+        if (!hasClaude && !hasCodex) return { error: 'No CLI agent available (claude or codex)' }
+
+        let tool: 'claude' | 'codex' | null = null
+        if (toolPreference === 'claude' && hasClaude) tool = 'claude'
+        else if (toolPreference === 'codex' && hasCodex) tool = 'codex'
+        else if (toolPreference === 'auto') tool = hasClaude ? 'claude' : hasCodex ? 'codex' : null
+        if (!tool) return { error: `Selected tool not available: ${toolPreference}` }
+
+        const prompt = buildSplitCardListPrompt(
+          { title: card.title, body: card.body },
+          count,
+          payload.guidance
+        )
         const timeoutMs = 120_000
 
         const raw =

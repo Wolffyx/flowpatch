@@ -244,14 +244,70 @@ export default function App(): React.JSX.Element {
   const isHomeVisible = showHome || tabs.length === 0
   const isMacOS = /Mac|Macintosh|MacIntel|MacPPC/.test(navigator.userAgent)
 
+  // Compute per-project worker status from projects and jobs
+  const computedWorkerStatus = useMemo(() => {
+    const statusMap: Record<string, {
+      workerEnabled: boolean
+      activeRuns: number
+      lastJobState: 'running' | 'completed' | 'failed' | null
+    }> = {}
+
+    // Initialize from projects (worker_enabled field)
+    for (const project of projects) {
+      const workerJobs = recentJobs.filter(
+        j => j.project_id === project.id && j.type === 'worker_run'
+      )
+      const activeWorkerJobs = workerJobs.filter(
+        j => j.state === 'running' || j.state === 'queued'
+      )
+      const latestWorkerJob = workerJobs.length > 0
+        ? workerJobs.reduce((latest, job) => {
+            const latestTime = latest.updated_at || latest.created_at
+            const jobTime = job.updated_at || job.created_at
+            return jobTime > latestTime ? job : latest
+          })
+        : null
+
+      let lastJobState: 'running' | 'completed' | 'failed' | null = null
+      if (activeWorkerJobs.length > 0) {
+        lastJobState = 'running'
+      } else if (latestWorkerJob?.state === 'succeeded') {
+        lastJobState = 'completed'
+      } else if (latestWorkerJob?.state === 'failed') {
+        lastJobState = 'failed'
+      }
+
+      statusMap[project.id] = {
+        workerEnabled: project.worker_enabled === 1,
+        activeRuns: activeWorkerJobs.length,
+        lastJobState
+      }
+    }
+
+    // Merge with activity updates (they take precedence for active runs)
+    for (const [projectId, status] of Object.entries(projectWorkerStatus)) {
+      if (statusMap[projectId]) {
+        // Activity updates override for activeRuns
+        if (status.activeRuns > 0) {
+          statusMap[projectId].activeRuns = status.activeRuns
+          statusMap[projectId].lastJobState = 'running'
+        }
+      }
+    }
+
+    return statusMap
+  }, [projects, recentJobs, projectWorkerStatus])
+
   // Enrich tabs with worker status for tab indicators
   const tabsWithStatus = useMemo(() =>
     tabs.map(tab => {
-      const status = projectWorkerStatus[tab.projectId]
-      let workerStatus: 'idle' | 'running' | 'ready' | null = null
+      const status = computedWorkerStatus[tab.projectId]
+      let workerStatus: 'idle' | 'running' | 'ready' | 'error' | null = null
 
       if (status?.activeRuns > 0) {
         workerStatus = 'running'
+      } else if (status?.lastJobState === 'failed') {
+        workerStatus = 'error'
       } else if (status?.lastJobState === 'completed') {
         workerStatus = 'ready'
       } else if (status?.workerEnabled) {
@@ -264,7 +320,7 @@ export default function App(): React.JSX.Element {
         activeRuns: status?.activeRuns ?? 0
       }
     }),
-    [tabs, projectWorkerStatus]
+    [tabs, computedWorkerStatus]
   )
 
   // Load initial state

@@ -33,10 +33,12 @@ export function useAPIKeys(): UseAPIKeysReturn {
 
   const loadAPIKeys = useCallback(async () => {
     try {
-      const anthropic = await window.electron.ipcRenderer.invoke('getApiKey', {
+      const anthropic = (await window.electron.ipcRenderer.invoke('getApiKey', {
         key: 'anthropic'
-      })
-      const openai = await window.electron.ipcRenderer.invoke('getApiKey', { key: 'openai' })
+      })) as string | null
+      const openai = (await window.electron.ipcRenderer.invoke('getApiKey', {
+        key: 'openai'
+      })) as string | null
       setAnthropicApiKey(anthropic || '')
       setOpenaiApiKey(openai || '')
     } catch {

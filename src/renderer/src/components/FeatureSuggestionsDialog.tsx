@@ -26,17 +26,23 @@ import {
   HelpCircle,
   Trash2,
   Clock,
-  Filter
+  Filter,
+  SquarePlus
 } from 'lucide-react'
+import { CreateCardFromSuggestionDialog } from './CreateCardFromSuggestionDialog'
 import type {
   FeatureSuggestion,
   FeatureSuggestionStatus,
-  FeatureSuggestionCategory
+  FeatureSuggestionCategory,
+  Provider
 } from '../../../shared/types'
 
 interface FeatureSuggestionsDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  projectId: string
+  hasRemote: boolean
+  remoteProvider: Provider | null
 }
 
 const CATEGORIES: { id: FeatureSuggestionCategory; label: string; icon: typeof Lightbulb }[] = [
@@ -60,12 +66,19 @@ const STATUS_BADGES: Record<
 
 export function FeatureSuggestionsDialog({
   open,
-  onOpenChange
+  onOpenChange,
+  projectId,
+  hasRemote,
+  remoteProvider
 }: FeatureSuggestionsDialogProps): React.JSX.Element {
   const [suggestions, setSuggestions] = useState<FeatureSuggestion[]>([])
   const [loading, setLoading] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const [saving, setSaving] = useState(false)
+
+  // State for create card dialog
+  const [createCardOpen, setCreateCardOpen] = useState(false)
+  const [selectedSuggestion, setSelectedSuggestion] = useState<FeatureSuggestion | null>(null)
 
   // Filter state
   const [statusFilter, setStatusFilter] = useState<FeatureSuggestionStatus | 'all'>('all')
@@ -185,6 +198,17 @@ export function FeatureSuggestionsDialog({
     const Icon = cat?.icon ?? HelpCircle
     return <Icon className="h-3.5 w-3.5" />
   }
+
+  const handleCreateCard = useCallback((suggestion: FeatureSuggestion) => {
+    setSelectedSuggestion(suggestion)
+    setCreateCardOpen(true)
+  }, [])
+
+  const handleCardCreated = useCallback(() => {
+    setCreateCardOpen(false)
+    setSelectedSuggestion(null)
+    toast.success('Card created from suggestion')
+  }, [])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -384,14 +408,24 @@ export function FeatureSuggestionsDialog({
                             </div>
                           </div>
 
-                          <button
-                            type="button"
-                            onClick={() => handleDelete(suggestion.id)}
-                            className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors shrink-0"
-                            title="Delete"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
+                          <div className="flex flex-col gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleCreateCard(suggestion)}
+                              className="p-1.5 rounded hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors"
+                              title="Create card from this suggestion"
+                            >
+                              <SquarePlus className="h-4 w-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(suggestion.id)}
+                              className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                              title="Delete"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
                         </div>
                       </div>
                     )
@@ -408,6 +442,17 @@ export function FeatureSuggestionsDialog({
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      {/* Create Card from Suggestion Dialog */}
+      <CreateCardFromSuggestionDialog
+        open={createCardOpen}
+        onOpenChange={setCreateCardOpen}
+        suggestion={selectedSuggestion}
+        projectId={projectId}
+        hasRemote={hasRemote}
+        remoteProvider={remoteProvider}
+        onCardCreated={handleCardCreated}
+      />
     </Dialog>
   )
 }

@@ -11,7 +11,7 @@
  */
 
 import { useState, useRef, useEffect } from 'react'
-import { X, Plus, Loader2, Circle, Pause, CheckCircle2 } from 'lucide-react'
+import { X, Plus, Loader2, Circle, CheckCircle2, AlertCircle, Bot } from 'lucide-react'
 import { cn } from '../../src/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../src/components/ui/tooltip'
 
@@ -20,7 +20,7 @@ export interface TabData {
   projectId: string
   projectName: string
   isLoading?: boolean
-  workerStatus?: 'idle' | 'running' | 'ready' | null
+  workerStatus?: 'idle' | 'running' | 'ready' | 'error' | null
   activeRuns?: number
 }
 
@@ -145,16 +145,46 @@ export function TabBar({
               {tab.isLoading ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0" />
               ) : tab.workerStatus === 'running' ? (
-                <div className="flex items-center gap-0.5 shrink-0">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-                  {tab.activeRuns && tab.activeRuns > 0 && (
-                    <span className="text-[10px] font-medium text-primary">{tab.activeRuns}</span>
-                  )}
-                </div>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="flex items-center gap-0.5 shrink-0">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                      {tab.activeRuns && tab.activeRuns > 0 && (
+                        <span className="text-[10px] font-medium text-primary">{tab.activeRuns}</span>
+                      )}
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    <p>Worker running{tab.activeRuns && tab.activeRuns > 1 ? ` (${tab.activeRuns} tasks)` : ''}</p>
+                  </TooltipContent>
+                </Tooltip>
+              ) : tab.workerStatus === 'error' ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <AlertCircle className="h-3.5 w-3.5 text-destructive shrink-0" />
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    <p>Worker error - check logs</p>
+                  </TooltipContent>
+                </Tooltip>
               ) : tab.workerStatus === 'idle' ? (
-                <Pause className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Bot className="h-3.5 w-3.5 text-muted-foreground/60 shrink-0" />
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    <p>Worker enabled - idle</p>
+                  </TooltipContent>
+                </Tooltip>
               ) : tab.workerStatus === 'ready' ? (
-                <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    <p>Worker completed successfully</p>
+                  </TooltipContent>
+                </Tooltip>
               ) : !isActive ? (
                 <Circle className="h-1.5 w-1.5 fill-muted-foreground/40 text-transparent shrink-0" />
               ) : null}

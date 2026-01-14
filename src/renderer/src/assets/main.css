@@ -244,6 +244,32 @@ body {
     background-color: var(--muted-foreground);
   }
 
+  /* Kanban horizontal scrollbar - always visible */
+  .kanban-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--muted-foreground) transparent;
+  }
+
+  .kanban-scroll::-webkit-scrollbar {
+    height: 8px;
+  }
+
+  .kanban-scroll::-webkit-scrollbar-track {
+    background: var(--muted);
+    border-radius: 4px;
+  }
+
+  .kanban-scroll::-webkit-scrollbar-thumb {
+    background-color: var(--muted-foreground);
+    border-radius: 4px;
+    opacity: 0.4;
+  }
+
+  .kanban-scroll::-webkit-scrollbar-thumb:hover {
+    background-color: var(--foreground);
+    opacity: 0.6;
+  }
+
   /* Animation utilities for softer interactions */
   .animate-in {
     animation-duration: 150ms;

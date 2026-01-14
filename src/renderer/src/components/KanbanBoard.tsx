@@ -1,18 +1,34 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import {
   DndContext,
   DragEndEvent,
+  DragOverEvent,
+  DragMoveEvent,
   DragOverlay,
   DragStartEvent,
   PointerSensor,
+  TouchSensor,
   useSensor,
   useSensors,
-  closestCorners
+  pointerWithin,
+  rectIntersection
 } from '@dnd-kit/core'
+import type { CollisionDetection } from '@dnd-kit/core'
 import { KanbanColumn } from './KanbanColumn'
 import { KanbanCard } from './KanbanCard'
-import { ScrollArea } from './ui/scroll-area'
+import { useDragAutoScroll } from '../hooks/useDragAutoScroll'
 import { KANBAN_COLUMNS, type Card, type CardLink, type CardStatus } from '../../../shared/types'
+
+// Custom collision detection: use pointer position first, fall back to rect intersection
+const kanbanCollisionDetection: CollisionDetection = (args) => {
+  // First, try pointer-based detection (most accurate for cursor position)
+  const pointerCollisions = pointerWithin(args)
+  if (pointerCollisions.length > 0) {
+    return pointerCollisions
+  }
+  // Fall back to rectangle intersection
+  return rectIntersection(args)
+}
 
 interface KanbanBoardProps {
   cards: Card[]
@@ -34,11 +50,21 @@ export function KanbanBoard({
   onGenerateCards
 }: KanbanBoardProps): React.JSX.Element {
   const [activeCard, setActiveCard] = useState<Card | null>(null)
+  const [overColumnId, setOverColumnId] = useState<CardStatus | null>(null)
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const { onDragMove: autoScrollOnDragMove, cleanup: cleanupAutoScroll } =
+    useDragAutoScroll(scrollContainerRef)
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
         distance: 8
+      }
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: {
+        delay: 200,
+        tolerance: 5
       }
     })
   )
@@ -61,9 +87,47 @@ export function KanbanBoard({
     [cards]
   )
 
+  const handleDragOver = useCallback(
+    (event: DragOverEvent) => {
+      const { over } = event
+      if (!over) {
+        setOverColumnId(null)
+        return
+      }
+
+      const overId = over.id as string
+
+      // Check if directly over a column
+      const column = KANBAN_COLUMNS.find((col) => col.id === overId)
+      if (column) {
+        setOverColumnId(column.id)
+        return
+      }
+
+      // Check if over a card - get its parent column status
+      const overCard = cards.find((c) => c.id === overId)
+      if (overCard) {
+        setOverColumnId(overCard.status)
+        return
+      }
+
+      setOverColumnId(null)
+    },
+    [cards]
+  )
+
+  const handleDragMove = useCallback(
+    (event: DragMoveEvent) => {
+      autoScrollOnDragMove(event)
+    },
+    [autoScrollOnDragMove]
+  )
+
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
       const { active, over } = event
+      cleanupAutoScroll()
+      setOverColumnId(null)
       setActiveCard(null)
 
       if (!over) return
@@ -90,18 +154,26 @@ export function KanbanBoard({
         }
       }
     },
-    [cards, onMoveCard]
+    [cleanupAutoScroll, cards, onMoveCard]
   )
 
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={closestCorners}
+      collisionDetection={kanbanCollisionDetection}
       onDragStart={handleDragStart}
+      onDragOver={handleDragOver}
+      onDragMove={handleDragMove}
       onDragEnd={handleDragEnd}
     >
-      <ScrollArea className="h-full overflow-x-auto">
-        <div className="flex h-full gap-4 p-4" onClick={() => onSelectCard(null)}>
+      <div
+        ref={scrollContainerRef}
+        className="h-full overflow-x-auto overflow-y-hidden kanban-scroll"
+      >
+        <div
+          className="flex h-full gap-4 p-4 min-w-max"
+          onClick={() => onSelectCard(null)}
+        >
           {KANBAN_COLUMNS.map((column) => (
             <KanbanColumn
               key={column.id}
@@ -112,12 +184,13 @@ export function KanbanBoard({
               cardLinksByCardId={cardLinksByCardId}
               selectedCardId={selectedCardId}
               onSelectCard={onSelectCard}
+              isOverColumn={overColumnId === column.id}
               onAddCard={column.id === 'draft' ? onAddCard : undefined}
               onGenerateCards={column.id === 'draft' ? onGenerateCards : undefined}
             />
           ))}
         </div>
-      </ScrollArea>
+      </div>
 
       <DragOverlay>
         {activeCard && (

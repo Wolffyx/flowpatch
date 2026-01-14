@@ -29,7 +29,19 @@ export function useUsageLimits(): UseUsageLimitsReturn {
   const loadUsageLimits = useCallback(async () => {
     setLimitsLoading(true)
     try {
-      const result = await window.electron.ipcRenderer.invoke('usage:getWithLimits')
+      const result = (await window.electron.ipcRenderer.invoke('usage:getWithLimits')) as {
+        usageWithLimits: {
+          tool_type: string
+          limits?: {
+            hourly_token_limit: number | null
+            daily_token_limit: number | null
+            monthly_token_limit: number | null
+            hourly_cost_limit_usd: number | null
+            daily_cost_limit_usd: number | null
+            monthly_cost_limit_usd: number | null
+          }
+        }[]
+      }
       const usageData = result.usageWithLimits
 
       // Find claude and codex limits

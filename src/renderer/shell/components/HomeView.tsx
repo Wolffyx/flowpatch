@@ -376,7 +376,9 @@ function ProjectCard({
               {project.name}
             </span>
             {hasError && (
-              <AlertCircle className="h-3.5 w-3.5 text-destructive shrink-0" title="Folder not found" />
+              <span title="Folder not found">
+                <AlertCircle className="h-3.5 w-3.5 text-destructive shrink-0" />
+              </span>
             )}
           </div>
           {!isExpanded && shortRepoKey && (

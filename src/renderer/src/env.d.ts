@@ -64,6 +64,11 @@ declare global {
           daily_cost_used: number
           monthly_cost_used: number
         }[]
+        resetTimes: {
+          hourly_resets_in: number
+          daily_resets_in: number
+          monthly_resets_in: number
+        }
       }>
       setToolLimits: (
         toolType: 'claude' | 'codex' | 'other',
@@ -670,6 +675,15 @@ declare global {
         success: boolean
         error?: string
       }>
+    }
+
+    electron: {
+      ipcRenderer: {
+        invoke: (channel: string, ...args: unknown[]) => Promise<unknown>
+        send: (channel: string, ...args: unknown[]) => void
+        on: (channel: string, callback: (...args: unknown[]) => void) => void
+        removeListener: (channel: string, callback: (...args: unknown[]) => void) => void
+      }
     }
   }
 }

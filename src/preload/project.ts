@@ -230,7 +230,7 @@ interface PolicyConfig {
 
 // Types from shared (would be imported in actual usage)
 type CardStatus = 'draft' | 'ready' | 'in_progress' | 'in_review' | 'testing' | 'done'
-type Provider = 'github' | 'gitlab' | 'local'
+type Provider = 'github' | 'gitlab' | 'local' | 'auto'
 type CardType = 'issue' | 'pr' | 'mr' | 'draft'
 type SyncState = 'ok' | 'pending' | 'error'
 

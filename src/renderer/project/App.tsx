@@ -113,6 +113,7 @@ declare global {
       repairWorkspace: () => Promise<unknown>
       migrateWorkspace: () => Promise<unknown>
       openWorkspaceFolder: () => Promise<unknown>
+      getFlowPatchConfig: () => Promise<unknown>
 
       // Configuration sync
       updateFeatureConfig: (
@@ -138,16 +139,25 @@ declare global {
           avg_duration_ms: number
           limits: {
             tool_type: string
+            hourly_token_limit: number | null
             daily_token_limit: number | null
             monthly_token_limit: number | null
+            hourly_cost_limit_usd: number | null
             daily_cost_limit_usd: number | null
             monthly_cost_limit_usd: number | null
           } | null
+          hourly_tokens_used: number
           daily_tokens_used: number
           monthly_tokens_used: number
+          hourly_cost_used: number
           daily_cost_used: number
           monthly_cost_used: number
         }[]
+        resetTimes: {
+          hourly_resets_in: number
+          daily_resets_in: number
+          monthly_resets_in: number
+        }
       }>
 
       // Dependencies
@@ -165,6 +175,211 @@ declare global {
         }[]
         error?: string
       }>
+
+      // Agent Chat
+      getChatMessages: (jobId: string, limit?: number) => Promise<{
+        messages: {
+          id: string
+          job_id: string
+          card_id: string
+          project_id: string
+          role: 'user' | 'agent' | 'system'
+          content: string
+          status: 'sent' | 'delivered' | 'read' | 'error'
+          metadata_json?: string
+          created_at: string
+          updated_at?: string
+        }[]
+        error?: string
+      }>
+      sendChatMessage: (params: {
+        jobId: string
+        cardId: string
+        content: string
+        metadata?: Record<string, unknown>
+      }) => Promise<{
+        message: {
+          id: string
+          job_id: string
+          card_id: string
+          project_id: string
+          role: 'user' | 'agent' | 'system'
+          content: string
+          status: 'sent' | 'delivered' | 'read' | 'error'
+          metadata_json?: string
+          created_at: string
+          updated_at?: string
+        }
+        error?: string
+      }>
+      markChatAsRead: (jobId: string) => Promise<{ success: boolean; error?: string }>
+      clearChatHistory: (jobId: string) => Promise<{ success: boolean; count: number; error?: string }>
+      onChatMessage: (callback: (data: {
+        type: string
+        message: {
+          id: string
+          job_id: string
+          card_id: string
+          project_id: string
+          role: 'user' | 'agent' | 'system'
+          content: string
+          status: 'sent' | 'delivered' | 'read' | 'error'
+          metadata_json?: string
+          created_at: string
+          updated_at?: string
+        }
+        jobId: string
+      }) => void) => () => void
+
+      // Card operations
+      editCardBody: (cardId: string, body: string | null) => Promise<{ card?: Card; error?: string }>
+      deleteCard: (cardId: string) => Promise<{ success: boolean; error?: string }>
+
+      // Card Dependencies
+      getDependenciesForCardWithCards: (cardId: string) => Promise<{
+        dependencies: {
+          id: string
+          project_id: string
+          card_id: string
+          depends_on_card_id: string
+          blocking_statuses: CardStatus[]
+          required_status: CardStatus
+          is_active: number
+          created_at: string
+          updated_at: string
+          depends_on_card?: {
+            id: string
+            project_id: string
+            title: string
+            status: CardStatus
+          }
+        }[]
+        error?: string
+      }>
+      getDependentsOfCard: (cardId: string) => Promise<{
+        dependencies: {
+          id: string
+          project_id: string
+          card_id: string
+          depends_on_card_id: string
+          blocking_statuses: CardStatus[]
+          required_status: CardStatus
+          is_active: number
+          created_at: string
+          updated_at: string
+        }[]
+        error?: string
+      }>
+      checkWouldCreateCycle: (cardId: string, dependsOnCardId: string) => Promise<{
+        wouldCreateCycle: boolean
+        error?: string
+      }>
+      createDependency: (data: {
+        cardId: string
+        dependsOnCardId: string
+        blockingStatuses?: CardStatus[]
+        requiredStatus?: CardStatus
+      }) => Promise<{
+        dependency: {
+          id: string
+          project_id: string
+          card_id: string
+          depends_on_card_id: string
+          blocking_statuses: CardStatus[]
+          required_status: CardStatus
+          is_active: number
+          created_at: string
+          updated_at: string
+        } | null
+        error?: string
+      }>
+      deleteDependency: (dependencyId: string) => Promise<{ success: boolean; error?: string }>
+      toggleDependency: (dependencyId: string, isActive: boolean) => Promise<{ success: boolean; error?: string }>
+
+      // Feature Suggestions
+      getFeatureSuggestions: (options?: {
+        status?: 'open' | 'in_progress' | 'completed' | 'rejected'
+        category?: 'ui' | 'performance' | 'feature' | 'bug' | 'documentation' | 'other'
+        sortBy?: 'vote_count' | 'created_at' | 'priority' | 'updated_at'
+        sortOrder?: 'asc' | 'desc'
+        limit?: number
+        offset?: number
+      }) => Promise<{
+        suggestions: {
+          id: string
+          project_id: string
+          title: string
+          description: string
+          category: 'ui' | 'performance' | 'feature' | 'bug' | 'documentation' | 'other'
+          priority: number
+          vote_count: number
+          status: 'open' | 'in_progress' | 'completed' | 'rejected'
+          created_by?: string
+          created_at: string
+          updated_at: string
+        }[]
+        error?: string
+      }>
+      createFeatureSuggestion: (data: {
+        title: string
+        description: string
+        category?: 'ui' | 'performance' | 'feature' | 'bug' | 'documentation' | 'other'
+        priority?: number
+        createdBy?: string
+      }) => Promise<{
+        suggestion: {
+          id: string
+          project_id: string
+          title: string
+          description: string
+          category: 'ui' | 'performance' | 'feature' | 'bug' | 'documentation' | 'other'
+          priority: number
+          vote_count: number
+          status: 'open' | 'in_progress' | 'completed' | 'rejected'
+          created_by?: string
+          created_at: string
+          updated_at: string
+        } | null
+        error?: string
+      }>
+      voteOnSuggestion: (suggestionId: string, voteType: 'up' | 'down', voterId?: string) => Promise<{
+        voteCount: number
+        userVote: 'up' | 'down' | null
+        error?: string
+      }>
+      deleteFeatureSuggestion: (suggestionId: string) => Promise<{ success: boolean; error?: string }>
+
+      // Diff viewer
+      getDiffFiles: (worktreeId: string) => Promise<{
+        files: {
+          path: string
+          status: 'A' | 'M' | 'D' | 'R' | 'C' | 'T' | 'U'
+          additions: number
+          deletions: number
+          oldPath?: string
+        }[]
+        error?: string
+      }>
+      getFileDiff: (worktreeId: string, filePath: string) => Promise<{
+        diff: {
+          filePath: string
+          oldContent: string
+          newContent: string
+          status: 'added' | 'modified' | 'deleted' | 'renamed'
+          additions: number
+          deletions: number
+        } | null
+        error?: string
+      }>
+    }
+
+    electron: {
+      ipcRenderer: {
+        invoke: (channel: string, ...args: unknown[]) => Promise<unknown>
+        send: (channel: string, ...args: unknown[]) => void
+        on: (channel: string, callback: (...args: unknown[]) => void) => void
+        removeListener: (channel: string, callback: (...args: unknown[]) => void) => void
+      }
     }
   }
 }
@@ -962,6 +1177,9 @@ export default function App(): React.JSX.Element {
       <FeatureSuggestionsDialog
         open={featureSuggestionsOpen}
         onOpenChange={setFeatureSuggestionsOpen}
+        projectId={projectInfo.projectId}
+        hasRemote={!!project?.remote_repo_key}
+        remoteProvider={project?.provider_hint ?? null}
       />
 
       {/* Graph View Dialog */}

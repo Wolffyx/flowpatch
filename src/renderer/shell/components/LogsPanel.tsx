@@ -10,7 +10,6 @@
 import { useRef, useEffect } from 'react'
 import { X, Download, Trash2 } from 'lucide-react'
 import { Button } from '../../src/components/ui/button'
-import { ScrollArea } from '../../src/components/ui/scroll-area'
 import { cn } from '../../src/lib/utils'
 
 interface LogEntry {

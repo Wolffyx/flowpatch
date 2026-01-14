@@ -44,7 +44,10 @@ export function useAIProfiles(): UseAIProfilesReturn {
   const loadAIProfiles = useCallback(async (projectId: string) => {
     setAiProfilesLoading(true)
     try {
-      const result = await window.electron.ipcRenderer.invoke('aiProfiles:list', projectId)
+      const result = (await window.electron.ipcRenderer.invoke('aiProfiles:list', projectId)) as {
+        profiles?: AIProfile[]
+        error?: string
+      }
       if (result.error) {
         toast.error('Failed to load AI profiles', { description: result.error })
       } else {
@@ -123,10 +126,10 @@ export function useAIProfiles(): UseAIProfilesReturn {
         }
 
         if (editingProfile) {
-          const result = await window.electron.ipcRenderer.invoke('aiProfiles:update', {
+          const result = (await window.electron.ipcRenderer.invoke('aiProfiles:update', {
             profileId: editingProfile.id,
             data
-          })
+          })) as { error?: string }
           if (result.error) {
             toast.error('Failed to update profile', { description: result.error })
           } else {
@@ -139,10 +142,10 @@ export function useAIProfiles(): UseAIProfilesReturn {
             }
           }
         } else {
-          const result = await window.electron.ipcRenderer.invoke('aiProfiles:create', {
+          const result = (await window.electron.ipcRenderer.invoke('aiProfiles:create', {
             projectId,
             ...data
-          })
+          })) as { error?: string }
           if (result.error) {
             toast.error('Failed to create profile', { description: result.error })
           } else {
@@ -167,7 +170,10 @@ export function useAIProfiles(): UseAIProfilesReturn {
 
   const handleDeleteProfile = useCallback(async (profileId: string) => {
     try {
-      const result = await window.electron.ipcRenderer.invoke('aiProfiles:delete', profileId)
+      const result = (await window.electron.ipcRenderer.invoke(
+        'aiProfiles:delete',
+        profileId
+      )) as { error?: string }
       if (result.error) {
         toast.error('Failed to delete profile', { description: result.error })
       } else {
@@ -183,7 +189,10 @@ export function useAIProfiles(): UseAIProfilesReturn {
 
   const handleSetDefaultProfile = useCallback(async (profileId: string) => {
     try {
-      const result = await window.electron.ipcRenderer.invoke('aiProfiles:setDefault', profileId)
+      const result = (await window.electron.ipcRenderer.invoke(
+        'aiProfiles:setDefault',
+        profileId
+      )) as { error?: string }
       if (result.error) {
         toast.error('Failed to set default profile', { description: result.error })
       } else {
@@ -198,10 +207,10 @@ export function useAIProfiles(): UseAIProfilesReturn {
 
   const handleDuplicateProfile = useCallback(async (profileId: string, currentName: string) => {
     try {
-      const result = await window.electron.ipcRenderer.invoke('aiProfiles:duplicate', {
+      const result = (await window.electron.ipcRenderer.invoke('aiProfiles:duplicate', {
         profileId,
         newName: `${currentName} (Copy)`
-      })
+      })) as { error?: string }
       if (result.error) {
         toast.error('Failed to duplicate profile', { description: result.error })
       } else {

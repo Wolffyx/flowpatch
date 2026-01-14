@@ -24,7 +24,7 @@ export interface ThemeConfig {
 
 export type CardStatus = 'draft' | 'ready' | 'in_progress' | 'in_review' | 'testing' | 'done'
 
-export type Provider = 'github' | 'gitlab' | 'local'
+export type Provider = 'github' | 'gitlab' | 'local' | 'auto'
 
 export type CardType = 'issue' | 'pr' | 'draft' | 'mr' | 'local'
 

@@ -16,6 +16,7 @@ interface KanbanColumnProps {
   cardLinksByCardId: Record<string, CardLink[]>
   selectedCardId: string | null
   onSelectCard: (id: string) => void
+  isOverColumn?: boolean
   onAddCard?: () => void
   onGenerateCards?: () => void
 }
@@ -28,6 +29,7 @@ export function KanbanColumn({
   cardLinksByCardId,
   selectedCardId,
   onSelectCard,
+  isOverColumn = false,
   onAddCard,
   onGenerateCards
 }: KanbanColumnProps): React.JSX.Element {
@@ -36,13 +38,16 @@ export function KanbanColumn({
     data: { status: id }
   })
 
+  // Highlight when either directly over OR parent says we're the target
+  const showHighlight = isOver || isOverColumn
+
   return (
     <div
       ref={setNodeRef}
       className={cn(
-        'flex h-full min-w-[240px] flex-1 flex-col rounded-xl border bg-muted/30',
+        'flex h-full w-[280px] min-w-[240px] max-w-[320px] flex-col rounded-xl border bg-muted/30',
         'transition-all duration-200',
-        isOver && 'ring-2 ring-primary ring-inset bg-primary/5'
+        showHighlight && 'ring-2 ring-primary ring-inset bg-primary/5'
       )}
     >
       {/* Column header */}
@@ -123,13 +128,13 @@ export function KanbanColumn({
               'flex flex-col items-center justify-center py-8 px-4',
               'text-muted-foreground rounded-lg',
               'border-2 border-dashed border-muted transition-colors',
-              isOver && 'border-primary/50 bg-primary/5'
+              showHighlight && 'border-primary/50 bg-primary/5'
             )}
           >
             <Inbox className="h-8 w-8 mb-2 opacity-40" />
             <p className="text-sm font-medium">No cards</p>
             <p className="text-xs opacity-70">
-              {isOver ? 'Drop card here' : 'Drag cards here'}
+              {showHighlight ? 'Drop card here' : 'Drag cards here'}
             </p>
           </div>
         )}

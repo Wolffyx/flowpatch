@@ -525,7 +525,14 @@ const allowedInvokeChannels = [
   'stopSyncScheduler',
   // Usage Limits
   'usage:getWithLimits',
-  'usage:setToolLimits'
+  'usage:setToolLimits',
+  // Project operations (for command palette)
+  'syncProject',
+  'runWorker',
+  'setProjectRemote',
+  'checkCliAgents',
+  // Project identity (for remote selection)
+  'shell:getProjectIdentity'
 ]
 
 const electronAPI = {

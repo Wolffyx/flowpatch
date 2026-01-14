@@ -76,13 +76,12 @@ export function AIDescriptionDialog({
     setError(null)
 
     try {
-      const result: { success?: boolean; response?: string; error?: string } =
-        await window.electron.ipcRenderer.invoke('generateCardDescription', {
-          projectId,
-          title,
-          toolPreference,
-          messages: nextMessages
-        })
+      const result = (await window.electron.ipcRenderer.invoke('generateCardDescription', {
+        projectId,
+        title,
+        toolPreference,
+        messages: nextMessages
+      })) as { success?: boolean; response?: string; error?: string }
 
       if (result?.error) throw new Error(result.error)
 
