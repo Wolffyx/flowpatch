@@ -40,6 +40,12 @@ interface CardDependencyWithCard {
     title: string
     status: CardStatus
   }
+  card?: {
+    id: string
+    project_id: string
+    title: string
+    status: CardStatus
+  }
 }
 
 interface DependencyManagerProps {
@@ -316,10 +322,17 @@ export function DependencyManager({ card }: DependencyManagerProps): React.JSX.E
                     key={dep.id}
                     className="text-sm text-muted-foreground flex items-center gap-2"
                   >
-                    <span className="truncate">Card #{dep.card_id.slice(0, 8)}</span>
-                    <Badge variant="outline" className="text-xs">
-                      blocked
-                    </Badge>
+                    <span className="truncate">
+                      {dep.card?.title ?? `Card #${dep.card_id.slice(0, 8)}`}
+                    </span>
+                    {dep.card?.status && (
+                      <Badge
+                        variant="secondary"
+                        className={cn('text-xs h-5', STATUS_COLORS[dep.card.status])}
+                      >
+                        {STATUS_LABELS[dep.card.status]}
+                      </Badge>
+                    )}
                   </div>
                 ))}
               </div>

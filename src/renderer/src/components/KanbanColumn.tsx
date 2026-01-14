@@ -1,3 +1,4 @@
+import type { MouseEvent } from 'react'
 import { useDroppable } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { Plus, Sparkles, Inbox } from 'lucide-react'
@@ -16,6 +17,7 @@ interface KanbanColumnProps {
   cardLinksByCardId: Record<string, CardLink[]>
   selectedCardId: string | null
   onSelectCard: (id: string) => void
+  onCardContextMenu?: (event: MouseEvent, card: Card) => void
   isOverColumn?: boolean
   onAddCard?: () => void
   onGenerateCards?: () => void
@@ -29,6 +31,7 @@ export function KanbanColumn({
   cardLinksByCardId,
   selectedCardId,
   onSelectCard,
+  onCardContextMenu,
   isOverColumn = false,
   onAddCard,
   onGenerateCards
@@ -106,7 +109,7 @@ export function KanbanColumn({
       </div>
 
       {/* Cards container */}
-      <ScrollArea className="flex-1 px-2 pb-2">
+      <ScrollArea className="flex-1 px-2 pb-2 pt-2">
         <SortableContext items={cards.map((c) => c.id)} strategy={verticalListSortingStrategy}>
           <div className="space-y-2">
             {cards.map((card) => (
@@ -116,6 +119,7 @@ export function KanbanColumn({
                 linkedPRs={cardLinksByCardId[card.id]}
                 isSelected={card.id === selectedCardId}
                 onClick={() => onSelectCard(card.id)}
+                onContextMenu={onCardContextMenu}
               />
             ))}
           </div>

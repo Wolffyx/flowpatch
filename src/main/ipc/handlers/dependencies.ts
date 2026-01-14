@@ -9,7 +9,7 @@ import {
   getCardDependency,
   getDependenciesForCard,
   getDependenciesForCardWithCards,
-  getDependentsOfCard,
+  getDependentsOfCardWithCards,
   getDependenciesByProject,
   countDependenciesForCard,
   countDependentsOfCard,
@@ -100,7 +100,7 @@ export function registerDependencyHandlers(notifyRenderer: () => void): void {
     async (
       _e,
       cardId: string
-    ): Promise<{ dependencies: CardDependency[]; error?: string }> => {
+    ): Promise<{ dependencies: CardDependencyWithCard[]; error?: string }> => {
       logAction('dependencies:getForCard', { cardId })
 
       try {
@@ -142,7 +142,7 @@ export function registerDependencyHandlers(notifyRenderer: () => void): void {
       logAction('dependencies:getDependents', { cardId })
 
       try {
-        const dependencies = getDependentsOfCard(cardId)
+        const dependencies = getDependentsOfCardWithCards(cardId)
         return { dependencies }
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err)

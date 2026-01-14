@@ -97,6 +97,7 @@ export type EventType =
   | 'error'
   | 'card_created'
   | 'card_linked'
+  | 'card_split'
   | 'task_decomposed'
   | 'e2e_tests_run'
   | 'plan_approval_requested'

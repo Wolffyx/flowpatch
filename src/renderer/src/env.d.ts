@@ -26,6 +26,13 @@ declare global {
         last_error: string | null
         has_conflicts: number
       }[]>
+      splitCard: (data: {
+        cardId: string
+        items: Array<{ title: string; body?: string }>
+      }) => Promise<{
+        cards?: { id: string }[]
+        error?: string
+      }>
 
       updateFeatureConfig: (
         featureKey: string,
@@ -598,6 +605,12 @@ declare global {
           is_active: number
           created_at: string
           updated_at: string
+          card?: {
+            id: string
+            project_id: string
+            title: string
+            status: 'draft' | 'ready' | 'in_progress' | 'in_review' | 'testing' | 'done'
+          }
         }[]
         error?: string
       }>
@@ -679,10 +692,10 @@ declare global {
 
     electron: {
       ipcRenderer: {
-        invoke: (channel: string, ...args: unknown[]) => Promise<unknown>
+        invoke: <T = any>(channel: string, ...args: unknown[]) => Promise<T>
         send: (channel: string, ...args: unknown[]) => void
-        on: (channel: string, callback: (...args: unknown[]) => void) => void
-        removeListener: (channel: string, callback: (...args: unknown[]) => void) => void
+        on: (channel: string, callback: (...args: any[]) => void) => void
+        removeListener: (channel: string, callback: (...args: any[]) => void) => void
       }
     }
   }

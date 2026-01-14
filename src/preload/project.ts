@@ -38,6 +38,10 @@ export interface ProjectAPI {
     body?: string
     createType: 'local' | 'repo_issue' | 'github_issue' | 'gitlab_issue'
   }) => Promise<Card>
+  splitCard: (data: {
+    cardId: string
+    items: Array<{ title: string; body?: string }>
+  }) => Promise<{ cards: Card[]; error?: string }>
   editCardBody: (cardId: string, body: string | null) => Promise<{ card?: Card; error?: string }>
   deleteCard: (cardId: string) => Promise<{ success: boolean; error?: string }>
 
@@ -651,6 +655,9 @@ const projectAPI: ProjectAPI = {
     if (!result?.card) throw new Error('Failed to create card')
     return result.card
   },
+  splitCard: (data) => {
+    return ipcRenderer.invoke('splitCard', data)
+  },
 
   editCardBody: (cardId: string, body: string | null) => {
     return ipcRenderer.invoke('editCardBody', { cardId, body })
@@ -1193,6 +1200,7 @@ const allowedInvokeChannels = [
   // AI drafting
   'generateCardDescription',
   'generateCardList',
+  'generateSplitCards',
   'listWorktrees',
   'openWorktreeFolder',
   'removeWorktree',

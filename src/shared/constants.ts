@@ -86,6 +86,7 @@ export const EVENT_TYPES: readonly EventType[] = [
   'error',
   'card_created',
   'card_linked',
+  'card_split',
   'task_decomposed'
 ] as const
 

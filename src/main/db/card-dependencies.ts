@@ -176,6 +176,50 @@ export function getDependentsOfCard(cardId: string): CardDependency[] {
 }
 
 /**
+ * Get all cards that depend on a given card with related card info.
+ */
+export function getDependentsOfCardWithCards(cardId: string): CardDependencyWithCard[] {
+  const db = getDrizzle()
+  const rows = db
+    .select({
+      id: cardDependencies.id,
+      project_id: cardDependencies.project_id,
+      card_id: cardDependencies.card_id,
+      depends_on_card_id: cardDependencies.depends_on_card_id,
+      blocking_statuses_json: cardDependencies.blocking_statuses_json,
+      required_status: cardDependencies.required_status,
+      is_active: cardDependencies.is_active,
+      created_at: cardDependencies.created_at,
+      updated_at: cardDependencies.updated_at,
+      dep_card_id: cards.id,
+      dep_card_project_id: cards.project_id,
+      dep_card_title: cards.title,
+      dep_card_status: cards.status
+    })
+    .from(cardDependencies)
+    .leftJoin(cards, eq(cardDependencies.card_id, cards.id))
+    .where(eq(cardDependencies.depends_on_card_id, cardId))
+    .orderBy(asc(cardDependencies.created_at))
+    .all()
+
+  return rows.map((row) => {
+    const dep = rowToDependency(row)
+    if (row.dep_card_id) {
+      return {
+        ...dep,
+        card: {
+          id: row.dep_card_id,
+          project_id: row.dep_card_project_id!,
+          title: row.dep_card_title!,
+          status: row.dep_card_status as CardStatus
+        }
+      } as CardDependencyWithCard
+    }
+    return dep as CardDependencyWithCard
+  })
+}
+
+/**
  * Get all dependencies for a project.
  */
 export function getDependenciesByProject(projectId: string): CardDependency[] {

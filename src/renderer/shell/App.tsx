@@ -170,12 +170,6 @@ declare global {
       onDevResetTrigger: (callback: () => void) => () => void
     }
 
-    // For RepoStartDialog compatibility
-    electron: {
-      ipcRenderer: {
-        invoke: (channel: string, ...args: unknown[]) => Promise<unknown>
-      }
-    }
   }
 }
 

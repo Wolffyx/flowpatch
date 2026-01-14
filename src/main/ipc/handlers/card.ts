@@ -17,7 +17,8 @@ import {
   cancelJob,
   updateJobState,
   checkCanMoveToStatus,
-  deleteCard
+  deleteCard,
+  createCardDependency
 } from '../../db'
 import { SyncEngine } from '../../sync/engine'
 import { triggerProjectSync } from '../../sync/scheduler'
@@ -29,7 +30,24 @@ import {
   getAllStatusLabelsFromPolicy,
   logAction
 } from '@shared/utils'
-import type { CardStatus } from '@shared/types'
+import type { Card, CardStatus } from '@shared/types'
+
+function appendUniqueLines(body: string | null, lines: string[]): string {
+  const trimmed = (body ?? '').trim()
+  const existing = trimmed ? trimmed.split(/\r?\n/) : []
+  const toAdd = lines.filter((line) => line.trim() && !existing.includes(line))
+  if (toAdd.length === 0) return trimmed
+  if (!trimmed) return toAdd.join('\n')
+  return `${trimmed}\n\n${toAdd.join('\n')}`
+}
+
+function buildParentBacklink(card: { title: string; remote_number_or_iid: string | null; remote_url: string | null }): string[] {
+  const issueRef = card.remote_number_or_iid ? `#${card.remote_number_or_iid} ${card.title}` : card.title
+  const label = card.remote_number_or_iid ? `Parent issue: ${issueRef}` : `Parent card: ${issueRef}`
+  const lines = [label]
+  if (card.remote_url) lines.push(card.remote_url)
+  return lines
+}
 
 // ============================================================================
 // Handler Registration
@@ -142,6 +160,146 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
       }
 
       return { error: 'Invalid createType' }
+    }
+  )
+
+  // Split card into multiple new cards
+  ipcMain.handle(
+    'splitCard',
+    async (
+      _e,
+      payload: {
+        cardId: string
+        items: Array<{ title: string; body?: string }>
+      }
+    ) => {
+      logAction('splitCard', { cardId: payload.cardId })
+
+      const parent = getCard(payload.cardId)
+      if (!parent) {
+        return { error: 'Card not found' }
+      }
+
+      const project = getProject(parent.project_id)
+      if (!project) {
+        return { error: 'Project not found' }
+      }
+
+      const items = (payload.items || []).filter((item) => item?.title?.trim())
+      if (items.length === 0) {
+        return { error: 'At least one card title is required' }
+      }
+
+      const createType: 'local' | 'repo_issue' =
+        parent.remote_repo_key ? 'repo_issue' : 'local'
+
+      const policy = parsePolicyJson(project.policy_json)
+      const adapter =
+        createType === 'repo_issue'
+          ? AdapterRegistry.create({
+              repoKey: project.remote_repo_key!,
+              providerHint: project.provider_hint,
+              repoPath: project.local_path,
+              policy
+            })
+          : null
+
+      if (adapter) {
+        const authResult = await adapter.checkAuth()
+        if (!authResult.authenticated) {
+          const provider = adapter.providerKey === 'gitlab' ? 'GitLab' : 'GitHub'
+          return { error: `${provider} authentication failed: ${authResult.error || 'Not logged in'}` }
+        }
+      }
+
+      const createdCards: Card[] = []
+      const childIssueNumbers: string[] = []
+
+      for (const item of items) {
+        const backlinkLines = buildParentBacklink(parent)
+        const bodyWithBacklink = appendUniqueLines(item.body ?? null, backlinkLines)
+
+        if (createType === 'local') {
+          const card = createLocalTestCard(project.id, item.title.trim())
+          const updatedCard = bodyWithBacklink ? upsertCard({ ...card, body: bodyWithBacklink }) : card
+          createEvent(project.id, 'card_created', card.id, {
+            title: item.title.trim(),
+            type: 'local',
+            parentCardId: parent.id
+          })
+          createdCards.push(updatedCard)
+        } else {
+          const result = await adapter!.createIssue(item.title.trim(), bodyWithBacklink || undefined)
+          if (!result) {
+            const provider = adapter!.providerKey === 'gitlab' ? 'GitLab' : 'GitHub'
+            return { error: `Failed to create ${provider} issue` }
+          }
+
+          const card = upsertCard({
+            ...result.card,
+            project_id: project.id
+          })
+
+          createEvent(project.id, 'card_created', card.id, {
+            title: item.title.trim(),
+            type: adapter!.providerKey === 'gitlab' ? 'gitlab_issue' : 'github_issue',
+            issueNumber: result.number,
+            url: result.url,
+            parentCardId: parent.id
+          })
+
+          createdCards.push(card)
+          childIssueNumbers.push(String(result.number))
+        }
+
+        const created = createdCards[createdCards.length - 1]
+        createCardDependency({
+          projectId: project.id,
+          cardId: parent.id,
+          dependsOnCardId: created.id
+        })
+      }
+
+      createEvent(project.id, 'card_split', parent.id, {
+        parentCardId: parent.id,
+        childCardIds: createdCards.map((c) => c.id),
+        childIssueNumbers: childIssueNumbers.length > 0 ? childIssueNumbers : undefined
+      })
+
+      // Update parent body with remote relationship hints
+      const blockedByLines =
+        parent.remote_number_or_iid && childIssueNumbers.length > 0
+          ? childIssueNumbers.map((num) => `Blocked by #${num}`)
+          : createdCards.map((c) => `Blocked by: ${c.title}`)
+
+      const updatedParentBody = appendUniqueLines(parent.body, blockedByLines)
+      if (updatedParentBody && updatedParentBody !== parent.body) {
+        const updatedParent = upsertCard({
+          ...parent,
+          body: updatedParentBody,
+          sync_state: parent.remote_repo_key ? 'pending' : 'ok'
+        })
+
+        if (parent.remote_repo_key && parent.remote_number_or_iid && adapter) {
+          const issueNumber = parseInt(parent.remote_number_or_iid, 10)
+          if (!isNaN(issueNumber)) {
+            try {
+              const success = await adapter.updateIssueBody(issueNumber, updatedParentBody)
+              if (success) {
+                upsertCard({ ...updatedParent, sync_state: 'ok' })
+              }
+            } catch (error) {
+              logAction('splitCard:parentRemoteUpdateFailed', {
+                cardId: parent.id,
+                error: String(error)
+              })
+            }
+          }
+        }
+      }
+
+      notifyRenderer()
+      return { cards: createdCards }
     }
   )
 

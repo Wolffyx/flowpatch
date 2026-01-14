@@ -14,7 +14,8 @@ import {
   GitCompareArrows,
   MessageSquare,
   Pencil,
-  Save
+  Save,
+  Scissors
 } from 'lucide-react'
 import { Button } from './ui/button'
 import { Badge } from './ui/badge'
@@ -42,6 +43,7 @@ interface CardDrawerProps {
   onClose: () => void
   onMoveCard: (cardId: string, status: CardStatus) => void
   onRunWorker: (cardId: string) => void
+  onSplitCard?: (card: Card) => void
   onCardDeleted?: () => void
 }
 
@@ -53,6 +55,7 @@ export function CardDrawer({
   onClose,
   onMoveCard,
   onRunWorker,
+  onSplitCard,
   onCardDeleted
 }: CardDrawerProps): React.JSX.Element | null {
   const [worktree, setWorktree] = useState<Worktree | null>(null)
@@ -349,6 +352,22 @@ export function CardDrawer({
             )}
           </div>
 
+          {/* Actions */}
+          {projectId && (
+            <div>
+              <h4 className="text-sm font-medium mb-2">Actions</h4>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => onSplitCard?.(card)}
+                disabled={!onSplitCard}
+              >
+                <Scissors className="h-3 w-3 mr-1" />
+                Split with AI
+              </Button>
+            </div>
+          )}
+
           {/* Dependencies */}
           <div className="rounded-md bg-muted p-3">
             <DependencyManager card={card} />
@@ -541,6 +560,7 @@ export function CardDrawer({
               cardTitle={card.title}
             />
           )}
+
 
           {/* Timeline */}
           <div>

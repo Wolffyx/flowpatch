@@ -247,6 +247,7 @@ export {
   getDependenciesForCard,
   getDependenciesForCardWithCards,
   getDependentsOfCard,
+  getDependentsOfCardWithCards,
   getDependenciesByProject,
   countDependenciesForCard,
   countDependentsOfCard,

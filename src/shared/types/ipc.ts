@@ -293,6 +293,31 @@ export interface GenerateCardListResult {
   error?: string
 }
 
+export interface GenerateSplitCardsPayload {
+  projectId: string
+  cardId: string
+  count: number
+  toolPreference?: 'auto' | 'claude' | 'codex'
+  guidance?: string
+}
+
+export interface GenerateSplitCardsResult {
+  success?: boolean
+  toolUsed?: 'claude' | 'codex'
+  cards?: Array<{ title: string; body: string }>
+  error?: string
+}
+
+export interface SplitCardPayload {
+  cardId: string
+  items: Array<{ title: string; body?: string }>
+}
+
+export interface SplitCardResult {
+  cards?: Card[]
+  error?: string
+}
+
 // ============================================================================
 // UI Settings
 // ============================================================================
@@ -474,6 +499,7 @@ export interface IPCChannels {
   // Card
   createTestCard: { payload: CreateTestCardPayload; result: CreateTestCardResult }
   createCard: { payload: CreateCardPayload; result: CreateCardResult }
+  splitCard: { payload: SplitCardPayload; result: SplitCardResult }
   moveCard: { payload: MoveCardPayload; result: MoveCardResult }
 
   // Worker
@@ -505,6 +531,7 @@ export interface IPCChannels {
     result: GenerateCardDescriptionResult
   }
   generateCardList: { payload: GenerateCardListPayload; result: GenerateCardListResult }
+  generateSplitCards: { payload: GenerateSplitCardsPayload; result: GenerateSplitCardsResult }
 
   // UI
   setShowPullRequestsSection: {

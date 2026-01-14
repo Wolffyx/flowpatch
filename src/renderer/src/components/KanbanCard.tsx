@@ -1,3 +1,4 @@
+import type { MouseEvent } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import {
@@ -22,6 +23,7 @@ interface KanbanCardProps {
   linkedPRs?: CardLink[]
   isSelected: boolean
   onClick: () => void
+  onContextMenu?: (event: MouseEvent, card: Card) => void
 }
 
 /**
@@ -51,7 +53,8 @@ export function KanbanCard({
   card,
   linkedPRs,
   isSelected,
-  onClick
+  onClick,
+  onContextMenu
 }: KanbanCardProps): React.JSX.Element {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: card.id,
@@ -115,6 +118,12 @@ export function KanbanCard({
       onClick={(e) => {
         e.stopPropagation()
         onClick()
+      }}
+      onContextMenu={(e) => {
+        if (!onContextMenu) return
+        e.preventDefault()
+        e.stopPropagation()
+        onContextMenu(e, card)
       }}
     >
       {/* Priority indicator stripe */}

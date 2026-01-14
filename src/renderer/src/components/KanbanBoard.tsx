@@ -1,3 +1,4 @@
+import type { MouseEvent } from 'react'
 import { useState, useCallback, useRef } from 'react'
 import {
   DndContext,
@@ -16,6 +17,7 @@ import {
 import type { CollisionDetection } from '@dnd-kit/core'
 import { KanbanColumn } from './KanbanColumn'
 import { KanbanCard } from './KanbanCard'
+import { CardContextMenu } from './CardContextMenu'
 import { useDragAutoScroll } from '../hooks/useDragAutoScroll'
 import { KANBAN_COLUMNS, type Card, type CardLink, type CardStatus } from '../../../shared/types'
 
@@ -38,6 +40,7 @@ interface KanbanBoardProps {
   onMoveCard: (cardId: string, status: CardStatus) => void
   onAddCard: () => void
   onGenerateCards: () => void
+  onSplitCard: (card: Card) => void
 }
 
 export function KanbanBoard({
@@ -47,10 +50,13 @@ export function KanbanBoard({
   onSelectCard,
   onMoveCard,
   onAddCard,
-  onGenerateCards
+  onGenerateCards,
+  onSplitCard
 }: KanbanBoardProps): React.JSX.Element {
   const [activeCard, setActiveCard] = useState<Card | null>(null)
   const [overColumnId, setOverColumnId] = useState<CardStatus | null>(null)
+  const [contextMenuCard, setContextMenuCard] = useState<Card | null>(null)
+  const [contextMenuPosition, setContextMenuPosition] = useState<{ x: number; y: number } | null>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const { onDragMove: autoScrollOnDragMove, cleanup: cleanupAutoScroll } =
     useDragAutoScroll(scrollContainerRef)
@@ -157,6 +163,20 @@ export function KanbanBoard({
     [cleanupAutoScroll, cards, onMoveCard]
   )
 
+  const handleCardContextMenu = useCallback(
+    (event: MouseEvent, card: Card) => {
+      setContextMenuCard(card)
+      setContextMenuPosition({ x: event.clientX, y: event.clientY })
+      onSelectCard(card.id)
+    },
+    [onSelectCard]
+  )
+
+  const closeContextMenu = useCallback(() => {
+    setContextMenuCard(null)
+    setContextMenuPosition(null)
+  }, [])
+
   return (
     <DndContext
       sensors={sensors}
@@ -172,7 +192,10 @@ export function KanbanBoard({
       >
         <div
           className="flex h-full gap-4 p-4 min-w-max"
-          onClick={() => onSelectCard(null)}
+          onClick={() => {
+            onSelectCard(null)
+            closeContextMenu()
+          }}
         >
           {KANBAN_COLUMNS.map((column) => (
             <KanbanColumn
@@ -184,6 +207,7 @@ export function KanbanBoard({
               cardLinksByCardId={cardLinksByCardId}
               selectedCardId={selectedCardId}
               onSelectCard={onSelectCard}
+              onCardContextMenu={handleCardContextMenu}
               isOverColumn={overColumnId === column.id}
               onAddCard={column.id === 'draft' ? onAddCard : undefined}
               onGenerateCards={column.id === 'draft' ? onGenerateCards : undefined}
@@ -191,6 +215,15 @@ export function KanbanBoard({
           ))}
         </div>
       </div>
+
+      <CardContextMenu
+        open={!!contextMenuCard}
+        position={contextMenuPosition}
+        card={contextMenuCard}
+        onClose={closeContextMenu}
+        onOpenCard={(card) => onSelectCard(card.id)}
+        onSplitCard={onSplitCard}
+      />
 
       <DragOverlay>
         {activeCard && (

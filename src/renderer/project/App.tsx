@@ -28,6 +28,7 @@ import { WorkspaceDialog } from './components/WorkspaceDialog'
 import { UsageIndicator } from './components/UsageIndicator'
 import { FeatureSuggestionsDialog } from '../src/components/FeatureSuggestionsDialog'
 import { GraphViewDialog } from '../src/components/GraphViewDialog'
+import { SplitCardDialog } from '../src/components/SplitCardDialog'
 import { useAudioNotifications } from '../src/hooks/useAudioNotifications'
 import { Button } from '../src/components/ui/button'
 import { Switch } from '../src/components/ui/switch'
@@ -74,6 +75,10 @@ declare global {
       moveCard: (cardId: string, status: CardStatus) => Promise<void>
       ensureProjectRemote: (projectId: string) => Promise<{ project?: Project; error?: string }>
       createCard: (data: { title: string; body?: string; createType: CreateCardType }) => Promise<Card>
+      splitCard: (data: {
+        cardId: string
+        items: Array<{ title: string; body?: string }>
+      }) => Promise<{ cards?: Card[]; error?: string }>
       sync: () => Promise<void>
       onSyncComplete: (callback: () => void) => () => void
       isWorkerEnabled: () => Promise<boolean>
@@ -373,14 +378,6 @@ declare global {
       }>
     }
 
-    electron: {
-      ipcRenderer: {
-        invoke: (channel: string, ...args: unknown[]) => Promise<unknown>
-        send: (channel: string, ...args: unknown[]) => void
-        on: (channel: string, callback: (...args: unknown[]) => void) => void
-        removeListener: (channel: string, callback: (...args: unknown[]) => void) => void
-      }
-    }
   }
 }
 
@@ -426,6 +423,8 @@ export default function App(): React.JSX.Element {
   const [followUpDialogOpen, setFollowUpDialogOpen] = useState(false)
   const [pendingApproval, setPendingApproval] = useState<PlanApproval | null>(null)
   const [approvalCard, setApprovalCard] = useState<Card | null>(null)
+  const [splitDialogOpen, setSplitDialogOpen] = useState(false)
+  const [splitDialogCard, setSplitDialogCard] = useState<Card | null>(null)
 
   // Audio notifications - read config from project policy
   const notificationsConfig = useMemo(() => {
@@ -833,6 +832,11 @@ export default function App(): React.JSX.Element {
     setSelectedCardId(null)
   }, [])
 
+  const handleOpenSplitDialog = useCallback((card: Card): void => {
+    setSplitDialogCard(card)
+    setSplitDialogOpen(true)
+  }, [])
+
   // Follow-up instruction handler
   const handleFollowUpSubmit = useCallback(async (data: {
     jobId: string
@@ -1076,6 +1080,7 @@ export default function App(): React.JSX.Element {
             onMoveCard={handleMoveCard}
             onAddCard={handleOpenAddCard}
             onGenerateCards={handleGenerateCards}
+            onSplitCard={handleOpenSplitDialog}
           />
         </div>
 
@@ -1089,6 +1094,7 @@ export default function App(): React.JSX.Element {
             onClose={handleCloseDrawer}
             onMoveCard={handleMoveCard}
             onRunWorker={(cardId) => window.projectAPI.runWorker(cardId)}
+            onSplitCard={handleOpenSplitDialog}
           />
         )}
       </div>
@@ -1144,6 +1150,18 @@ export default function App(): React.JSX.Element {
         onReject={handleRejectPlan}
         onSkip={handleSkipApproval}
       />
+
+      {splitDialogCard && (
+        <SplitCardDialog
+          open={splitDialogOpen}
+          onOpenChange={(open) => {
+            setSplitDialogOpen(open)
+            if (!open) setSplitDialogCard(null)
+          }}
+          projectId={projectInfo?.projectId ?? ''}
+          card={splitDialogCard}
+        />
+      )}
 
       <WorkspaceDialog
         open={workspaceOpen}
