@@ -28,7 +28,8 @@ import {
   useShellTabs,
   useShellActivity,
   useShellProjects,
-  useWorkerStatus
+  useWorkerStatus,
+  useAutoUpdater
 } from './hooks'
 
 // Import interfaces (shell-api is imported for side effects)
@@ -68,21 +69,14 @@ export default function App(): React.JSX.Element {
   } = useShellProjects(setShowHome, loadTabs)
 
   // Activity
-  const {
-    activity,
-    recentJobs,
-    projectWorkerStatus,
-    loadActivity,
-    loadRecentJobs
-  } = useShellActivity(loadProjects)
+  const { activity, recentJobs, projectWorkerStatus, loadActivity, loadRecentJobs } =
+    useShellActivity(loadProjects)
 
   // Worker status
-  const { tabsWithStatus } = useWorkerStatus(
-    projects,
-    recentJobs,
-    projectWorkerStatus,
-    tabs
-  )
+  const { tabsWithStatus } = useWorkerStatus(projects, recentJobs, projectWorkerStatus, tabs)
+
+  // Auto-updater (initializes toast notifications for updates)
+  useAutoUpdater()
 
   // Derived state
   const activeTab = tabs.find((t) => t.id === activeTabId)
