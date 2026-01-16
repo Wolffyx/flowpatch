@@ -55,6 +55,38 @@ export interface ProjectAPI {
   runWorker: (cardId?: string) => Promise<void>
   cancelWorker: (jobId: string) => Promise<void>
 
+  // Dev Server (Test Mode)
+  getCardTestInfo: (projectId: string, cardId: string) => Promise<{
+    success: boolean
+    hasWorktree?: boolean
+    worktreePath?: string
+    branchName?: string | null
+    repoPath?: string
+    projectType?: { type: string; hasPackageJson: boolean; port?: number }
+    commands?: { install?: string; dev?: string; build?: string }
+    error?: string
+  }>
+  startDevServer: (params: {
+    projectId: string
+    cardId: string
+    workingDir: string
+    command: string
+    args: string[]
+    env?: Record<string, string>
+  }) => Promise<{ success: boolean; status?: string; port?: number; error?: string }>
+  stopDevServer: (cardId: string) => Promise<{ success: boolean; error?: string }>
+  getDevServerStatus: (cardId: string) => Promise<{
+    success: boolean
+    status?: string | null
+    port?: number
+    startedAt?: string
+    error?: string
+    output?: string[]
+  }>
+  onDevServerOutput: (callback: (data: { cardId: string; line: string; stream: 'stdout' | 'stderr'; timestamp: string }) => void) => () => void
+  onDevServerStatus: (callback: (data: { cardId: string; status: string; timestamp: string }) => void) => () => void
+  onDevServerPort: (callback: (data: { cardId: string; port: number; url: string; timestamp: string }) => void) => () => void
+
   // Plan Approval
   getPendingApprovals: () => Promise<{ approvals: PlanApproval[] }>
   getPlanApproval: (params: { approvalId?: string; jobId?: string }) => Promise<{ approval?: PlanApproval; error?: string }>
@@ -706,6 +738,65 @@ const projectAPI: ProjectAPI = {
   },
 
   // -------------------------------------------------------------------------
+  // Dev Server (Test Mode)
+  // -------------------------------------------------------------------------
+
+  getCardTestInfo: (projectId: string, cardId: string) => {
+    return ipcRenderer.invoke('getCardTestInfo', { projectId, cardId })
+  },
+
+  startDevServer: (params: {
+    projectId: string
+    cardId: string
+    workingDir: string
+    command: string
+    args: string[]
+    env?: Record<string, string>
+  }) => {
+    return ipcRenderer.invoke('startDevServer', params)
+  },
+
+  stopDevServer: (cardId: string) => {
+    return ipcRenderer.invoke('stopDevServer', { cardId })
+  },
+
+  getDevServerStatus: (cardId: string) => {
+    return ipcRenderer.invoke('getDevServerStatus', { cardId })
+  },
+
+  onDevServerOutput: (
+    callback: (data: { cardId: string; line: string; stream: 'stdout' | 'stderr'; timestamp: string }) => void
+  ) => {
+    const handler = (_event: IpcRendererEvent, data: { cardId: string; line: string; stream: 'stdout' | 'stderr'; timestamp: string }) => {
+      callback(data)
+    }
+    ipcRenderer.on('dev-server:output', handler)
+    return () => {
+      ipcRenderer.removeListener('dev-server:output', handler)
+    }
+  },
+
+  onDevServerStatus: (callback: (data: { cardId: string; status: string; timestamp: string }) => void) => {
+    const handler = (_event: IpcRendererEvent, data: { cardId: string; status: string; timestamp: string }) => {
+      callback(data)
+    }
+    ipcRenderer.on('dev-server:status', handler)
+    return () => {
+      ipcRenderer.removeListener('dev-server:status', handler)
+    }
+  },
+
+  onDevServerPort: (callback: (data: { cardId: string; port: number; url: string; timestamp: string }) => void) => {
+    const handler = (_event: IpcRendererEvent, data: { cardId: string; port: number; url: string; timestamp: string }) => {
+      callback(data)
+    }
+    ipcRenderer.on('dev-server:port', handler)
+    return () => {
+      ipcRenderer.removeListener('dev-server:port', handler)
+    }
+  },
+
+  // -------------------------------------------------------------------------
   // Plan Approval
   // -------------------------------------------------------------------------
 
@@ -1205,6 +1296,11 @@ const allowedInvokeChannels = [
   'openWorktreeFolder',
   'removeWorktree',
   'recreateWorktree',
+  // Dev Server (Test Mode)
+  'getCardTestInfo',
+  'startDevServer',
+  'stopDevServer',
+  'getDevServerStatus',
   // Onboarding dialogs (LabelSetupDialog, GithubProjectPromptDialog)
   'getRepoOnboardingState',
   'listRepoLabels',
@@ -1222,7 +1318,7 @@ const allowedInvokeChannels = [
 
 const allowedSendChannels = ['openExternal']
 
-const allowedOnChannels = ['themeChanged']
+const allowedOnChannels = ['themeChanged', 'dev-server:output', 'dev-server:status', 'dev-server:port']
 
 const electronAPI = {
   ipcRenderer: {

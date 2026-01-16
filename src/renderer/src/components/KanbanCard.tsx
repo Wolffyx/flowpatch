@@ -12,7 +12,8 @@ import {
   Link2,
   Clock,
   GitBranch,
-  CheckCircle2
+  CheckCircle2,
+  Server
 } from 'lucide-react'
 import { Badge } from './ui/badge'
 import { cn } from '../lib/utils'
@@ -25,6 +26,11 @@ interface KanbanCardProps {
   isSelected: boolean
   onClick: () => void
   onContextMenu?: (event: MouseEvent, card: Card) => void
+  devServerStatus?: {
+    isRunning: boolean
+    port?: number
+    status?: 'starting' | 'running' | 'stopped' | 'error'
+  }
 }
 
 interface KanbanCardBaseProps extends KanbanCardProps {
@@ -68,7 +74,8 @@ function KanbanCardBase({
   containerRef,
   style,
   isDragging = false,
-  isDragOverlay = false
+  isDragOverlay = false,
+  devServerStatus
 }: KanbanCardBaseProps): React.JSX.Element {
 
   const getProviderIcon = (): React.ReactNode => {
@@ -116,6 +123,8 @@ function KanbanCardBase({
         isDragOverlay && 'pointer-events-none',
         // Selected state
         isSelected && 'ring-2 ring-primary shadow-md',
+        // Dev server running - subtle green border highlight
+        devServerStatus?.isRunning && 'border-green-500/50 border-2',
         // Error states
         hasConflicts && 'border-orange-500/70 border-2',
         card.sync_state === 'error' && !hasConflicts && 'border-destructive/70',
@@ -157,6 +166,30 @@ function KanbanCardBase({
 
           {/* Status indicators */}
           <div className="flex items-center gap-1.5">
+            {devServerStatus?.isRunning && (
+              <span
+                title={
+                  devServerStatus.status === 'starting'
+                    ? 'Dev server starting...'
+                    : devServerStatus.port
+                      ? `Dev server running on port ${devServerStatus.port}`
+                      : 'Dev server running'
+                }
+                className={cn(
+                  'flex items-center justify-center h-5 w-5 rounded-full',
+                  devServerStatus.status === 'starting'
+                    ? 'bg-blue-500/10 animate-pulse'
+                    : 'bg-green-500/10'
+                )}
+              >
+                <Server
+                  className={cn(
+                    'h-3 w-3',
+                    devServerStatus.status === 'starting' ? 'text-blue-500' : 'text-green-500'
+                  )}
+                />
+              </span>
+            )}
             {hasConflicts && (
               <span
                 title="Merge conflicts - needs resolution"
@@ -250,7 +283,8 @@ export function KanbanCard({
   linkedPRs,
   isSelected,
   onClick,
-  onContextMenu
+  onContextMenu,
+  devServerStatus
 }: KanbanCardProps): React.JSX.Element {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: card.id,
@@ -275,6 +309,7 @@ export function KanbanCard({
       containerRef={setNodeRef}
       style={style}
       isDragging={isDragging}
+      devServerStatus={devServerStatus}
     />
   )
 }

@@ -100,6 +100,14 @@ export interface ShellAPI {
   // App Reset (Dev only)
   resetEverything: () => Promise<{ success: boolean; error?: string }>
   onDevResetTrigger: (callback: () => void) => () => void
+
+  // Auto-Updater
+  getUpdateStatus: () => Promise<UpdateStatus>
+  getAppVersion: () => Promise<string>
+  checkForUpdates: () => Promise<{ success: boolean }>
+  downloadUpdate: () => Promise<{ success: boolean }>
+  installUpdate: () => Promise<{ success: boolean }>
+  onUpdateStatusChanged: (callback: (status: UpdateStatus) => void) => () => void
 }
 
 // Re-export types from shared (these would be imported in actual usage)
@@ -193,6 +201,16 @@ interface AgentChatMessage {
   metadata_json?: string
   created_at: string
   updated_at?: string
+}
+
+// Auto-Updater types
+interface UpdateStatus {
+  state: 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
+  version?: string
+  releaseNotes?: string
+  releaseDate?: string
+  downloadProgress?: number
+  error?: string
 }
 
 // ============================================================================
@@ -492,6 +510,40 @@ const shellAPI: ShellAPI = {
     const handler = (_event: IpcRendererEvent) => callback()
     ipcRenderer.on('dev:triggerReset', handler)
     return () => ipcRenderer.removeListener('dev:triggerReset', handler)
+  },
+
+  // -------------------------------------------------------------------------
+  // Auto-Updater
+  // -------------------------------------------------------------------------
+
+  getUpdateStatus: () => {
+    return ipcRenderer.invoke('updater:getStatus')
+  },
+
+  getAppVersion: () => {
+    return ipcRenderer.invoke('updater:getVersion')
+  },
+
+  checkForUpdates: () => {
+    return ipcRenderer.invoke('updater:checkForUpdates')
+  },
+
+  downloadUpdate: () => {
+    return ipcRenderer.invoke('updater:downloadUpdate')
+  },
+
+  installUpdate: () => {
+    return ipcRenderer.invoke('updater:installUpdate')
+  },
+
+  onUpdateStatusChanged: (callback: (status: UpdateStatus) => void) => {
+    const handler = (_event: IpcRendererEvent, status: UpdateStatus) => {
+      callback(status)
+    }
+    ipcRenderer.on('updater:statusChanged', handler)
+    return () => {
+      ipcRenderer.removeListener('updater:statusChanged', handler)
+    }
   }
 }
 

@@ -251,6 +251,14 @@ export interface IGithubAdapter extends IRepoAdapter {
     prUrl: string
     issueNumbers: number[]
   }>>
+
+  /** Add a sub-issue relationship (child) to a parent issue using GitHub's sub-issues API */
+  addSubIssue(
+    parentNodeId: string,
+    childNodeId: string,
+    parentIssueNumber?: number,
+    childIssueNumber?: number
+  ): Promise<boolean>
 }
 
 /**

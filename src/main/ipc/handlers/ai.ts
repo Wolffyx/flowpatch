@@ -73,25 +73,39 @@ function buildSplitCardListPrompt(
   count: number,
   guidance?: string
 ): string {
+  const countInstruction =
+    count > 0
+      ? `Generate exactly ${count} child cards based on the parent card.`
+      : 'Analyze the parent card and generate an appropriate number of child cards (typically 2-6, but use your judgment based on the scope of work).'
+
   return [
     'You split a parent card into child cards that can be completed independently.',
     '',
-    `Generate exactly ${count} child cards based on the parent card.`,
+    countInstruction,
     '',
-    'Output requirements (follow exactly):',
-    '- Output ONLY valid JSON (no code fences, no markdown outside JSON).',
-    '- Output a JSON array of objects. Each object must have:',
-    '  - "title": string',
-    '  - "body": string (Markdown allowed inside this string)',
-    '- Keep titles short and action-oriented.',
-    '- Each child should be a distinct, non-overlapping slice of work.',
+    'CRITICAL OUTPUT REQUIREMENTS:',
+    '- Output ONLY a valid JSON array. No other text.',
+    '- Do NOT include any explanation, preamble, or markdown.',
+    '- Do NOT wrap the JSON in code fences.',
+    '- Start your response with [ and end with ]',
     '',
-    'Parent card:',
+    'Required JSON format:',
+    '[',
+    '  {"title": "Short action title", "body": "Description with acceptance criteria"},',
+    '  ...',
+    ']',
+    '',
+    'Each object must have:',
+    '- "title": string (short, action-oriented)',
+    '- "body": string (brief context + checklist when appropriate)',
+    '',
+    'Parent card to split:',
     `Title: ${parent.title || '(untitled)'}`,
     `Description: ${parent.body || 'No description provided'}`,
     '',
-    guidance?.trim() ? `Guidance: ${guidance.trim()}` : '',
-    ''
+    guidance?.trim() ? `Additional guidance: ${guidance.trim()}` : '',
+    '',
+    'Remember: Output ONLY the JSON array, nothing else.'
   ]
     .filter(Boolean)
     .join('\n')
@@ -101,18 +115,24 @@ function extractLikelyJson(raw: string): string {
   const text = raw.trim()
   if (!text) return ''
 
-  // Fast path: already JSON
+  // Fast path: already JSON array
   if (text.startsWith('[') && text.endsWith(']')) return text
 
   // Strip ```json fences if present
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)
-  if (fenced?.[1]) return fenced[1].trim()
+  if (fenced?.[1]) {
+    const fencedContent = fenced[1].trim()
+    if (fencedContent.startsWith('[')) return fencedContent
+  }
 
   // Best-effort: find the first array-shaped substring
   const first = text.indexOf('[')
   const last = text.lastIndexOf(']')
-  if (first >= 0 && last > first) return text.slice(first, last + 1).trim()
+  if (first >= 0 && last > first) {
+    return text.slice(first, last + 1).trim()
+  }
 
+  // No JSON array found - return original (will fail parsing with clear error)
   return text
 }
 
@@ -122,7 +142,11 @@ function parseCardListJson(raw: string, expectedCount: number): Array<{ title: s
   try {
     parsed = JSON.parse(extracted)
   } catch (err) {
-    throw new Error(`Failed to parse JSON card list: ${err instanceof Error ? err.message : String(err)}`)
+    const preview = raw.slice(0, 100).replace(/\n/g, ' ')
+    throw new Error(
+      `Failed to parse JSON card list: ${err instanceof Error ? err.message : String(err)}. ` +
+        `Response preview: "${preview}..."`
+    )
   }
 
   if (!Array.isArray(parsed)) throw new Error('Card list JSON must be an array')
@@ -136,8 +160,17 @@ function parseCardListJson(raw: string, expectedCount: number): Array<{ title: s
     return { title: title.trim(), body: body.trim() }
   })
 
-  if (cards.length !== expectedCount) {
+  // Only validate count if expectedCount > 0 (non-auto mode)
+  if (expectedCount > 0 && cards.length !== expectedCount) {
     throw new Error(`Expected ${expectedCount} cards, got ${cards.length}`)
+  }
+
+  // In auto mode, ensure we got at least 1 card and at most 12
+  if (cards.length === 0) {
+    throw new Error('No cards generated')
+  }
+  if (cards.length > 12) {
+    throw new Error(`Too many cards generated (${cards.length}), maximum is 12`)
   }
 
   return cards
@@ -460,8 +493,9 @@ export function registerAIHandlers(): void {
         const card = getCard(payload.cardId)
         if (!card) return { error: 'Card not found' }
 
+        // count=0 means auto mode (AI decides), otherwise clamp to 1-12
         const requested = Number.isFinite(payload.count) ? Math.floor(payload.count) : 0
-        const count = Math.min(12, Math.max(1, requested))
+        const count = requested <= 0 ? 0 : Math.min(12, Math.max(1, requested))
 
         const toolPreference: DraftToolPreference = payload.toolPreference || 'auto'
 

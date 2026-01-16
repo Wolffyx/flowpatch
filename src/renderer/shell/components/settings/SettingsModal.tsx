@@ -30,7 +30,8 @@ import {
   ShortcutsSection,
   AIAgentsSection,
   UsageLimitsSection,
-  DangerZoneSection
+  DangerZoneSection,
+  AboutSection
 } from './sections'
 
 interface SettingsModalProps {
@@ -64,6 +65,8 @@ function SettingsContent(): React.JSX.Element {
       return <UsageLimitsSection />
     case 'danger-zone':
       return <DangerZoneSection />
+    case 'about':
+      return <AboutSection />
     default:
       return <AppearanceSection />
   }

@@ -36,6 +36,7 @@ export const APP_DEFAULTS: Record<string, string> = {
   'worker.toolPreference': 'auto',
   'worker.maxMinutes': '25',
   'worker.planFirst': 'true',
+  'worker.enableTestMode': 'false',
 
   // UI settings
   'ui.showPullRequestsSection': 'false',
@@ -228,6 +229,7 @@ export const SETTINGS_SCHEMA: Record<string, 'string' | 'boolean' | 'number'> = 
   'worker.toolPreference': 'string',
   'worker.maxMinutes': 'number',
   'worker.planFirst': 'boolean',
+  'worker.enableTestMode': 'boolean',
   'ui.showPullRequestsSection': 'boolean',
   'ui.logsMaxLines': 'number',
   'logs.maxEntries': 'number',

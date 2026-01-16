@@ -18,6 +18,8 @@ import { startIndexScheduler, stopIndexScheduler } from './services/flowpatch-in
 import { stopAllSyncSchedulers } from './sync/scheduler'
 import { reconcileAllProjects } from './services/worktree-reconciler'
 import { initializeSecurity, cleanupSecurity } from './security'
+import { devServerManager } from './services/dev-server-manager'
+import { initAutoUpdater, stopPeriodicChecks } from './services/auto-updater'
 
 // ============================================================================
 // App Initialization
@@ -67,6 +69,9 @@ app.whenReady().then(() => {
     console.error('Failed to reconcile worktrees on startup:', err)
   })
 
+  // Initialize auto-updater (checks for updates on startup and periodically)
+  initAutoUpdater()
+
   // Handle macOS dock click
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -91,12 +96,16 @@ app.on('window-all-closed', () => {
 })
 
 // Stop all worker loops and cleanup scheduler on app quit
-app.on('before-quit', () => {
+app.on('before-quit', async () => {
   stopAllWorkerLoops()
   stopAllSyncSchedulers()
   stopCleanupScheduler()
   stopIndexScheduler()
+  stopPeriodicChecks()
   cleanupSecurity()
+
+  // Stop all dev servers
+  await devServerManager.stopAll()
 
   // Unregister dev shortcut
   if (is.dev) {

@@ -39,7 +39,9 @@ appImage:
   artifactName: ${name}-${version}.${ext}
 npmRebuild: false
 publish:
-  provider: generic
-  url: https://example.com/auto-updates
+  provider: github
+  owner: Wolffyx
+  repo: flowpatch
+  releaseType: release
 electronDownload:
   mirror: https://npmmirror.com/mirrors/electron/

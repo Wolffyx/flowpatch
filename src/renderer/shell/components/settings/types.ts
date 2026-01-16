@@ -19,6 +19,7 @@ export type SettingsSection =
   | 'ai-agents'
   | 'usage-limits'
   | 'danger-zone'
+  | 'about'
 
 export type ThemePreference = 'light' | 'dark' | 'system'
 export type WorkerToolPreference = 'auto' | 'claude' | 'codex'

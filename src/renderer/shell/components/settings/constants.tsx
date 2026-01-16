@@ -19,7 +19,8 @@ import {
   Brain,
   Zap,
   ClipboardList,
-  Users
+  Users,
+  Info
 } from 'lucide-react'
 import type { ThemePreference, WorkerToolPreference, SectionConfig } from './types'
 import type { ThinkingMode, PlanningMode, MergeStrategy, ConflictResolution } from '@shared/types'
@@ -31,7 +32,8 @@ export const SETTINGS_SECTIONS: SectionConfig[] = [
   { id: 'shortcuts', label: 'Shortcuts', icon: Key },
   { id: 'ai-agents', label: 'AI Agents', icon: Bot },
   { id: 'usage-limits', label: 'Usage & Limits', icon: Zap },
-  { id: 'danger-zone', label: 'Danger Zone', icon: AlertTriangle }
+  { id: 'danger-zone', label: 'Danger Zone', icon: AlertTriangle },
+  { id: 'about', label: 'About', icon: Info }
 ]
 
 // Theme options

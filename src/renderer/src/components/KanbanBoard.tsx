@@ -43,6 +43,7 @@ interface KanbanBoardProps {
   onAddCard: () => void
   onGenerateCards: () => void
   onSplitCard: (card: Card) => void
+  devServerStatusByCardId?: Record<string, { isRunning: boolean; port?: number; status?: 'starting' | 'running' | 'stopped' | 'error' }>
 }
 
 export function KanbanBoard({
@@ -53,7 +54,8 @@ export function KanbanBoard({
   onMoveCard,
   onAddCard,
   onGenerateCards,
-  onSplitCard
+  onSplitCard,
+  devServerStatusByCardId
 }: KanbanBoardProps): React.JSX.Element {
   const [activeCard, setActiveCard] = useState<Card | null>(null)
   const [overColumnId, setOverColumnId] = useState<CardStatus | null>(null)
@@ -226,6 +228,7 @@ export function KanbanBoard({
               isOverColumn={overColumnId === column.id}
               onAddCard={column.id === 'draft' ? onAddCard : undefined}
               onGenerateCards={column.id === 'draft' ? onGenerateCards : undefined}
+              devServerStatusByCardId={devServerStatusByCardId}
             />
           ))}
         </div>

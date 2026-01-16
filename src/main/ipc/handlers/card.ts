@@ -240,6 +240,30 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
             project_id: project.id
           })
 
+          // Add GitHub sub-issue relationship (populates native "Relationships" section)
+          if (isGithubAdapter(adapter!)) {
+            const parentIssueNumber = parent.remote_number_or_iid
+              ? parseInt(parent.remote_number_or_iid, 10)
+              : undefined
+            const childIssueNumber = result.number
+
+            try {
+              await (adapter as IGithubAdapter).addSubIssue(
+                parent.remote_node_id || '',
+                result.card.remote_node_id || '',
+                parentIssueNumber,
+                childIssueNumber
+              )
+            } catch (subIssueError) {
+              // Log but don't fail the split - markdown backlinks are still added
+              logAction('splitCard:addSubIssueFailed', {
+                parentIssueNumber,
+                childIssueNumber,
+                error: String(subIssueError)
+              })
+            }
+          }
+
           createEvent(project.id, 'card_created', card.id, {
             title: item.title.trim(),
             type: adapter!.providerKey === 'gitlab' ? 'gitlab_issue' : 'github_issue',

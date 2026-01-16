@@ -10,12 +10,12 @@ import {
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Textarea } from './ui/textarea'
-import { ScrollArea } from './ui/scroll-area'
-import { Loader2, ArrowUp, ArrowDown, Trash2 } from 'lucide-react'
+import { Loader2, ArrowUp, ArrowDown, Trash2, Minus, Plus, RefreshCw } from 'lucide-react'
 import { cn } from '../lib/utils'
 import type { Card } from '../../../shared/types'
 
 type ToolPreference = 'auto' | 'claude' | 'codex'
+type CountMode = 'auto' | 'manual'
 type Step = 'configure' | 'review'
 
 interface SplitCardDialogProps {
@@ -38,6 +38,7 @@ export function SplitCardDialog({
 }: SplitCardDialogProps): React.JSX.Element {
   const [step, setStep] = useState<Step>('configure')
   const [toolPreference, setToolPreference] = useState<ToolPreference>('auto')
+  const [countMode, setCountMode] = useState<CountMode>('auto')
   const [count, setCount] = useState(3)
   const [guidance, setGuidance] = useState('')
   const [cards, setCards] = useState<Array<{ title: string; body: string }>>([])
@@ -49,6 +50,7 @@ export function SplitCardDialog({
     if (!open) return
     setStep('configure')
     setToolPreference('auto')
+    setCountMode('auto')
     setCount(3)
     setGuidance('')
     setCards([])
@@ -60,36 +62,53 @@ export function SplitCardDialog({
   const canGenerate = projectId.trim().length > 0 && !isGenerating
   const createLabel = card.remote_repo_key ? 'Repo issues' : 'Local cards'
 
-  const handleGenerate = useCallback(async (): Promise<void> => {
-    if (!canGenerate) return
-    setIsGenerating(true)
-    setError(null)
-    try {
-      const result: {
-        success?: boolean
-        toolUsed?: 'claude' | 'codex'
-        cards?: Array<{ title: string; body: string }>
-        error?: string
-      } = await window.electron.ipcRenderer.invoke('generateSplitCards', {
-        projectId,
-        cardId: card.id,
-        count: clampCount(count),
-        toolPreference,
-        guidance
-      })
+  const handleGenerate = useCallback(
+    async (adjustment?: 'more' | 'fewer'): Promise<void> => {
+      if (!canGenerate) return
+      setIsGenerating(true)
+      setError(null)
+      try {
+        // Build guidance with adjustment request if needed
+        let fullGuidance = guidance
+        if (adjustment === 'more') {
+          const currentCount = cards.length || count
+          fullGuidance = `${guidance}\n\nIMPORTANT: The previous split produced ${currentCount} cards which was too few. Please generate MORE cards (at least ${currentCount + 2}).`.trim()
+        } else if (adjustment === 'fewer') {
+          const currentCount = cards.length || count
+          fullGuidance = `${guidance}\n\nIMPORTANT: The previous split produced ${currentCount} cards which was too many. Please generate FEWER cards (at most ${Math.max(2, currentCount - 2)}).`.trim()
+        }
 
-      if (result?.error) throw new Error(result.error)
-      const nextCards = Array.isArray(result?.cards) ? result.cards : []
-      if (nextCards.length === 0) throw new Error('No cards returned from agent')
+        // When adjusting (more/fewer), always use auto mode (count=0) so AI can decide new count
+        // Otherwise respect the user's countMode setting
+        const effectiveCount = adjustment ? 0 : countMode === 'auto' ? 0 : clampCount(count)
 
-      setCards(nextCards.map((c) => ({ title: c.title || '', body: c.body || '' })))
-      setStep('review')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to generate cards')
-    } finally {
-      setIsGenerating(false)
-    }
-  }, [canGenerate, card.id, count, guidance, projectId, toolPreference])
+        const result: {
+          success?: boolean
+          toolUsed?: 'claude' | 'codex'
+          cards?: Array<{ title: string; body: string }>
+          error?: string
+        } = await window.electron.ipcRenderer.invoke('generateSplitCards', {
+          projectId,
+          cardId: card.id,
+          count: effectiveCount,
+          toolPreference,
+          guidance: fullGuidance
+        })
+
+        if (result?.error) throw new Error(result.error)
+        const nextCards = Array.isArray(result?.cards) ? result.cards : []
+        if (nextCards.length === 0) throw new Error('No cards returned from agent')
+
+        setCards(nextCards.map((c) => ({ title: c.title || '', body: c.body || '' })))
+        setStep('review')
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to generate cards')
+      } finally {
+        setIsGenerating(false)
+      }
+    },
+    [canGenerate, card.id, cards.length, count, countMode, guidance, projectId, toolPreference]
+  )
 
   const moveCard = useCallback((index: number, dir: -1 | 1) => {
     setCards((prev) => {
@@ -139,7 +158,7 @@ export function SplitCardDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[95vw] sm:max-w-[820px] max-h-[90vh] flex flex-col overflow-hidden">
+      <DialogContent className="max-w-[95vw] sm:max-w-[820px] h-[85vh] flex flex-col overflow-hidden">
         <DialogHeader className="shrink-0">
           <DialogTitle>Split card with AI</DialogTitle>
           <DialogDescription>
@@ -147,10 +166,9 @@ export function SplitCardDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex-1 min-h-0 overflow-hidden">
+        <div className="flex-1 min-h-0 overflow-y-auto pr-2">
           {step === 'configure' ? (
-            <ScrollArea className="h-full pr-4 -mr-4">
-              <div className="grid gap-4 py-2">
+            <div className="grid gap-4 py-2">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-sm text-muted-foreground">Tool:</span>
                   <div className="flex gap-2">
@@ -167,9 +185,31 @@ export function SplitCardDialog({
                       </Button>
                     ))}
                   </div>
-                  <div className="flex-1" />
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-muted-foreground">Cards:</span>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm text-muted-foreground">Cards:</span>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={countMode === 'auto' ? 'default' : 'outline'}
+                      onClick={() => setCountMode('auto')}
+                      disabled={isGenerating || isCreating}
+                    >
+                      Auto
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={countMode === 'manual' ? 'default' : 'outline'}
+                      onClick={() => setCountMode('manual')}
+                      disabled={isGenerating || isCreating}
+                    >
+                      Manual
+                    </Button>
+                  </div>
+                  {countMode === 'manual' && (
                     <Input
                       type="number"
                       inputMode="numeric"
@@ -177,10 +217,13 @@ export function SplitCardDialog({
                       max={12}
                       value={count}
                       onChange={(e) => setCount(clampCount(Number(e.target.value)))}
-                      className="w-24"
+                      className="w-20"
                       disabled={isGenerating || isCreating}
                     />
-                  </div>
+                  )}
+                  {countMode === 'auto' && (
+                    <span className="text-xs text-muted-foreground">AI decides the optimal number</span>
+                  )}
                 </div>
 
                 <div className="grid gap-2">
@@ -218,12 +261,47 @@ export function SplitCardDialog({
                   </div>
                 )}
               </div>
-            </ScrollArea>
           ) : (
-            <ScrollArea className="h-full pr-4 -mr-4">
-              <div className="grid gap-3 py-2">
-                <div className="text-sm text-muted-foreground">
-                  Review and edit the generated cards. They will be created as {createLabel.toLowerCase()}.
+            <div className="grid gap-3 py-2">
+              <div className="flex items-center justify-between gap-2 sticky top-0 bg-background py-2 -mt-2 z-10">
+                  <div className="text-sm text-muted-foreground">
+                    Review and edit the {cards.length} generated cards. They will be created as{' '}
+                    {createLabel.toLowerCase()}.
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleGenerate('fewer')}
+                      disabled={isGenerating || isCreating}
+                      title="Regenerate with fewer cards"
+                    >
+                      <Minus className="h-3 w-3 mr-1" />
+                      Fewer
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleGenerate()}
+                      disabled={isGenerating || isCreating}
+                      title="Regenerate cards"
+                    >
+                      <RefreshCw className={cn('h-3 w-3', isGenerating && 'animate-spin')} />
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleGenerate('more')}
+                      disabled={isGenerating || isCreating}
+                      title="Regenerate with more cards"
+                    >
+                      More
+                      <Plus className="h-3 w-3 ml-1" />
+                    </Button>
+                  </div>
                 </div>
 
                 {cards.map((c, idx) => (
@@ -285,13 +363,12 @@ export function SplitCardDialog({
                   </div>
                 ))}
 
-                {error && (
-                  <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                    {error}
-                  </div>
-                )}
-              </div>
-            </ScrollArea>
+              {error && (
+                <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                  {error}
+                </div>
+              )}
+            </div>
           )}
         </div>
 

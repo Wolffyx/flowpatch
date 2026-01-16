@@ -15,7 +15,8 @@ import {
   MessageSquare,
   Pencil,
   Save,
-  Scissors
+  Scissors,
+  TestTube
 } from 'lucide-react'
 import { Button } from './ui/button'
 import { Badge } from './ui/badge'
@@ -23,6 +24,7 @@ import { ScrollArea } from './ui/scroll-area'
 import { GitDiffDialog } from './GitDiffDialog'
 import { AgentChatDialog } from './AgentChatDialog'
 import { DependencyManager } from './DependencyManager'
+import { TestModificationsDialog } from './TestModificationsDialog'
 import { cn } from '../lib/utils'
 import { formatRelativeTime, parseLabels, parseAssignees } from '../lib/utils'
 import {
@@ -68,6 +70,19 @@ export function CardDrawer({
   const [isSavingDescription, setIsSavingDescription] = useState(false)
   const [isDeletingCard, setIsDeletingCard] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [testDialogOpen, setTestDialogOpen] = useState(false)
+  const [testInfo, setTestInfo] = useState<{
+    success: boolean
+    hasWorktree?: boolean
+    worktreePath?: string
+    branchName?: string | null
+    repoPath?: string
+    projectType?: { type: string; hasPackageJson: boolean; port?: number }
+    commands?: { install?: string; dev?: string; build?: string }
+    error?: string
+  } | null>(null)
+  const [testModeEnabled, setTestModeEnabled] = useState(false)
+  const [checkingTestInfo, setCheckingTestInfo] = useState(false)
 
   // Load worktree and latest job info for this card
   useEffect(() => {
@@ -99,6 +114,8 @@ export function CardDrawer({
         } else {
           setLatestJob(null)
         }
+
+        // Test mode will be checked when button is clicked
       } catch {
         setWorktree(null)
         setLatestJob(null)
@@ -144,6 +161,29 @@ export function CardDrawer({
       setWorktreeLoading(false)
     }
   }
+
+  const handleOpenTestDialog = async (): Promise<void> => {
+    if (!card || !projectId) return
+
+    setCheckingTestInfo(true)
+    try {
+      const info = (await window.projectAPI.getCardTestInfo(projectId, card.id)) as typeof testInfo
+      setTestInfo(info)
+      if (info.success) {
+        setTestDialogOpen(true)
+      } else {
+        // Show error - no branch/worktree found
+        console.error('Failed to get test info:', info.error)
+      }
+    } catch (error) {
+      console.error('Failed to load test info:', error)
+    } finally {
+      setCheckingTestInfo(false)
+    }
+  }
+
+  // Check if test button should be shown - show if card has worktree or is in progress/ready
+  const showTestButton = worktree || card.status === 'in_progress' || card.status === 'ready'
 
   // Reset edit state when card changes
   useEffect(() => {
@@ -435,6 +475,22 @@ export function CardDrawer({
             </div>
           )}
 
+          {/* Test Modifications */}
+          {showTestButton && (
+            <div>
+              <h4 className="text-sm font-medium mb-2">Test Modifications</h4>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleOpenTestDialog}
+                disabled={checkingTestInfo}
+              >
+                <TestTube className="h-4 w-4 mr-2" />
+                {checkingTestInfo ? 'Checking...' : 'Test Modifications'}
+              </Button>
+            </div>
+          )}
+
           {/* Agent Chat - shown when there's a job for this card */}
           {latestJob && (
             <div>
@@ -640,6 +696,17 @@ export function CardDrawer({
           </div>
         </div>
       </ScrollArea>
+
+      {/* Test Modifications Dialog */}
+      {testInfo && (
+        <TestModificationsDialog
+          open={testDialogOpen}
+          onOpenChange={setTestDialogOpen}
+          projectId={projectId || ''}
+          cardId={card.id}
+          testInfo={testInfo}
+        />
+      )}
     </div>
   )
 }

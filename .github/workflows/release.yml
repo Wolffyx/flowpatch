@@ -1,0 +1,276 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*' # Also trigger on version tags for manual releases
+
+jobs:
+  # Run tests first to ensure quality
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run typecheck
+        run: npm run typecheck
+
+      - name: Run tests
+        run: npm run test:unit
+
+  # Auto-bump version, generate changelog, and create tag
+  version-bump:
+    needs: test
+    runs-on: ubuntu-latest
+    # Only run on push to main (not on tag push, to avoid infinite loop)
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    outputs:
+      new_version: ${{ steps.bump_version.outputs.new_version }}
+      skipped: ${{ steps.check_skip.outputs.skipped }}
+      changelog: ${{ steps.generate_changelog.outputs.changelog }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Check if should skip (commit from bot)
+        id: check_skip
+        run: |
+          COMMIT_AUTHOR=$(git log -1 --pretty=format:'%an')
+          if [[ "$COMMIT_AUTHOR" == "github-actions[bot]" ]]; then
+            echo "skipped=true" >> $GITHUB_OUTPUT
+            echo "Skipping: commit was from github-actions[bot]"
+          else
+            echo "skipped=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate changelog from commits
+        id: generate_changelog
+        if: steps.check_skip.outputs.skipped == 'false'
+        run: |
+          # Find the previous tag
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+
+          if [ -z "$PREVIOUS_TAG" ]; then
+            echo "No previous tag found, using all commits"
+            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges -n 50)
+          else
+            echo "Previous tag: $PREVIOUS_TAG"
+            COMMITS=$(git log ${PREVIOUS_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+          fi
+
+          # Categorize commits
+          FEATURES=""
+          FIXES=""
+          OTHER=""
+
+          while IFS= read -r line; do
+            if [ -z "$line" ]; then continue; fi
+
+            # Skip version bump commits
+            if echo "$line" | grep -qiE "bump version|chore:.*version|\[skip ci\]"; then
+              continue
+            fi
+
+            # Categorize based on commit message prefixes
+            if echo "$line" | grep -qiE "^- (feat|feature|add|new)"; then
+              FEATURES="${FEATURES}${line}"$'\n'
+            elif echo "$line" | grep -qiE "^- (fix|bug|patch|hotfix)"; then
+              FIXES="${FIXES}${line}"$'\n'
+            else
+              OTHER="${OTHER}${line}"$'\n'
+            fi
+          done <<< "$COMMITS"
+
+          # Build changelog
+          CHANGELOG=""
+
+          if [ -n "$FEATURES" ]; then
+            CHANGELOG="${CHANGELOG}## ✨ New Features"$'\n'
+            CHANGELOG="${CHANGELOG}${FEATURES}"$'\n'
+          fi
+
+          if [ -n "$FIXES" ]; then
+            CHANGELOG="${CHANGELOG}## 🐛 Bug Fixes"$'\n'
+            CHANGELOG="${CHANGELOG}${FIXES}"$'\n'
+          fi
+
+          if [ -n "$OTHER" ]; then
+            CHANGELOG="${CHANGELOG}## 📦 Other Changes"$'\n'
+            CHANGELOG="${CHANGELOG}${OTHER}"$'\n'
+          fi
+
+          # If no categorized commits, show raw list
+          if [ -z "$CHANGELOG" ]; then
+            CHANGELOG="## 📦 Changes"$'\n'
+            CHANGELOG="${CHANGELOG}${COMMITS}"$'\n'
+          fi
+
+          # Add footer
+          CHANGELOG="${CHANGELOG}"$'\n'"---"$'\n'"*Auto-generated release notes*"
+
+          # Output (escape for GitHub Actions)
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          echo "Generated changelog:"
+          echo "$CHANGELOG"
+
+      - name: Bump patch version
+        id: bump_version
+        if: steps.check_skip.outputs.skipped == 'false'
+        run: |
+          # Get current version
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          echo "Current version: $CURRENT_VERSION"
+
+          # Parse version parts
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+
+          # Handle pre-release versions (e.g., 1.0.0-beta.1)
+          PATCH_NUM=$(echo "$PATCH" | cut -d'-' -f1)
+
+          # Increment patch
+          NEW_PATCH=$((PATCH_NUM + 1))
+          NEW_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
+
+          echo "New version: $NEW_VERSION"
+          echo "new_version=v${NEW_VERSION}" >> $GITHUB_OUTPUT
+
+          # Update package.json
+          npm version $NEW_VERSION --no-git-tag-version
+
+          # Commit and push
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "chore: bump version to ${NEW_VERSION} [skip ci]"
+          git push origin main
+
+          # Create and push tag
+          git tag -a "v${NEW_VERSION}" -m "Release v${NEW_VERSION}"
+          git push origin "v${NEW_VERSION}"
+
+  # Create GitHub Release with changelog
+  create-release:
+    needs: [version-bump]
+    if: |
+      always() &&
+      needs.version-bump.result == 'success' &&
+      needs.version-bump.outputs.skipped == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version-bump.outputs.new_version }}
+          name: Release ${{ needs.version-bump.outputs.new_version }}
+          body: ${{ needs.version-bump.outputs.changelog }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Build and publish for each platform
+  build:
+    needs: [test, version-bump, create-release]
+    # Build if version was bumped OR if triggered by manual tag push
+    if: |
+      always() &&
+      needs.test.result == 'success' &&
+      (
+        (needs.version-bump.result == 'success' && needs.version-bump.outputs.skipped == 'false') ||
+        needs.version-bump.result == 'skipped'
+      )
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            build_command: npm run build:win
+          - os: macos-latest
+            build_command: npm run build:mac
+          - os: ubuntu-latest
+            build_command: npm run build:linux
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Fetch the latest commit (with bumped version)
+          ref: ${{ needs.version-bump.outputs.new_version || github.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and publish to GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Code signing (optional, for later):
+          # CSC_LINK: ${{ secrets.CSC_LINK }}
+          # CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: ${{ matrix.build_command }}
+
+  # Cleanup old releases to save storage (for free GitHub accounts)
+  cleanup:
+    needs: build
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Delete old releases
+        uses: dev-drprasad/delete-older-releases@v0.3.4
+        with:
+          keep_latest: 1
+          delete_tags: true
+          delete_tag_pattern: '^v'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Delete old prereleases
+        uses: dev-drprasad/delete-older-releases@v0.3.4
+        with:
+          keep_latest: 1
+          delete_tags: true
+          delete_tag_pattern: '^v.*-(alpha|beta|rc)'
+          delete_prerelease_only: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

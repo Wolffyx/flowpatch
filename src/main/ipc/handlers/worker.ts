@@ -11,12 +11,19 @@ import {
   updateProjectWorkerEnabled,
   updateProjectPolicyJson,
   createEvent,
-  createJob
+  createJob,
+  getCard
 } from '../../db'
+import { getWorktreeByCard } from '../../db/worktrees'
 import { runWorker as executeWorkerPipeline } from '../../worker/pipeline'
 import { startWorkerLoop, stopWorkerLoop } from '../../worker/loop'
 import { parsePolicyJson, logAction } from '@shared/utils'
 import { verifySecureRequest } from '../../security'
+import { generateWorktreeBranchName } from '@shared/types'
+import { checkBranchExists } from '../../worker/git-operations'
+import { detectProjectType } from '../../services/project-type-detector'
+import { devServerManager } from '../../services/dev-server-manager'
+import type { ProjectTypeInfo } from '../../services/project-type-detector'
 
 // ============================================================================
 // Security Helpers
@@ -183,5 +190,182 @@ export function registerWorkerHandlers(notifyRenderer: () => void): void {
 
     notifyRenderer()
     return { success: true, job }
+  })
+
+  // Get card test info (branch, worktree, project type, commands)
+  ipcMain.handle(
+    'getCardTestInfo',
+    async (event, payload: { projectId: string; cardId: string }) => {
+      const securityError = verifyWorkerRequest(event, 'getCardTestInfo')
+      if (securityError) {
+        return { error: `Security: ${securityError}` }
+      }
+
+      try {
+        const project = getProject(payload.projectId)
+        if (!project) {
+          return { error: 'Project not found' }
+        }
+
+        const card = getCard(payload.cardId)
+        if (!card) {
+          return { error: 'Card not found' }
+        }
+
+        // Check for worktree first
+        const worktree = getWorktreeByCard(payload.cardId)
+        let workingDir: string
+        let branchName: string | null = null
+        let hasWorktree = false
+
+        if (worktree && worktree.status !== 'cleaned' && worktree.status !== 'error') {
+          hasWorktree = true
+          workingDir = worktree.worktree_path
+          branchName = worktree.branch_name
+        } else {
+          // No worktree, check for branch
+          workingDir = project.local_path
+          const policy = parsePolicyJson(project.policy_json)
+          const branchPrefix = policy.worker?.worktree?.branchPrefix ?? 'flowpatch/'
+          branchName = generateWorktreeBranchName(
+            card.provider,
+            card.remote_number_or_iid,
+            card.title,
+            branchPrefix
+          )
+
+          // Check if branch exists
+          const branchCheck = await checkBranchExists(project.local_path, branchName)
+          if (!branchCheck.localExists && !branchCheck.remoteExists) {
+            branchName = null
+          }
+        }
+
+        // Detect project type
+        const projectType = detectProjectType(workingDir)
+
+        // Parse commands
+        const commands: { install?: string; dev?: string; build?: string } = {}
+        if (projectType.installCommand) {
+          commands.install = projectType.installCommand
+        }
+        if (projectType.devCommand) {
+          commands.dev = projectType.devCommand
+        }
+        if (projectType.buildCommand) {
+          commands.build = projectType.buildCommand
+        }
+
+        return {
+          success: true,
+          hasWorktree,
+          worktreePath: hasWorktree ? workingDir : undefined,
+          branchName,
+          repoPath: project.local_path,
+          projectType: {
+            type: projectType.type,
+            hasPackageJson: projectType.hasPackageJson,
+            port: projectType.port
+          },
+          commands
+        }
+      } catch (error) {
+        logAction('getCardTestInfo:error', {
+          projectId: payload.projectId,
+          cardId: payload.cardId,
+          error: error instanceof Error ? error.message : String(error)
+        })
+        return { error: error instanceof Error ? error.message : String(error) }
+      }
+    }
+  )
+
+  // Start dev server
+  ipcMain.handle(
+    'startDevServer',
+    async (
+      event,
+      payload: {
+        projectId: string
+        cardId: string
+        workingDir: string
+        command: string
+        args: string[]
+        env?: Record<string, string>
+      }
+    ) => {
+      const securityError = verifyWorkerRequest(event, 'startDevServer')
+      if (securityError) {
+        return { error: `Security: ${securityError}` }
+      }
+
+      try {
+        logAction('startDevServer', { projectId: payload.projectId, cardId: payload.cardId })
+
+        const processInfo = await devServerManager.startServer({
+          cardId: payload.cardId,
+          projectId: payload.projectId,
+          workingDir: payload.workingDir,
+          command: payload.command,
+          args: payload.args,
+          env: payload.env
+        })
+
+        return {
+          success: true,
+          status: processInfo.status,
+          port: processInfo.port
+        }
+      } catch (error) {
+        logAction('startDevServer:error', {
+          projectId: payload.projectId,
+          cardId: payload.cardId,
+          error: error instanceof Error ? error.message : String(error)
+        })
+        return { error: error instanceof Error ? error.message : String(error) }
+      }
+    }
+  )
+
+  // Stop dev server
+  ipcMain.handle('stopDevServer', async (event, payload: { cardId: string }) => {
+    const securityError = verifyWorkerRequest(event, 'stopDevServer')
+    if (securityError) {
+      return { error: `Security: ${securityError}` }
+    }
+
+    try {
+      logAction('stopDevServer', { cardId: payload.cardId })
+      await devServerManager.stopServer(payload.cardId)
+      return { success: true }
+    } catch (error) {
+      logAction('stopDevServer:error', {
+        cardId: payload.cardId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+      return { error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  // Get dev server status
+  ipcMain.handle('getDevServerStatus', (event, payload: { cardId: string }) => {
+    const securityError = verifyWorkerRequest(event, 'getDevServerStatus')
+    if (securityError) {
+      return { error: `Security: ${securityError}` }
+    }
+
+    const status = devServerManager.getStatus(payload.cardId)
+    if (!status) {
+      return { success: false, status: null }
+    }
+
+    return {
+      success: true,
+      status: status.status,
+      port: status.port,
+      startedAt: status.startedAt.toISOString(),
+      error: status.error,
+      output: status.output.slice(-100) // Last 100 lines
+    }
   })
 }

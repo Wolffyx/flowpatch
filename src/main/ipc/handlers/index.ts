@@ -24,6 +24,7 @@ import { registerAgentChatHandlers } from './agent-chat'
 import { registerAIProfileHandlers } from './ai-profiles'
 import { registerFeatureSuggestionHandlers } from './feature-suggestions'
 import { registerDependencyHandlers } from './dependencies'
+import { registerUpdaterHandlers } from './updater'
 import { sendToAllTabs } from '../../tabManager'
 
 let mainWindowRef: BrowserWindow | null = null
@@ -65,6 +66,7 @@ export function registerAllHandlers(mainWindow: BrowserWindow): void {
   registerAIProfileHandlers(notifyRenderer)
   registerFeatureSuggestionHandlers(notifyRenderer)
   registerDependencyHandlers(notifyRenderer)
+  registerUpdaterHandlers()
 }
 
 // Re-export individual registrations for granular use
@@ -86,7 +88,8 @@ export {
   registerAgentChatHandlers,
   registerAIProfileHandlers,
   registerFeatureSuggestionHandlers,
-  registerDependencyHandlers
+  registerDependencyHandlers,
+  registerUpdaterHandlers
 }
 
 // Re-export onboarding helpers used by repo handlers

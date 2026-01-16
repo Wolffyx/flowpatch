@@ -21,6 +21,7 @@ interface KanbanColumnProps {
   isOverColumn?: boolean
   onAddCard?: () => void
   onGenerateCards?: () => void
+  devServerStatusByCardId?: Record<string, { isRunning: boolean; port?: number; status?: 'starting' | 'running' | 'stopped' | 'error' }>
 }
 
 export function KanbanColumn({
@@ -34,7 +35,8 @@ export function KanbanColumn({
   onCardContextMenu,
   isOverColumn = false,
   onAddCard,
-  onGenerateCards
+  onGenerateCards,
+  devServerStatusByCardId
 }: KanbanColumnProps): React.JSX.Element {
   const { setNodeRef, isOver } = useDroppable({
     id,
@@ -120,6 +122,7 @@ export function KanbanColumn({
                 isSelected={card.id === selectedCardId}
                 onClick={() => onSelectCard(card.id)}
                 onContextMenu={onCardContextMenu}
+                devServerStatus={devServerStatusByCardId?.[card.id]}
               />
             ))}
           </div>

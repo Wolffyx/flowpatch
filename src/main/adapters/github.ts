@@ -281,6 +281,113 @@ export class GithubAdapter extends BaseAdapter implements IGithubAdapter {
     }
   }
 
+  /**
+   * Add a sub-issue relationship using GitHub's sub-issues REST API.
+   * This populates the native "Relationships" section on GitHub issues.
+   * The child issue will show the parent in its "Parent" relationship.
+   * @param parentNodeId - The GraphQL node ID of the parent issue (unused, kept for interface)
+   * @param childNodeId - The GraphQL node ID of the child (sub) issue (unused, kept for interface)
+   * @param parentIssueNumber - The issue number of the parent
+   * @param childIssueNumber - The issue number of the child
+   */
+  async addSubIssue(
+    parentNodeId: string,
+    childNodeId: string,
+    parentIssueNumber?: number,
+    childIssueNumber?: number
+  ): Promise<boolean> {
+    // Try REST API first (more reliable)
+    if (parentIssueNumber && childIssueNumber) {
+      try {
+        const { stdout, stderr } = await execFileAsync(
+          'gh',
+          [
+            'api',
+            '--method',
+            'POST',
+            `-H`,
+            'Accept: application/vnd.github+json',
+            `-H`,
+            'X-GitHub-Api-Version: 2022-11-28',
+            `/repos/${this.owner}/${this.repo}/issues/${parentIssueNumber}/sub_issues`,
+            '-f',
+            `sub_issue_id=${childIssueNumber}`
+          ],
+          { cwd: this.repoPath }
+        )
+
+        logAction('addSubIssue (REST): Success', {
+          parentIssueNumber,
+          childIssueNumber,
+          stdout: stdout.slice(0, 200)
+        })
+        return true
+      } catch (restError) {
+        logAction('addSubIssue (REST): Failed, trying GraphQL', {
+          parentIssueNumber,
+          childIssueNumber,
+          error: String(restError)
+        })
+        // Fall through to GraphQL approach
+      }
+    }
+
+    // Fallback to GraphQL API
+    try {
+      const mutation = `
+        mutation AddSubIssue($parentId: ID!, $childId: ID!) {
+          addSubIssue(input: { issueId: $parentId, subIssueId: $childId }) {
+            issue {
+              id
+            }
+            subIssue {
+              id
+            }
+          }
+        }
+      `
+
+      const { stdout } = await execFileAsync(
+        'gh',
+        [
+          'api',
+          'graphql',
+          '-H',
+          'GraphQL-Features: sub_issues',
+          '-f',
+          `query=${mutation}`,
+          '-F',
+          `parentId=${parentNodeId}`,
+          '-F',
+          `childId=${childNodeId}`
+        ],
+        { cwd: this.repoPath }
+      )
+
+      const response = JSON.parse(stdout)
+      if (response.errors?.length) {
+        console.error('GraphQL errors adding sub-issue:', response.errors)
+        logAction('addSubIssue (GraphQL): Failed', {
+          parentNodeId,
+          childNodeId,
+          errors: response.errors
+        })
+        return false
+      }
+
+      logAction('addSubIssue (GraphQL): Success', { parentNodeId, childNodeId })
+      return true
+    } catch (error) {
+      console.error('Failed to add sub-issue relationship:', error)
+      logAction('addSubIssue: All methods failed', {
+        parentNodeId,
+        childNodeId,
+        error: String(error)
+      })
+      return false
+    }
+  }
+
   // ──────────────────────────────────────────────────────────────────────────
   // Pull Requests
   // ──────────────────────────────────────────────────────────────────────────

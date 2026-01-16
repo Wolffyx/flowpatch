@@ -30,6 +30,7 @@ import { FeatureSuggestionsDialog } from '../src/components/FeatureSuggestionsDi
 import { GraphViewDialog } from '../src/components/GraphViewDialog'
 import { SplitCardDialog } from '../src/components/SplitCardDialog'
 import { useAudioNotifications } from '../src/hooks/useAudioNotifications'
+import { useDevServerStatus } from '../src/hooks/useDevServerStatus'
 import { Button } from '../src/components/ui/button'
 import { Switch } from '../src/components/ui/switch'
 import { Badge } from '../src/components/ui/badge'
@@ -460,6 +461,26 @@ export default function App(): React.JSX.Element {
     jobs,
     enabled: notificationsConfig.audioEnabled
   })
+
+  // Track dev server status for cards
+  const cardIds = useMemo(() => cards.map((c) => c.id), [cards])
+  const { isRunning, getStatus } = useDevServerStatus(cardIds)
+
+  // Build dev server status map for cards
+  const devServerStatusByCardId = useMemo(() => {
+    const statusMap: Record<string, { isRunning: boolean; port?: number; status?: 'starting' | 'running' | 'stopped' | 'error' }> = {}
+    cards.forEach((card) => {
+      if (isRunning(card.id)) {
+        const status = getStatus(card.id)
+        statusMap[card.id] = {
+          isRunning: true,
+          port: status?.port,
+          status: status?.status || undefined
+        }
+      }
+    })
+    return statusMap
+  }, [cards, isRunning, getStatus])
 
   // Initialize audio on first user interaction
   useEffect(() => {
@@ -1081,6 +1102,7 @@ export default function App(): React.JSX.Element {
             onAddCard={handleOpenAddCard}
             onGenerateCards={handleGenerateCards}
             onSplitCard={handleOpenSplitDialog}
+            devServerStatusByCardId={devServerStatusByCardId}
           />
         </div>
 

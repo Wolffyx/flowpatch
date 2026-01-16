@@ -19,6 +19,7 @@ import { useE2ESettings } from '../hooks/useE2ESettings'
 import { useNotificationSettings } from '../hooks/useNotificationSettings'
 import { useSyncSettings } from '../hooks/useSyncSettings'
 import { useWorkerPipelineSettings } from '../hooks/useWorkerPipelineSettings'
+import { useTestModeSettings } from '../hooks/useTestModeSettings'
 
 export function FeaturesSection(): React.JSX.Element {
   const { project, onClose } = useSettingsContext()
@@ -82,6 +83,13 @@ export function FeaturesSection(): React.JSX.Element {
     handlePipelineRetryDelayChange
   } = useWorkerPipelineSettings()
 
+  const {
+    testModeEnabled,
+    loading: testModeLoading,
+    loadTestModeSettings,
+    handleTestModeChange
+  } = useTestModeSettings()
+
   useEffect(() => {
     if (project) {
       loadFeatureSettings(project)
@@ -90,13 +98,16 @@ export function FeaturesSection(): React.JSX.Element {
       loadSyncSettings(project)
       loadWorkerPipelineSettings(project)
     }
+    // Test mode is a global setting, load it regardless of project
+    void loadTestModeSettings()
   }, [
     project,
     loadFeatureSettings,
     loadE2ESettings,
     loadNotificationSettings,
     loadSyncSettings,
-    loadWorkerPipelineSettings
+    loadWorkerPipelineSettings,
+    loadTestModeSettings
   ])
 
   const handleReconfigureLabels = useCallback(async () => {
@@ -129,17 +140,41 @@ export function FeaturesSection(): React.JSX.Element {
     }
   }, [project, onClose])
 
-  if (!project) {
-    return (
-      <div className="text-sm text-muted-foreground">
-        Select a project to configure its features.
-      </div>
-    )
-  }
+  // Debug: Log when component renders
+  useEffect(() => {
+    console.log('[FeaturesSection] Rendering with testModeEnabled:', testModeEnabled, 'loading:', testModeLoading)
+  }, [testModeEnabled, testModeLoading])
 
   return (
     <div className="space-y-6">
-      {/* Cancel Behavior */}
+      {/* Test Mode - Global setting, shown even without project */}
+      <SettingsCard
+        title="Test Modifications"
+        description="Enable testing of worker modifications by starting development servers for cards with branches."
+      >
+        <SettingRow
+          title="Enable Test Mode"
+          description="When enabled, cards with branches will show a 'Test Modifications' button that allows you to start the development server and test changes."
+        >
+          {testModeLoading ? (
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          ) : (
+            <Switch
+              checked={testModeEnabled}
+              onCheckedChange={(enabled) => handleTestModeChange(enabled)}
+              disabled={testModeLoading}
+            />
+          )}
+        </SettingRow>
+      </SettingsCard>
+
+      {!project ? (
+        <div className="text-sm text-muted-foreground">
+          Select a project to configure its features.
+        </div>
+      ) : (
+        <>
+          {/* Cancel Behavior */}
       <SettingsCard title="Cancel Behavior">
         <SettingRow
           title="Rollback changes on cancel"
@@ -449,6 +484,8 @@ export function FeaturesSection(): React.JSX.Element {
           </SettingRow>
         </div>
       </SettingsCard>
+        </>
+      )}
     </div>
   )
 }

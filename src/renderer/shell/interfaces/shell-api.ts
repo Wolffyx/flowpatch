@@ -150,8 +150,26 @@ declare global {
       // App Reset (Dev only)
       resetEverything: () => Promise<{ success: boolean; error?: string }>
       onDevResetTrigger: (callback: () => void) => () => void
+
+      // Auto-Updater
+      getUpdateStatus: () => Promise<UpdateStatus>
+      getAppVersion: () => Promise<string>
+      checkForUpdates: () => Promise<{ success: boolean }>
+      downloadUpdate: () => Promise<{ success: boolean }>
+      installUpdate: () => Promise<{ success: boolean }>
+      onUpdateStatusChanged: (callback: (status: UpdateStatus) => void) => () => void
     }
   }
+}
+
+// Auto-Updater types
+export interface UpdateStatus {
+  state: 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
+  version?: string
+  releaseNotes?: string
+  releaseDate?: string
+  downloadProgress?: number
+  error?: string
 }
 
 export {}
