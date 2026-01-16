@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, copyFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import {
   getIndexPaths,
@@ -6,6 +6,7 @@ import {
   type FlowPatchFileIndexEntry
 } from './flowpatch-indexer'
 import { gitDiffNameOnly, gitHeadSha } from './flowpatch-git'
+import { createPlanFile } from './flowpatch-workspace'
 
 const BEGIN = '<!-- FLOWPATCH:BEGIN generated -->'
 const END = '<!-- FLOWPATCH:END generated -->'
@@ -149,6 +150,26 @@ export async function refreshFlowPatchDocs(repoRoot: string): Promise<{ updated:
     } catch {
       // ignore
     }
+  }
+
+  // PLAN.md: backup existing and reset to template
+  const planPath = join(docsDir, 'PLAN.md')
+  if (existsSync(planPath)) {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    const backupPath = join(docsDir, `PLAN.backup.${timestamp}.md`)
+    try {
+      copyFileSync(planPath, backupPath)
+      updated.push(`${backupPath} (backup)`)
+      // Delete the existing plan so createPlanFile will create a fresh one
+      unlinkSync(planPath)
+    } catch {
+      // ignore backup errors
+    }
+  }
+  // Create fresh plan template
+  const planResult = createPlanFile(repoRoot)
+  if (planResult.created) {
+    updated.push(planPath)
   }
 
   return { updated }

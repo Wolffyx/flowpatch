@@ -299,7 +299,7 @@ export class GithubAdapter extends BaseAdapter implements IGithubAdapter {
     // Try REST API first (more reliable)
     if (parentIssueNumber && childIssueNumber) {
       try {
-        const { stdout, stderr } = await execFileAsync(
+        const { stdout } = await execFileAsync(
           'gh',
           [
             'api',

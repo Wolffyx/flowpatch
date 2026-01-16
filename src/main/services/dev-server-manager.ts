@@ -261,7 +261,7 @@ export class DevServerManager {
         if (port > 0 && port < 65536) {
           processInfo.port = port
           processInfo.healthCheckUrl = `http://localhost:${port}`
-          this.broadcastPort(cardId, port)
+          this.broadcastPort(processInfo.cardId, port)
           break
         }
       }

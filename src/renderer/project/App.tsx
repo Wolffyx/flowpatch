@@ -24,7 +24,7 @@ import {
   StarterCardsWizardDialog,
   type StarterCardsWizardMode
 } from '../src/components/StarterCardsWizardDialog'
-import { WorkspaceDialog } from './components/WorkspaceDialog'
+import { WorkspaceDialog } from './components/workspace/WorkspaceDialog'
 import { UsageIndicator } from './components/UsageIndicator'
 import { FeatureSuggestionsDialog } from '../src/components/FeatureSuggestionsDialog'
 import { GraphViewDialog } from '../src/components/GraphViewDialog'
@@ -120,6 +120,13 @@ declare global {
       migrateWorkspace: () => Promise<unknown>
       openWorkspaceFolder: () => Promise<unknown>
       getFlowPatchConfig: () => Promise<unknown>
+      createPlanFile: () => Promise<{
+        success: boolean
+        created?: boolean
+        path?: string
+        error?: string
+        message?: string
+      }>
 
       // Configuration sync
       updateFeatureConfig: (

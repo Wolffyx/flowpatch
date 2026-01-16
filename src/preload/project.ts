@@ -225,6 +225,13 @@ export interface ProjectAPI {
   openWorkspaceFolder: () => Promise<unknown>
   retrieve: (kind: 'symbol' | 'text', query: string, limit?: number) => Promise<unknown>
   getFlowPatchConfig: () => Promise<unknown>
+  createPlanFile: () => Promise<{
+    success: boolean
+    created?: boolean
+    path?: string
+    error?: string
+    message?: string
+  }>
 
   // Configuration sync
   syncConfig: (priorityOverride?: 'database' | 'file') => Promise<{
@@ -1219,6 +1226,10 @@ const projectAPI: ProjectAPI = {
 
   getFlowPatchConfig: () => {
     return ipcRenderer.invoke('project:getFlowPatchConfig')
+  },
+
+  createPlanFile: () => {
+    return ipcRenderer.invoke('project:createPlanFile')
   },
 
   // -------------------------------------------------------------------------

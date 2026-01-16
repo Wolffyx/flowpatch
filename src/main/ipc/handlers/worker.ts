@@ -1,7 +1,7 @@
 /**
  * IPC handlers for worker operations.
  * Handles: runWorker, toggleWorker, setWorkerToolPreference, setWorkerRollbackOnCancel
- * 
+ *
  * Security: All handlers verify IPC origin to prevent unauthorized access.
  */
 
@@ -23,7 +23,6 @@ import { generateWorktreeBranchName } from '@shared/types'
 import { checkBranchExists } from '../../worker/git-operations'
 import { detectProjectType } from '../../services/project-type-detector'
 import { devServerManager } from '../../services/dev-server-manager'
-import type { ProjectTypeInfo } from '../../services/project-type-detector'
 
 // ============================================================================
 // Security Helpers

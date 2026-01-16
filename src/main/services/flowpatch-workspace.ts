@@ -69,6 +69,7 @@ export async function getFlowPatchWorkspaceStatus(
   const root = join(repoRoot, '.flowpatch')
   const configPath = join(root, 'config.yml')
   const docsPath = join(root, 'docs')
+  const planPath = join(docsPath, 'PLAN.md')
   const scriptsPath = join(root, 'scripts')
   const statePath = join(root, 'state')
 
@@ -91,6 +92,7 @@ export async function getFlowPatchWorkspaceStatus(
     gitignoreHasStateIgnore,
     hasConfig: existsSync(configPath),
     hasDocs: existsSync(docsPath),
+    hasPlan: existsSync(planPath),
     hasScripts: existsSync(scriptsPath),
     hasState: existsSync(statePath),
     index,
@@ -205,4 +207,175 @@ export function ensureFlowPatchWorkspace(repoRoot: string): FlowPatchWorkspaceEn
   const updatedGitignore = ensureGitignore(repoRoot, createdPaths)
 
   return { repoRoot, createdPaths, updatedGitignore }
+}
+
+export function createPlanFile(repoRoot: string): { created: boolean; path: string } {
+  const docsPath = join(repoRoot, '.flowpatch', 'docs')
+  const planPath = join(docsPath, 'PLAN.md')
+
+  if (existsSync(planPath)) {
+    return { created: false, path: planPath }
+  }
+
+  // Ensure docs directory exists
+  if (!existsSync(docsPath)) {
+    mkdirSync(docsPath, { recursive: true })
+  }
+
+  const planTemplate = `# Implementation Plan
+
+## Task Description
+<!--
+Provide a clear, concise summary of what needs to be built or fixed.
+Include:
+- The specific feature, bug, or improvement
+- The user-facing behavior expected
+- Any constraints or requirements
+
+Example:
+"Add a dark mode toggle to the settings page that persists user preference
+to localStorage and applies the theme across all components."
+-->
+
+
+## Context & Background
+<!--
+Explain WHY this task exists and provide relevant context:
+- Link to related issues, PRs, or discussions
+- Describe the current behavior vs desired behavior
+- Note any previous attempts or related work
+- Include relevant technical debt or limitations
+
+Example:
+"Currently the app only supports light mode. Users have requested dark mode
+support (Issue #123). The design team has provided mockups in Figma [link].
+We use Tailwind CSS which has built-in dark mode support via the 'dark:' prefix."
+-->
+
+
+## Technical Analysis
+<!--
+Document your understanding of the codebase relevant to this task:
+- Key files and their responsibilities
+- Existing patterns to follow
+- Dependencies and integrations affected
+- Potential risks or edge cases
+
+Example:
+"Theme state should live in ThemeContext (src/contexts/ThemeContext.tsx).
+All color classes need dark: variants. The Header, Sidebar, and Card
+components are the main surfaces that need theme support."
+-->
+
+
+## Implementation Steps
+<!--
+Break down the work into discrete, actionable steps.
+Each step should be:
+- Small enough to verify independently
+- Ordered by dependency (what must happen first)
+- Clear about what "done" means for that step
+
+Mark steps as you complete them: [ ] -> [x]
+-->
+
+1. [ ] **Step 1 title**: Description of what to do and expected outcome
+2. [ ] **Step 2 title**: Description of what to do and expected outcome
+3. [ ] **Step 3 title**: Description of what to do and expected outcome
+
+
+## Files to Modify
+<!--
+List all files that will be created, modified, or deleted.
+This helps track scope and ensures nothing is missed.
+-->
+
+| File | Action | Description |
+|------|--------|-------------|
+| \`src/path/to/file.ts\` | modify | Brief description of changes |
+| \`src/path/to/new-file.ts\` | create | Purpose of new file |
+| \`src/path/to/old-file.ts\` | delete | Why it's being removed |
+
+
+## Testing Strategy
+<!--
+Define how to verify the implementation works correctly:
+-->
+
+### Unit Tests
+<!-- Test individual functions/components in isolation -->
+- [ ] Test case 1: Description and expected result
+- [ ] Test case 2: Description and expected result
+
+### Integration Tests
+<!-- Test how components work together -->
+- [ ] Test case 1: Description and expected result
+
+### Manual Testing
+<!-- Steps to manually verify the feature -->
+- [ ] Step 1: Action to take and what to verify
+- [ ] Step 2: Action to take and what to verify
+
+### Edge Cases
+<!-- Unusual scenarios to test -->
+- [ ] Edge case 1: What could go wrong and how to test it
+
+
+## Acceptance Criteria
+<!--
+Define the specific, measurable conditions that must be met
+for this task to be considered complete. Write from user perspective.
+
+Example:
+- [ ] User can toggle dark mode from settings page
+- [ ] Theme preference persists across browser sessions
+- [ ] All text remains readable in both themes
+- [ ] No flash of wrong theme on page load
+-->
+
+- [ ] Criterion 1
+- [ ] Criterion 2
+- [ ] Criterion 3
+
+
+## Dependencies & Blockers
+<!--
+Note anything that could prevent or delay completion:
+- External dependencies (APIs, packages, approvals)
+- Other tasks that must complete first
+- Questions that need answers
+- Access or permissions needed
+-->
+
+
+## Architecture Decisions
+<!--
+Document any significant technical decisions made:
+- Why this approach over alternatives
+- Trade-offs considered
+- Future implications
+
+Example:
+"Using CSS custom properties for theme colors instead of Tailwind's
+built-in dark mode. This allows runtime theme switching without
+rebuilding CSS, and supports potential future themes beyond light/dark."
+-->
+
+
+## Notes & References
+<!--
+Additional context, links, or information:
+- Documentation links
+- Similar implementations to reference
+- Design assets
+- Meeting notes or discussion threads
+-->
+
+
+---
+*Generated by FlowPatch - Update this plan as implementation progresses*
+`
+
+  writeFileSync(planPath, planTemplate, { encoding: 'utf-8' })
+  return { created: true, path: planPath }
 }

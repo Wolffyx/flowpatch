@@ -39,7 +39,8 @@ import { verifySecureRequest } from '../security'
 import { runSync } from '../sync/engine'
 import {
   ensureFlowPatchWorkspace,
-  getFlowPatchWorkspaceStatus
+  getFlowPatchWorkspaceStatus,
+  createPlanFile
 } from '../services/flowpatch-workspace'
 import { buildIndex } from '../services/flowpatch-indexer'
 import {
@@ -740,6 +741,31 @@ export function registerProjectHandlers(): void {
     const path = join(project.local_path, '.flowpatch')
     void shell.openPath(path)
     return { success: true }
+  })
+
+  ipcMain.handle('project:createPlanFile', async (event) => {
+    const projectId = getProjectIdFromEvent(event)
+    if (!projectId) throw new Error('No project selected')
+    const project = getProject(projectId)
+    if (!project) throw new Error('Project not found')
+
+    const status = await getFlowPatchWorkspaceStatus(project.local_path)
+    if (!status.writable) {
+      return { success: false, error: 'Repo not writable' }
+    }
+
+    // Ensure workspace exists first
+    ensureFlowPatchWorkspace(project.local_path)
+
+    const { created, path } = createPlanFile(project.local_path)
+    notifyRendererStateUpdated()
+
+    return {
+      success: true,
+      created,
+      path,
+      message: created ? 'Plan file created' : 'Plan file already exists'
+    }
   })
 
   ipcMain.handle('project:getEvents', (event, { limit }: { limit?: number }) => {

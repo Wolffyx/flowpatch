@@ -179,6 +179,7 @@ export function writeLastContext(repoRoot: string, bundle: ContextBundle): strin
 export function buildPromptContext(repoRoot: string, bundle: ContextBundle): string {
   const agents = readDoc(repoRoot, 'AGENTS.md', 2500)
   const arch = readDoc(repoRoot, 'ARCHITECTURE.md', 2500)
+  const plan = readDoc(repoRoot, 'PLAN.md', 3000)
 
   const suggested = bundle.includedFiles
     .slice(0, 12)
@@ -200,10 +201,12 @@ export function buildPromptContext(repoRoot: string, bundle: ContextBundle): str
     '',
     arch ? `### ARCHITECTURE.md (top)\n${arch}` : '### ARCHITECTURE.md\n(missing)',
     '',
+    plan ? `### PLAN.md (top)\n${plan}` : '',
+    '',
     '### Suggested files (from local index)',
     suggested || '(none)',
     '',
     '### Snippets (bounded, may be redacted)',
     snippetText || '(none)'
-  ].join('\n')
+  ].filter(Boolean).join('\n')
 }

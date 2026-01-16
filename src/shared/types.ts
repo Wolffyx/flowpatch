@@ -80,6 +80,7 @@ export interface FlowPatchWorkspaceStatus {
   gitignoreHasStateIgnore: boolean
   hasConfig: boolean
   hasDocs: boolean
+  hasPlan: boolean
   hasScripts: boolean
   hasState: boolean
   index: FlowPatchIndexStatus

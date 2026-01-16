@@ -688,6 +688,15 @@ declare global {
         success: boolean
         error?: string
       }>
+
+      // FlowPatch workspace
+      createPlanFile: () => Promise<{
+        success: boolean
+        created?: boolean
+        path?: string
+        error?: string
+        message?: string
+      }>
     }
 
     electron: {
