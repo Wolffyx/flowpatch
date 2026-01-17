@@ -208,6 +208,8 @@ jobs:
         (needs.version-bump.result == 'success' && needs.version-bump.outputs.skipped == 'false') ||
         needs.version-bump.result == 'skipped'
       )
+    permissions:
+      contents: write
     strategy:
       matrix:
         include:
