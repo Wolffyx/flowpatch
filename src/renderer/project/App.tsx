@@ -4,7 +4,7 @@
  * The project renderer that displays:
  * - Toolbar with sync and worker controls
  * - Kanban board with cards
- * - Card drawer for details
+ * - Card dialog for details
  * - Add card dialog
  *
  * This runs inside a WebContentsView managed by the shell.
@@ -13,7 +13,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Toaster } from '../src/components/ui/sonner'
 import { KanbanBoard } from '../src/components/KanbanBoard'
-import { CardDrawer } from '../src/components/CardDrawer'
+import { CardDialog } from '../src/components/CardDialog'
 import { AddCardDialog, type CreateCardType } from '../src/components/AddCardDialog'
 import { LabelSetupDialog } from '../src/components/LabelSetupDialog'
 import { GithubProjectPromptDialog } from '../src/components/GithubProjectPromptDialog'
@@ -1113,19 +1113,17 @@ export default function App(): React.JSX.Element {
           />
         </div>
 
-        {/* Card Drawer - side panel */}
-        {selectedCard && (
-          <CardDrawer
-            card={selectedCard}
-            linkedPRs={cardLinksByCardId[selectedCard.id] ?? []}
-            events={[]} // TODO: Load events for card
-            projectId={projectInfo?.projectId ?? null}
-            onClose={handleCloseDrawer}
-            onMoveCard={handleMoveCard}
-            onRunWorker={(cardId) => window.projectAPI.runWorker(cardId)}
-            onSplitCard={handleOpenSplitDialog}
-          />
-        )}
+        {/* Card Dialog */}
+        <CardDialog
+          card={selectedCard}
+          linkedPRs={selectedCard ? cardLinksByCardId[selectedCard.id] ?? [] : []}
+          events={[]} // TODO: Load events for card
+          projectId={projectInfo?.projectId ?? null}
+          onClose={handleCloseDrawer}
+          onMoveCard={handleMoveCard}
+          onRunWorker={(cardId) => window.projectAPI.runWorker(cardId)}
+          onSplitCard={handleOpenSplitDialog}
+        />
       </div>
 
       {/* Add Card Dialog */}

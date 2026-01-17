@@ -1,4 +1,4 @@
-/**
+/**WorkspaceDialog
  * Settings Context Hook
  *
  * Hook for accessing settings context (must be used within SettingsProvider)

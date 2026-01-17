@@ -10,6 +10,7 @@ out
 build
 .tmp
 *.plan.md
+*.md
 # Patchwork IDE-like workspace state (generated)
 .patchwork/state/
 .flowpatch/state/
