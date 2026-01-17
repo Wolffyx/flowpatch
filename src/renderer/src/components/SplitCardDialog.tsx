@@ -392,7 +392,7 @@ export function SplitCardDialog({
           )}
 
           {step === 'configure' ? (
-            <Button type="button" onClick={handleGenerate} disabled={!canGenerate || isCreating}>
+            <Button type="button" onClick={() => handleGenerate()} disabled={!canGenerate || isCreating}>
               {isGenerating ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />

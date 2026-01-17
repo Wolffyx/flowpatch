@@ -9,7 +9,6 @@ import {
   ChevronUp,
   Loader2,
   AlertCircle,
-  CheckCircle2,
   XCircle
 } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'

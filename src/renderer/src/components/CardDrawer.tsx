@@ -81,7 +81,6 @@ export function CardDrawer({
     commands?: { install?: string; dev?: string; build?: string }
     error?: string
   } | null>(null)
-  const [testModeEnabled, setTestModeEnabled] = useState(false)
   const [checkingTestInfo, setCheckingTestInfo] = useState(false)
 
   // Load worktree and latest job info for this card
@@ -169,11 +168,11 @@ export function CardDrawer({
     try {
       const info = (await window.projectAPI.getCardTestInfo(projectId, card.id)) as typeof testInfo
       setTestInfo(info)
-      if (info.success) {
+      if (info && info.success) {
         setTestDialogOpen(true)
       } else {
         // Show error - no branch/worktree found
-        console.error('Failed to get test info:', info.error)
+        console.error('Failed to get test info:', info?.error)
       }
     } catch (error) {
       console.error('Failed to load test info:', error)
@@ -183,7 +182,7 @@ export function CardDrawer({
   }
 
   // Check if test button should be shown - show if card has worktree or is in progress/ready
-  const showTestButton = worktree || card.status === 'in_progress' || card.status === 'ready'
+  const showTestButton = worktree || (card && (card.status === 'in_progress' || card.status === 'ready'))
 
   // Reset edit state when card changes
   useEffect(() => {

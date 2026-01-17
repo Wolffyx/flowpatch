@@ -9,6 +9,21 @@
  */
 
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
+import type {
+  AIToolType,
+  Card,
+  CardLink,
+  CardStatus,
+  Event,
+  FollowUpInstructionStatus,
+  FollowUpInstructionType,
+  Job,
+  PlanApproval,
+  PlanningMode,
+  PolicyConfig,
+  Project,
+  WorkerLogMessage
+} from '../shared/types'
 
 // ============================================================================
 // Types
@@ -26,6 +41,7 @@ export interface ProjectAPI {
   getRepoOnboardingState: (projectId: string) => Promise<{
     shouldShowLabelWizard?: boolean
     shouldPromptGithubProject?: boolean
+    shouldShowStarterCardsWizard?: boolean
   }>
 
   // Cards
@@ -265,96 +281,7 @@ export interface ProjectAPI {
   ) => () => void
 }
 
-interface PolicyConfig {
-  version: number
-  features?: Record<string, unknown>
-  [key: string]: unknown
-}
-
-// Types from shared (would be imported in actual usage)
-type CardStatus = 'draft' | 'ready' | 'in_progress' | 'in_review' | 'testing' | 'done'
-type Provider = 'github' | 'gitlab' | 'local' | 'auto'
-type CardType = 'issue' | 'pr' | 'mr' | 'draft'
-type SyncState = 'ok' | 'pending' | 'error'
-
-interface Card {
-  id: string
-  project_id: string
-  provider: Provider
-  type: CardType
-  title: string
-  body: string | null
-  status: CardStatus
-  ready_eligible: number
-  assignees_json: string | null
-  labels_json: string | null
-  remote_url: string | null
-  remote_repo_key: string | null
-  remote_number_or_iid: string | null
-  remote_node_id: string | null
-  updated_remote_at: string | null
-  updated_local_at: string
-  sync_state: SyncState
-  last_error: string | null
-  has_conflicts: number
-}
-
-interface CardLink {
-  id: string
-  card_id: string
-  linked_type: 'pr' | 'mr'
-  linked_url: string
-  linked_number_or_iid: string | null
-}
-
-interface Job {
-  id: string
-  project_id: string
-  card_id: string | null
-  type: string
-  state: string
-  created_at: string
-  updated_at: string
-}
-
-interface Event {
-  id: string
-  project_id: string
-  card_id: string | null
-  type: string
-  payload_json: string | null
-  created_at: string
-}
-
-interface WorkerLogMessage {
-  projectId: string
-  jobId: string
-  cardId?: string
-  ts: string
-  line: string
-  source?: string
-  stream?: 'stdout' | 'stderr'
-}
-
-type PlanningMode = 'skip' | 'lite' | 'spec' | 'full'
-type PlanApprovalStatus = 'pending' | 'approved' | 'rejected' | 'skipped'
-
-interface PlanApproval {
-  id: string
-  job_id: string
-  card_id: string
-  project_id: string
-  plan: string
-  planning_mode: PlanningMode
-  status: PlanApprovalStatus
-  reviewer_notes?: string
-  created_at: string
-  reviewed_at?: string
-}
-
-type FollowUpInstructionStatus = 'pending' | 'processing' | 'applied' | 'rejected'
-type FollowUpInstructionType = 'revision' | 'clarification' | 'additional' | 'abort'
-
+// Local types not in @shared/types
 interface FollowUpInstruction {
   id: string
   job_id: string
@@ -367,8 +294,6 @@ interface FollowUpInstruction {
   created_at: string
   processed_at?: string
 }
-
-type AIToolType = 'claude' | 'codex' | 'other'
 
 interface AIToolLimits {
   tool_type: AIToolType
@@ -580,18 +505,6 @@ interface DependencyCheckResult {
   canMove: boolean
   blockedBy: CardDependencyWithCard[]
   reason?: string
-}
-
-interface Project {
-  id: string
-  name: string
-  local_path: string
-  selected_remote_name: string | null
-  remote_repo_key: string | null
-  provider_hint: 'auto' | 'github' | 'gitlab'
-  worker_enabled: number
-  policy_json: string | null
-  last_sync_at: string | null
 }
 
 type ProjectInfo = { projectId: string; projectKey: string; projectPath: string }
