@@ -60,6 +60,7 @@ export interface ProjectAPI {
   }) => Promise<{ cards: Card[]; error?: string }>
   editCardBody: (cardId: string, body: string | null) => Promise<{ card?: Card; error?: string }>
   deleteCard: (cardId: string) => Promise<{ success: boolean; error?: string }>
+  updateCardTimestamp: (cardId: string, timestamp: string) => Promise<{ success: boolean }>
 
   // Sync
   sync: () => Promise<void>
@@ -617,6 +618,10 @@ const projectAPI: ProjectAPI = {
 
   deleteCard: (cardId: string) => {
     return ipcRenderer.invoke('deleteCard', { cardId })
+  },
+
+  updateCardTimestamp: (cardId: string, timestamp: string) => {
+    return ipcRenderer.invoke('updateCardTimestamp', { cardId, timestamp })
   },
 
   // -------------------------------------------------------------------------

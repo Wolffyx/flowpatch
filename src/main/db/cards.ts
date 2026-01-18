@@ -6,7 +6,9 @@ import { and, asc, desc, eq, gt, inArray, isNotNull, lte, ne, notExists, sql } f
 import { getDrizzle } from './drizzle'
 import { cards, jobs } from './schema'
 import { generateId } from '@shared/utils'
+import { getPriorityFromLabels } from '@shared/utils/priority'
 import type { Card, CardStatus, PolicyConfig } from '@shared/types'
+import { getDependenciesForCard } from './card-dependencies'
 
 export type { Card, CardStatus }
 
@@ -235,6 +237,14 @@ export function updateCardSyncState(
 }
 
 /**
+ * Update card timestamp (used for manual priority sorting).
+ */
+export function updateCardTimestamp(cardId: string, timestamp: string): void {
+  const db = getDrizzle()
+  db.update(cards).set({ updated_local_at: timestamp }).where(eq(cards.id, cardId)).run()
+}
+
+/**
  * Update card conflict status.
  */
 export function updateCardConflictStatus(cardId: string, hasConflicts: boolean): void {
@@ -321,6 +331,47 @@ export function getNextReadyCard(projectId: string, retryCooldownMinutes = 30): 
 /**
  * Get multiple ready cards for parallel processing.
  */
+/**
+ * Check if a card is blocked by unsatisfied dependencies.
+ * Returns true if the card has active dependencies that block 'ready' status
+ * and those dependencies have not reached their required status.
+ */
+export function isCardBlockedByDependencies(cardId: string): boolean {
+  const deps = getDependenciesForCard(cardId)
+
+  // Filter active dependencies that block 'ready' status
+  const blockingDeps = deps.filter(
+    (dep) => dep.is_active === 1 && dep.blocking_statuses.includes('ready')
+  )
+
+  if (blockingDeps.length === 0) return false
+
+  // Status order for comparison (same as in card-dependencies.ts)
+  const statusOrder: CardStatus[] = [
+    'draft',
+    'ready',
+    'in_progress',
+    'in_review',
+    'testing',
+    'done'
+  ]
+
+  // Check if any blocking dependency is not satisfied
+  for (const dep of blockingDeps) {
+    const depCard = getCard(dep.depends_on_card_id)
+    if (!depCard) continue // Missing dependency card - treat as satisfied
+
+    const currentIndex = statusOrder.indexOf(depCard.status)
+    const requiredIndex = statusOrder.indexOf(dep.required_status)
+
+    if (currentIndex < requiredIndex) {
+      return true // Dependency not satisfied
+    }
+  }
+
+  return false
+}
+
 export function getNextReadyCards(
   projectId: string,
   limit: number,
@@ -355,7 +406,8 @@ export function getNextReadyCards(
       )
     )
 
-  return db
+  // Get all eligible cards
+  const eligibleCards = db
     .select()
     .from(cards)
     .where(
@@ -368,7 +420,27 @@ export function getNextReadyCards(
         notExists(failedJobSubquery)
       )
     )
-    .orderBy(asc(cards.updated_local_at))
-    .limit(limit)
     .all() as Card[]
+
+  // Filter out dependency-blocked cards
+  const unblockedCards = eligibleCards.filter((card) => !isCardBlockedByDependencies(card.id))
+
+  // Sort by priority (lower number = higher priority), then by timestamp (FIFO tie-breaker)
+  const sortedCards = unblockedCards
+    .map((card) => ({
+      card,
+      priority: getPriorityFromLabels(card.labels_json)
+    }))
+    .sort((a, b) => {
+      // Primary sort: priority (ascending - lower number = higher priority)
+      if (a.priority !== b.priority) {
+        return a.priority - b.priority
+      }
+      // Secondary sort: timestamp (ascending - older first)
+      return a.card.updated_local_at.localeCompare(b.card.updated_local_at)
+    })
+    .slice(0, limit)
+    .map((item) => item.card)
+
+  return sortedCards
 }

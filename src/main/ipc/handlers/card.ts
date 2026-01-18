@@ -18,7 +18,8 @@ import {
   updateJobState,
   checkCanMoveToStatus,
   deleteCard,
-  createCardDependency
+  createCardDependency,
+  updateCardTimestamp
 } from '../../db'
 import { SyncEngine } from '../../sync/engine'
 import { triggerProjectSync } from '../../sync/scheduler'
@@ -592,6 +593,16 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
       }
 
       logAction('deleteCard:success', { cardId: payload.cardId })
+      notifyRenderer()
+      return { success: true }
+    }
+  )
+
+  ipcMain.handle(
+    'updateCardTimestamp',
+    (_e, payload: { cardId: string; timestamp: string }) => {
+      logAction('updateCardTimestamp', payload)
+      updateCardTimestamp(payload.cardId, payload.timestamp)
       notifyRenderer()
       return { success: true }
     }

@@ -42,6 +42,8 @@ interface KanbanBoardProps {
   onMoveCard: (cardId: string, status: CardStatus) => void
   onAddCard: () => void
   onGenerateCards: () => void
+  onSortDraftByPriority: () => void
+  onSortReadyByPriority: () => void
   onSplitCard: (card: Card) => void
   devServerStatusByCardId?: Record<string, { isRunning: boolean; port?: number; status?: 'starting' | 'running' | 'stopped' | 'error' }>
 }
@@ -54,6 +56,8 @@ export function KanbanBoard({
   onMoveCard,
   onAddCard,
   onGenerateCards,
+  onSortDraftByPriority,
+  onSortReadyByPriority,
   onSplitCard,
   devServerStatusByCardId
 }: KanbanBoardProps): React.JSX.Element {
@@ -228,6 +232,13 @@ export function KanbanBoard({
               isOverColumn={overColumnId === column.id}
               onAddCard={column.id === 'draft' ? onAddCard : undefined}
               onGenerateCards={column.id === 'draft' ? onGenerateCards : undefined}
+              onSortByPriority={
+                column.id === 'draft'
+                  ? onSortDraftByPriority
+                  : column.id === 'ready'
+                    ? onSortReadyByPriority
+                    : undefined
+              }
               devServerStatusByCardId={devServerStatusByCardId}
             />
           ))}

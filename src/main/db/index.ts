@@ -32,11 +32,13 @@ export {
   getStatusLabelFromPolicy,
   getAllStatusLabelsFromPolicy,
   updateCardSyncState,
+  updateCardTimestamp,
   updateCardConflictStatus,
   clearCardConflictStatus,
   deleteCard,
   getNextReadyCard,
-  getNextReadyCards
+  getNextReadyCards,
+  isCardBlockedByDependencies
 } from './cards'
 export type { Card, CardStatus } from './cards'
 

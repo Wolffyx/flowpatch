@@ -12,6 +12,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Toaster } from '../src/components/ui/sonner'
+import { toast } from 'sonner'
 import { KanbanBoard } from '../src/components/KanbanBoard'
 import { CardDialog } from '../src/components/CardDialog'
 import { AddCardDialog, type CreateCardType } from '../src/components/AddCardDialog'
@@ -41,6 +42,7 @@ import {
   filterOutLinkedPullRequestCards,
   isLinkedPullRequestCard
 } from '../src/lib/linkedPullRequests'
+import { getPriorityFromLabels } from '@shared/utils/priority'
 import { PullRequestsSection } from '../src/components/PullRequestsSection'
 import type { PolicyConfig } from '@shared/types'
 import type {
@@ -488,6 +490,64 @@ export default function App(): React.JSX.Element {
     setStarterCardsWizardOpen(true)
   }, [])
 
+  const handleSortDraftByPriority = useCallback(async (): Promise<void> => {
+    const draftCards = cards.filter((c) => c.status === 'draft')
+
+    if (draftCards.length === 0) {
+      toast.info('No draft cards to sort')
+      return
+    }
+
+    // Sort by priority (lower number = higher priority)
+    const sorted = [...draftCards].sort((a, b) => {
+      const priorityA = getPriorityFromLabels(a.labels_json)
+      const priorityB = getPriorityFromLabels(b.labels_json)
+      return priorityA - priorityB
+    })
+
+    // Update timestamps to persist order (stagger by 1 second each)
+    const now = Date.now()
+    for (let i = 0; i < sorted.length; i++) {
+      const timestamp = new Date(now + i * 1000).toISOString()
+      await window.projectAPI.updateCardTimestamp(sorted[i].id, timestamp)
+    }
+
+    // Refresh cards to show new order
+    const cardsData = await window.projectAPI.getCards()
+    setCards(cardsData)
+
+    toast.success(`Sorted ${sorted.length} draft cards by priority`)
+  }, [cards])
+
+  const handleSortReadyByPriority = useCallback(async (): Promise<void> => {
+    const readyCards = cards.filter((c) => c.status === 'ready')
+
+    if (readyCards.length === 0) {
+      toast.info('No ready cards to sort')
+      return
+    }
+
+    // Sort by priority (lower number = higher priority)
+    const sorted = [...readyCards].sort((a, b) => {
+      const priorityA = getPriorityFromLabels(a.labels_json)
+      const priorityB = getPriorityFromLabels(b.labels_json)
+      return priorityA - priorityB
+    })
+
+    // Update timestamps to persist order (stagger by 1 second each)
+    const now = Date.now()
+    for (let i = 0; i < sorted.length; i++) {
+      const timestamp = new Date(now + i * 1000).toISOString()
+      await window.projectAPI.updateCardTimestamp(sorted[i].id, timestamp)
+    }
+
+    // Refresh cards to show new order
+    const cardsData = await window.projectAPI.getCards()
+    setCards(cardsData)
+
+    toast.success(`Sorted ${sorted.length} ready cards by priority`)
+  }, [cards])
+
   const handleCreateCardsBatch = useCallback(
     async (
       items: Array<{ title: string; body: string }>,
@@ -777,6 +837,8 @@ export default function App(): React.JSX.Element {
             onMoveCard={handleMoveCard}
             onAddCard={handleOpenAddCard}
             onGenerateCards={handleGenerateCards}
+            onSortDraftByPriority={handleSortDraftByPriority}
+            onSortReadyByPriority={handleSortReadyByPriority}
             onSplitCard={handleOpenSplitDialog}
             devServerStatusByCardId={devServerStatusByCardId}
           />
