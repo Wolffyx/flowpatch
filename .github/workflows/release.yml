@@ -197,7 +197,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Build and publish for each platform
+  # Build and publish for each platform (reuses build.yml workflow)
   build:
     needs: [test, version-bump, create-release]
     # Build if version was bumped OR if triggered by manual tag push
@@ -208,48 +208,13 @@ jobs:
         (needs.version-bump.result == 'success' && needs.version-bump.outputs.skipped == 'false') ||
         needs.version-bump.result == 'skipped'
       )
-    permissions:
-      contents: write
-    strategy:
-      matrix:
-        include:
-          - os: windows-latest
-            build_command: npm run build:win
-          - os: macos-latest
-            build_command: npm run build:mac
-          - os: ubuntu-latest
-            build_command: npm run build:linux
+    uses: ./.github/workflows/build.yml
+    with:
+      release_tag: ${{ needs.version-bump.outputs.new_version || github.ref_name }}
+      upload_to_release: true
+    secrets: inherit
 
-    runs-on: ${{ matrix.os }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          # Fetch the latest commit (with bumped version)
-          ref: ${{ needs.version-bump.outputs.new_version || github.ref }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build and publish to GitHub Releases
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Code signing (optional, for later):
-          # CSC_LINK: ${{ secrets.CSC_LINK }}
-          # CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          # APPLE_ID: ${{ secrets.APPLE_ID }}
-          # APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: ${{ matrix.build_command }}
-
-  # Cleanup old releases to save storage (for free GitHub accounts)
+  # Cleanup old release assets to save storage (keeps releases, removes files)
   cleanup:
     needs: build
     if: always() && needs.build.result == 'success'
@@ -258,21 +223,27 @@ jobs:
       contents: write
 
     steps:
-      - name: Delete old releases
-        uses: dev-drprasad/delete-older-releases@v0.3.4
-        with:
-          keep_latest: 1
-          delete_tags: true
-          delete_tag_pattern: '^v'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Delete old prereleases
-        uses: dev-drprasad/delete-older-releases@v0.3.4
-        with:
-          keep_latest: 1
-          delete_tags: true
-          delete_tag_pattern: '^v.*-(alpha|beta|rc)'
-          delete_prerelease_only: true
+      - name: Delete assets from old releases
+        run: |
+          # Get all releases except the latest one
+          OLD_RELEASES=$(gh release list --limit 100 --json tagName,isLatest --jq '.[] | select(.isLatest == false) | .tagName')
+
+          for TAG in $OLD_RELEASES; do
+            echo "Processing release: $TAG"
+
+            # Get all assets for this release
+            ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+
+            # Delete each asset
+            for ASSET in $ASSETS; do
+              echo "  Deleting asset: $ASSET"
+              gh release delete-asset "$TAG" "$ASSET" --yes || echo "  Failed to delete $ASSET"
+            done
+          done
+
+          echo "Cleanup complete. Releases kept, assets removed."
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

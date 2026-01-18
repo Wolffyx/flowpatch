@@ -6,6 +6,17 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: 'Release tag to upload builds to (optional)'
+        required: false
+        type: string
+      upload_to_release:
+        description: 'Whether to upload builds to a GitHub release'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -20,10 +31,14 @@ jobs:
             build_command: npm run build:linux
 
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -35,9 +50,12 @@ jobs:
         run: npm ci
 
       - name: Build application
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ${{ matrix.build_command }}
 
-      - name: Upload artifacts
+      - name: Upload artifacts (for PRs and regular builds)
+        if: ${{ !inputs.upload_to_release }}
         uses: actions/upload-artifact@v4
         with:
           name: build-${{ matrix.os }}
@@ -48,3 +66,18 @@ jobs:
             dist/*.snap
             dist/*.deb
           if-no-files-found: ignore
+
+      - name: Upload to GitHub Release
+        if: ${{ inputs.upload_to_release && inputs.release_tag }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          files: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.AppImage
+            dist/*.snap
+            dist/*.deb
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
