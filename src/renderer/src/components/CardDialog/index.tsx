@@ -40,6 +40,7 @@ interface CardDialogProps {
   onSplitCard?: (card: Card) => void
   onPushToRemote?: (cardId: string) => void
   onCardDeleted?: () => void
+  onOpenWorkerLogsForJob?: (jobId: string) => void
 }
 
 export function CardDialog({
@@ -54,7 +55,8 @@ export function CardDialog({
   onRunWorker,
   onSplitCard,
   onPushToRemote,
-  onCardDeleted
+  onCardDeleted,
+  onOpenWorkerLogsForJob
 }: CardDialogProps): React.JSX.Element | null {
   const state = useCardDialogState(card, projectId)
 
@@ -348,7 +350,11 @@ export function CardDialog({
 
               {/* Activity Tab */}
               <TabsContent value="activity" className="p-6 space-y-4 mt-0 max-w-full">
-                <TimelineSection events={cardEvents} />
+                <TimelineSection
+                  events={cardEvents}
+                  cardId={card?.id ?? null}
+                  onOpenWorkerLogsForJob={onOpenWorkerLogsForJob}
+                />
               </TabsContent>
             </div>
           </ScrollArea>

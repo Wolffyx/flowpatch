@@ -18,13 +18,15 @@ import {
   listCards,
   listCardLinksByProject,
   listEvents,
+  listCardEvents,
   listJobs,
   getProject,
   createLocalTestCard,
   createJob,
   createEvent,
   updateJobState,
-  updateProjectWorkerEnabled
+  updateProjectWorkerEnabled,
+  getUsageRecordsByCard
 } from '../db'
 import { runWorker as executeWorkerPipeline } from '../worker/pipeline'
 import { startWorkerLoop, stopWorkerLoop } from '../worker/loop'
@@ -775,5 +777,22 @@ export function registerProjectHandlers(): void {
     const projectId = getProjectIdFromEvent(event)
     if (!projectId) return []
     return listEvents(projectId, limit)
+  })
+
+  ipcMain.handle(
+    'project:getCardEvents',
+    (event, { cardId, limit }: { cardId: string; limit?: number }) => {
+      const projectId = getProjectIdFromEvent(event)
+      if (!projectId) return []
+      // Clamp limit to max 500 for performance
+      const clampedLimit = limit ? Math.min(limit, 500) : 200
+      return listCardEvents(cardId, clampedLimit, projectId)
+    }
+  )
+
+  ipcMain.handle('project:getCardUsage', (event, { cardId }: { cardId: string }) => {
+    const projectId = getProjectIdFromEvent(event)
+    if (!projectId) return []
+    return getUsageRecordsByCard(cardId, projectId)
   })
 }

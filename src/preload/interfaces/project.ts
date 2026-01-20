@@ -291,6 +291,8 @@ export interface ProjectAPI {
 
   getJobs: () => Promise<Job[]>
   getEvents: (limit?: number) => Promise<Event[]>
+  getCardEvents: (cardId: string, limit?: number) => Promise<Event[]>
+  getCardUsage: (cardId: string) => Promise<import('../../shared/types').UsageRecord[]>
 
   getWorkspaceStatus: () => Promise<import('../../shared/types').FlowPatchWorkspaceStatus | null>
   ensureWorkspace: () => Promise<unknown>

@@ -516,6 +516,77 @@ export async function pushWithRetry(
   })
 }
 
+// ==================== Worker Utilities ====================
+
+/**
+ * Ensure working tree is clean, optionally stashing changes.
+ *
+ * @param repoPath - Repository path
+ * @param autoStash - Whether to automatically stash changes
+ * @returns True if tree is clean or was successfully stashed
+ */
+export async function ensureCleanWorkingTree(
+  repoPath: string,
+  autoStash: boolean = true
+): Promise<boolean> {
+  try {
+    if (await isWorkingTreeClean(repoPath)) {
+      return true
+    }
+
+    if (!autoStash) {
+      return false
+    }
+
+    // Working tree has uncommitted changes, attempt to stash
+    try {
+      await stashPush(repoPath, 'flowpatch-worker-autostash')
+      return true
+    } catch (stashError) {
+      // Log the dirty files for debugging
+      const status = await getWorkingTreeStatus(repoPath)
+      const errorMessage = stashError instanceof Error ? stashError.message : String(stashError)
+      throw new GitOperationError(
+        `Failed to stash changes. Dirty files:\n${status}`,
+        errorMessage
+      )
+    }
+  } catch (error) {
+    if (error instanceof GitOperationError) throw error
+    return false
+  }
+}
+
+/**
+ * Restore the flowpatch-worker-autostash if it exists.
+ *
+ * @param repoPath - Repository path
+ */
+export async function restoreAutostash(repoPath: string): Promise<void> {
+  try {
+    const stashOutput = await stashList(repoPath)
+    const line = stashOutput
+      .split(/\r?\n|\n|\r/)
+      .find((l) => l.includes('flowpatch-worker-autostash'))
+    
+    if (!line) return
+
+    const m = line.match(/^(stash@\{\d+\}):/)
+    const ref = m?.[1] ?? null
+    if (!ref) return
+
+    try {
+      await stashApplyDrop(repoPath, ref)
+    } catch (error) {
+      // Don't throw, just warn - this is cleanup
+      console.warn(`Failed to restore autostash (${ref}):`, error)
+    }
+  } catch (error) {
+    // Don't throw, just warn - this is cleanup
+    console.warn('Failed to restore stash:', error)
+  }
+}
+
 /**
  * Get diff stat against a ref.
  */
@@ -796,5 +867,15 @@ export class GitOperations {
 
   async pushWithRetry(branch: string, maxRetries?: number): Promise<void> {
     return pushWithRetry(this.cwd, branch, maxRetries)
+  }
+
+  // ==================== Worker Utilities ====================
+
+  async ensureCleanWorkingTree(autoStash: boolean = true): Promise<boolean> {
+    return ensureCleanWorkingTree(this.cwd, autoStash)
+  }
+
+  async restoreAutostash(): Promise<void> {
+    return restoreAutostash(this.cwd)
   }
 }

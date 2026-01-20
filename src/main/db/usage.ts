@@ -167,6 +167,35 @@ export function getUsageRecordsByJob(jobId: string, projectId?: string): UsageRe
 }
 
 /**
+ * Get usage records for a card.
+ * @param cardId - The card ID
+ * @param projectId - Optional project ID for direct DB resolution
+ */
+export function getUsageRecordsByCard(cardId: string, projectId?: string): UsageRecord[] {
+  if (projectId) {
+    const { db, isLocalDb } = resolveProjectDb(projectId)
+    if (isLocalDb) {
+      const rows = db
+        .select()
+        .from(projectUsageRecords)
+        .where(eq(projectUsageRecords.card_id, cardId))
+        .orderBy(desc(projectUsageRecords.created_at))
+        .all()
+      return rows.map((r) => ({ ...r, project_id: projectId })) as UsageRecord[]
+    }
+  }
+
+  // Central DB fallback
+  const db = getDrizzle()
+  return db
+    .select()
+    .from(usageRecords)
+    .where(eq(usageRecords.card_id, cardId))
+    .orderBy(desc(usageRecords.created_at))
+    .all() as UsageRecord[]
+}
+
+/**
  * Get aggregated usage stats by tool type for a time period.
  * Note: For project-specific queries on local DB, we query the project DB.
  * For cross-project (projectId=null), we query central DB only.

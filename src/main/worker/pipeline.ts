@@ -3,13 +3,6 @@
  *
  * Orchestrates the worker execution flow from card pickup to PR creation.
  * Delegates specific responsibilities to manager classes for maintainability.
- *
- * Improvements:
- * - Configurable lease renewal interval via policy (default: 60s)
- * - Overall pipeline timeout to prevent infinite runs (default: 30min)
- * - Retry logic for transient failures in phases
- * - Optimized cancellation checks (reduced redundant calls)
- * - Metrics collection for key operations
  */
 
 import { AdapterRegistry } from '../adapters'
@@ -19,42 +12,26 @@ import {
   getCard,
   updateCardConflictStatus,
   createEvent,
-  listCardLinks,
   updateJobState,
   getJob,
-  cancelJob,
   acquireJobLease,
-  renewJobLease,
   cryptoRandomId,
-  updateSubtaskStatus,
-  getNextPendingSubtask,
-  createWorkerProgress,
-  updateWorkerProgress,
-  getWorkerProgress,
   getPlanApprovalByJob,
   deletePlanApprovalsByJob,
   deleteFollowUpInstructionsByJob
 } from '../db'
-import { TaskDecomposer } from '../services/task-decomposer'
-import type {
-  JobState,
-  Project,
-  Card,
-  PolicyConfig,
-  Subtask,
-  WorkerProgress,
-  PlanningMode
-} from '../../shared/types'
+import type { Project, Card, PolicyConfig, Subtask, PlanningMode } from '../../shared/types'
 import { broadcastToRenderers } from '../ipc/broadcast'
 import { writeCheckpoint, readCheckpoint } from '../services/flowpatch-runs'
 
 // Phase implementations
-import { runAI, buildAIPrompt } from './phases/ai'
+import { runAI } from './phases/ai'
 import { runInstall } from './phases/install'
 import { runBranchSyncPhase, type BranchSyncResult } from './phases/branch-sync'
 import { runE2EPhase as runE2EPhaseImpl, type E2EResult } from './phases/e2e'
 import { runChecks } from './phases/checks'
-import type { PipelineContext, WorkerResult } from './phases/types'
+import { createPR as createPRPhase, moveToInReview } from './phases/pr'
+import type { WorkerResult } from './phases/types'
 
 // Managers
 import {
@@ -65,6 +42,14 @@ import {
   BranchManager,
   WorktreePipelineManager
 } from './managers'
+import { LifecycleManager } from './managers/lifecycle-manager'
+import { DecompositionManager } from './managers/decomposition-manager'
+import { IterativeAIManager } from './managers/iterative-ai-manager'
+
+// Utilities
+import { buildPipelineContext } from './pipeline-context'
+import { commitAndPush } from './commit-manager'
+import { ensureCleanWorkingTree, restoreAutostash } from './git-operations'
 
 // Errors
 import { WorkerCanceledError, WorkerPendingApprovalError, PipelineTimeoutError } from './errors'
@@ -72,24 +57,6 @@ import { WorkerCanceledError, WorkerPendingApprovalError, PipelineTimeoutError }
 // Sync scheduler and locks
 import { triggerProjectSync } from '../sync/scheduler'
 import { acquireWorkerLock, releaseWorkerLock } from '../sync/sync-lock'
-
-// Git operations
-import {
-  stageAll,
-  commit,
-  push,
-  stashPush,
-  stashList,
-  stashApplyDrop,
-  isWorkingTreeClean,
-  getWorkingTreeStatus,
-  getModifiedFiles,
-  getDiffStat
-} from './git-operations'
-
-// Constants for configurable values
-const DEFAULT_LEASE_RENEWAL_MS = 60_000
-const DEFAULT_PIPELINE_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes
 
 /**
  * Main worker pipeline class.
@@ -103,27 +70,21 @@ export class WorkerPipeline {
   private policy: PolicyConfig
   private adapter: IRepoAdapter | null = null
   private jobId: string | null = null
-  private leaseInterval: NodeJS.Timeout | null = null
-  private pipelineTimeout: NodeJS.Timeout | null = null
-  private pipelineStartTime: number = 0
   private workerId: string = cryptoRandomId()
-  private lastCancelCheck: number = 0
-  private cancelCheckThrottleMs: number = 100 // Minimum ms between cancel checks (reduced for faster cancellation)
 
   // Managers
   private logManager: LogManager
+  private lifecycleManager: LifecycleManager | null = null
   private cardStatusManager: CardStatusManager | null = null
   private branchManager: BranchManager | null = null
   private worktreeManager: WorktreePipelineManager | null = null
   private approvalManager: ApprovalManager | null = null
+  private decompositionManager: DecompositionManager | null = null
+  private iterativeAIManager: IterativeAIManager | null = null
 
-  // Worktree state
+  // State
   private useWorktree: boolean = false
-
-  // Decomposition and iterative AI state
   private subtasks: Subtask[] = []
-  private progress: WorkerProgress | null = null
-  private taskDecomposer: TaskDecomposer | null = null
 
   constructor(projectId: string, cardId: string) {
     this.projectId = projectId
@@ -145,22 +106,6 @@ export class WorkerPipeline {
     this.logManager = new LogManager(projectId, cardId)
   }
 
-  // ==================== Configuration Helpers ====================
-
-  /**
-   * Get lease renewal interval from policy or default.
-   */
-  private getLeaseRenewalMs(): number {
-    return this.policy.worker?.leaseRenewalIntervalMs ?? DEFAULT_LEASE_RENEWAL_MS
-  }
-
-  /**
-   * Get pipeline timeout from policy or default.
-   */
-  private getPipelineTimeoutMs(): number {
-    return this.policy.worker?.pipelineTimeoutMs ?? DEFAULT_PIPELINE_TIMEOUT_MS
-  }
-
   // ==================== Helpers ====================
 
   /**
@@ -168,64 +113,6 @@ export class WorkerPipeline {
    */
   private getWorkingDir(): string {
     return this.worktreeManager?.getWorktreePath() ?? this.project!.local_path
-  }
-
-  private getJobState(): JobState | null {
-    if (!this.jobId) return null
-    const job = getJob(this.jobId)
-    return job?.state ?? null
-  }
-
-  private isCanceled(): boolean {
-    const jobState = this.getJobState()
-    if (jobState === 'canceled') return true
-
-    // Check if worker is globally disabled for this project
-    const project = getProject(this.projectId)
-    if (project && project.worker_enabled !== 1) {
-      this.cancelJobInternal('Worker disabled')
-      return true
-    }
-
-    // Also check if card was moved away from 'ready' status
-    // Refresh card from DB to get current status
-    const currentCard = getCard(this.cardId)
-    if (currentCard && currentCard.status !== 'ready') {
-      // Cancel job if card is no longer ready
-      this.cancelJobInternal(`Card status changed to ${currentCard.status}`)
-      return true
-    }
-
-    return false
-  }
-
-  private cancelJobInternal(reason?: string): void {
-    if (!this.jobId) return
-    if (this.isCanceled()) return
-    cancelJob(this.jobId, reason ?? 'Canceled')
-  }
-
-  /**
-   * Check if canceled, with throttling to reduce DB queries.
-   * Only checks every cancelCheckThrottleMs milliseconds.
-   */
-  private ensureNotCanceled(): void {
-    const now = Date.now()
-    if (now - this.lastCancelCheck < this.cancelCheckThrottleMs) {
-      return // Skip check, too soon since last check
-    }
-    this.lastCancelCheck = now
-
-    if (this.isCanceled()) throw new WorkerCanceledError()
-
-    // Also check for pipeline timeout
-    if (this.pipelineStartTime > 0) {
-      const elapsed = now - this.pipelineStartTime
-      const timeout = this.getPipelineTimeoutMs()
-      if (elapsed > timeout) {
-        throw new PipelineTimeoutError(timeout)
-      }
-    }
   }
 
   private log(message: string, meta?: { source?: string; stream?: 'stdout' | 'stderr' }): void {
@@ -241,6 +128,7 @@ export class WorkerPipeline {
     if (!this.jobId || !this.project) return
     const repoRoot = this.project.local_path
     try {
+      const progress = this.iterativeAIManager?.getProgress()
       writeCheckpoint(repoRoot, {
         jobId: this.jobId,
         cardId: this.cardId,
@@ -248,7 +136,7 @@ export class WorkerPipeline {
         phase: this.logManager.getPhase(),
         iteration,
         updatedAt: new Date().toISOString(),
-        lastContextPath: this.progress?.progress_file_path ?? undefined
+        lastContextPath: progress?.progress_file_path ?? undefined
       })
     } catch {
       // ignore checkpoint failures
@@ -318,10 +206,16 @@ export class WorkerPipeline {
       return false
     }
 
-    // Initialize task decomposer if enabled
-    if (this.policy.worker?.decomposition?.enabled && this.adapter) {
-      this.taskDecomposer = new TaskDecomposer(this.policy, this.adapter)
-    }
+    // Initialize decomposition manager
+    this.decompositionManager = new DecompositionManager(
+      {
+        projectId: this.projectId,
+        cardId: this.cardId,
+        policy: this.policy,
+        adapter: this.adapter
+      },
+      (msg) => this.log(msg)
+    )
 
     // Initialize worktree manager if enabled
     if (this.policy.worker?.worktree?.enabled) {
@@ -353,7 +247,7 @@ export class WorkerPipeline {
         adapter: this.adapter
       },
       (msg) => this.log(msg),
-      (reason) => this.cancelJobInternal(reason)
+      () => this.lifecycleManager?.isCanceled()
     )
 
     // Initialize branch manager
@@ -376,8 +270,17 @@ export class WorkerPipeline {
         logs: this.logManager.getLogs()
       },
       (msg) => this.log(msg),
-      (reason) => this.cancelJobInternal(reason)
+      () => this.lifecycleManager?.isCanceled()
     )
+
+    // Initialize iterative AI manager
+    this.iterativeAIManager = new IterativeAIManager({
+      projectId: this.projectId,
+      cardId: this.cardId,
+      jobId: this.jobId,
+      policy: this.policy,
+      card: this.card
+    })
 
     return true
   }
@@ -388,27 +291,27 @@ export class WorkerPipeline {
     this.jobId = jobId
     this.logManager.setJobId(jobId)
     this.setPhase('init')
-    this.pipelineStartTime = Date.now()
     let outcome: 'succeeded' | 'failed' | 'canceled' | 'pending_approval' = 'failed'
+
+    // Initialize lifecycle manager
+    this.lifecycleManager = new LifecycleManager({
+      projectId: this.projectId,
+      cardId: this.cardId,
+      jobId: this.jobId,
+      leaseRenewalMs: this.policy.worker?.leaseRenewalIntervalMs,
+      pipelineTimeoutMs: this.policy.worker?.pipelineTimeoutMs
+    })
 
     // Acquire worker lock to prevent sync during worker operations
     this.log('Acquiring worker lock')
     await acquireWorkerLock(this.projectId)
     this.log('Worker lock acquired')
 
-    // Start lease renewal with configurable interval
-    const leaseIntervalMs = this.getLeaseRenewalMs()
-    this.log(`Starting lease renewal (interval: ${leaseIntervalMs}ms)`)
-    this.leaseInterval = setInterval(() => {
-      renewJobLease(jobId)
-    }, leaseIntervalMs)
-
-    // Set up pipeline timeout
-    const timeoutMs = this.getPipelineTimeoutMs()
-    this.pipelineTimeout = setTimeout(() => {
-      this.log(`Pipeline timeout reached (${timeoutMs}ms), canceling...`)
-      this.cancelJobInternal(`Pipeline timed out after ${timeoutMs}ms`)
-    }, timeoutMs)
+    // Start lifecycle management (lease renewal + timeout)
+    const leaseIntervalMs = this.lifecycleManager.getLeaseRenewalMs()
+    const timeoutMs = this.lifecycleManager.getPipelineTimeoutMs()
+    this.log(`Starting lifecycle management (lease: ${leaseIntervalMs}ms, timeout: ${timeoutMs}ms)`)
+    this.lifecycleManager.start()
 
     try {
       const initialized = await this.initialize()
@@ -422,7 +325,7 @@ export class WorkerPipeline {
         }
       }
 
-      this.ensureNotCanceled()
+      this.lifecycleManager.ensureNotCanceled()
       this.cardStatusManager!.ensureCardStatusAllowed(['ready'], 'Canceled: card no longer Ready')
 
       // Phase 1: Move to In Progress
@@ -430,7 +333,7 @@ export class WorkerPipeline {
       this.log('Moving card to In Progress')
       await this.cardStatusManager!.moveToInProgress()
 
-      this.ensureNotCanceled()
+      this.lifecycleManager.ensureNotCanceled()
       this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
 
       // Phase 2: Setup working environment
@@ -450,7 +353,7 @@ export class WorkerPipeline {
         this.worktreeManager.startLockRenewal()
       } else {
         this.log('Checking working tree')
-        const cleanTree = await this.checkWorkingTree()
+        const cleanTree = await ensureCleanWorkingTree(this.project!.local_path, true)
         if (!cleanTree) {
           outcome = 'failed'
           return {
@@ -462,7 +365,7 @@ export class WorkerPipeline {
         }
       }
 
-      this.ensureNotCanceled()
+      this.lifecycleManager.ensureNotCanceled()
       this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
 
       // Phase 3: Fetch latest
@@ -470,7 +373,7 @@ export class WorkerPipeline {
       this.log('Fetching latest from remote')
       await this.branchManager!.fetchLatest()
 
-      this.ensureNotCanceled()
+      this.lifecycleManager.ensureNotCanceled()
       this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
 
       // Phase 4: Create branch
@@ -485,7 +388,7 @@ export class WorkerPipeline {
         await this.branchManager!.createBranch(branchName)
       }
 
-      this.ensureNotCanceled()
+      this.lifecycleManager.ensureNotCanceled()
       this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
 
       // Phase 4.2: Branch Sync
@@ -493,7 +396,7 @@ export class WorkerPipeline {
       this.log('Checking if branch needs sync with main')
       const syncResult = await this.runBranchSync(branchName)
 
-      this.ensureNotCanceled()
+      this.lifecycleManager.ensureNotCanceled()
       this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
 
       if (!syncResult.success) {
@@ -521,12 +424,13 @@ export class WorkerPipeline {
       }
 
       // Phase 4.5: Task Decomposition
-      if (this.taskDecomposer && this.card) {
+      if (this.decompositionManager?.shouldRunDecomposition() && this.card) {
         this.setPhase('decomposition')
-        await this.runDecomposition()
+        await this.decompositionManager.runDecomposition(this.card, this.getWorkingDir())
+        this.subtasks = this.decompositionManager.getSubtasks()
       }
 
-      this.ensureNotCanceled()
+      this.lifecycleManager.ensureNotCanceled()
       this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
 
       // Phase 5: Generate plan
@@ -550,14 +454,14 @@ export class WorkerPipeline {
       // Phase 5.5: Check for plan approval
       await this.approvalManager!.checkPlanApproval(plan, planningMode)
 
-      this.ensureNotCanceled()
+      this.lifecycleManager.ensureNotCanceled()
       this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
 
       // Phase 5.75: Install dependencies
       this.setPhase('install')
       this.log('Installing dependencies')
       const installSuccess = await this.runInstallPhase()
-      this.ensureNotCanceled()
+      this.lifecycleManager.ensureNotCanceled()
       this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
       if (!installSuccess) {
         this.log('Install failed, moving card back to Ready for retry')
@@ -585,7 +489,7 @@ export class WorkerPipeline {
         aiSuccess = await this.runAIPhase(plan)
       }
 
-      this.ensureNotCanceled()
+      this.lifecycleManager.ensureNotCanceled()
       this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
       if (!aiSuccess) {
         outcome = 'failed'
@@ -602,7 +506,7 @@ export class WorkerPipeline {
       this.setPhase('checks')
       this.log('Running verification checks')
       const checksPass = await this.runChecksPhase()
-      this.ensureNotCanceled()
+      this.lifecycleManager.ensureNotCanceled()
       this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
       if (!checksPass) {
         this.log('Checks failed, moving card back to Ready for retry')
@@ -627,7 +531,7 @@ export class WorkerPipeline {
         await this.cardStatusManager!.moveToTesting()
 
         const e2eResult = await this.runE2EPhase()
-        this.ensureNotCanceled()
+        this.lifecycleManager.ensureNotCanceled()
         this.cardStatusManager!.ensureCardStatusAllowed(['testing', 'in_progress'])
         e2ePass = e2eResult.success
         if (!e2ePass) {
@@ -647,16 +551,16 @@ export class WorkerPipeline {
       // Phase 8: Commit and push
       this.setPhase('push')
       this.log('Committing and pushing changes')
-      await this.commitAndPush(branchName)
+      await this.commitAndPushChanges(branchName)
 
-      this.ensureNotCanceled()
+      this.lifecycleManager.ensureNotCanceled()
       this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
 
       // Phase 9: Create PR/MR
       this.setPhase('pr')
       this.log('Creating PR/MR')
       const prResult = await this.createPR(branchName, plan, checksPass && e2ePass)
-      this.ensureNotCanceled()
+      this.lifecycleManager.ensureNotCanceled()
       this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
       if (!prResult) {
         await this.cardStatusManager!.moveToReady('pr_failed')
@@ -673,7 +577,8 @@ export class WorkerPipeline {
       // Phase 10: Move to In Review
       this.setPhase('in_review')
       this.log('Moving card to In Review')
-      await this.cardStatusManager!.moveToInReview(prResult.url, !prResult.existing)
+      const ctx = this.buildPipelineContext()
+      await moveToInReview(ctx, prResult.url, !prResult.existing)
 
       this.setPhase('done')
       outcome = 'succeeded'
@@ -724,14 +629,9 @@ export class WorkerPipeline {
       }
       throw err
     } finally {
-      // Cleanup timers
-      if (this.leaseInterval) {
-        clearInterval(this.leaseInterval)
-        this.leaseInterval = null
-      }
-      if (this.pipelineTimeout) {
-        clearTimeout(this.pipelineTimeout)
-        this.pipelineTimeout = null
+      // Cleanup lifecycle manager
+      if (this.lifecycleManager) {
+        this.lifecycleManager.stop()
       }
 
       if (this.worktreeManager) {
@@ -744,10 +644,10 @@ export class WorkerPipeline {
       if (this.useWorktree && this.worktreeManager) {
         await this.worktreeManager.cleanup(this.logManager.getPhase() === 'done')
       } else {
-        if (this.isCanceled() && this.policy.worker?.rollbackOnCancel) {
+        if (this.lifecycleManager?.isCanceled() && this.policy.worker?.rollbackOnCancel) {
           await this.branchManager?.rollbackWorkerChanges()
         }
-        await this.restoreStash()
+        await restoreAutostash(this.project!.local_path)
       }
 
       if (outcome === 'failed') {
@@ -772,102 +672,14 @@ export class WorkerPipeline {
 
   // ==================== Phase Implementations ====================
 
-  private async checkWorkingTree(): Promise<boolean> {
-    try {
-      if (await isWorkingTreeClean(this.project!.local_path)) {
-        return true
-      }
-
-      this.log('Working tree has uncommitted changes, attempting to stash...')
-      try {
-        await stashPush(this.project!.local_path, 'flowpatch-worker-autostash')
-        this.log('Changes stashed successfully')
-        return true
-      } catch (stashError) {
-        this.log(`Failed to stash changes: ${stashError}`)
-        const status = await getWorkingTreeStatus(this.project!.local_path)
-        this.log(`Dirty files:\n${status}`)
-        return false
-      }
-    } catch {
-      return false
-    }
-  }
-
-  private async restoreStash(): Promise<void> {
-    try {
-      const stashOutput = await stashList(this.project!.local_path)
-      const line = stashOutput
-        .split(/\r?\n|\n|\r/)
-        .find((l) => l.includes('flowpatch-worker-autostash'))
-      if (!line) return
-
-      const m = line.match(/^(stash@\{\d+\}):/)
-      const ref = m?.[1] ?? null
-      if (!ref) return
-
-      this.log(`Restoring stashed changes from ${ref}...`)
-      try {
-        await stashApplyDrop(this.project!.local_path, ref)
-        this.log('Stashed changes restored')
-      } catch (error) {
-        this.log(`Warning: Failed to restore autostash (${ref}). Error: ${error}`)
-      }
-    } catch (error) {
-      this.log(`Warning: Failed to restore stash: ${error}`)
-    }
-  }
-
   private async runBranchSync(branchName: string): Promise<BranchSyncResult> {
     const ctx = this.buildPipelineContext()
     return runBranchSyncPhase(
       ctx,
       branchName,
       (msg, meta) => this.log(msg, meta),
-      () => this.isCanceled()
+      () => this.lifecycleManager!.isCanceled()
     )
-  }
-
-  private async runDecomposition(): Promise<void> {
-    if (!this.taskDecomposer || !this.card) return
-
-    if (this.taskDecomposer.hasExistingSubtasks(this.cardId)) {
-      this.subtasks = this.taskDecomposer.getExistingSubtasks(this.cardId)
-      this.log(`Found ${this.subtasks.length} existing subtasks`)
-      return
-    }
-
-    this.log('Analyzing task for decomposition...')
-
-    try {
-      const workingDir = this.getWorkingDir()
-      const analysis = await this.taskDecomposer.analyzeCard(this.card, workingDir)
-
-      if (!analysis.shouldDecompose) {
-        this.log('Task does not need decomposition')
-        return
-      }
-
-      this.log(`Decomposing into ${analysis.subtasks.length} subtasks`)
-      if (analysis.reasoning) {
-        this.log(`Reasoning: ${analysis.reasoning}`)
-      }
-
-      const result = await this.taskDecomposer.createSubtasks(this.card, analysis.subtasks)
-      this.subtasks = result.subtasks
-
-      createEvent(this.projectId, 'task_decomposed', this.cardId, {
-        subtaskCount: this.subtasks.length,
-        remoteIssuesCreated: result.remoteIssuesCreated,
-        reasoning: analysis.reasoning
-      })
-
-      this.log(
-        `Created ${this.subtasks.length} subtasks (${result.remoteIssuesCreated} remote issues)`
-      )
-    } catch (error) {
-      this.log(`Decomposition failed: ${error instanceof Error ? error.message : String(error)}`)
-    }
   }
 
   private async runAIPhase(plan: string): Promise<boolean> {
@@ -879,7 +691,7 @@ export class WorkerPipeline {
       ctx,
       plan,
       (msg, meta) => this.log(msg, meta),
-      () => this.isCanceled()
+      () => this.lifecycleManager!.isCanceled()
     )
 
     // Mark follow-up instructions as applied
@@ -893,7 +705,7 @@ export class WorkerPipeline {
     return runInstall(
       ctx,
       (msg, meta) => this.log(msg, meta),
-      () => this.isCanceled()
+      () => this.lifecycleManager!.isCanceled()
     )
   }
 
@@ -902,7 +714,7 @@ export class WorkerPipeline {
     return runChecks(
       ctx,
       (msg, meta) => this.log(msg, meta),
-      () => this.isCanceled()
+      () => this.lifecycleManager!.isCanceled()
     )
   }
 
@@ -911,45 +723,13 @@ export class WorkerPipeline {
     return runE2EPhaseImpl(
       ctx,
       (msg, meta) => this.log(msg, meta),
-      () => this.isCanceled()
+      () => this.lifecycleManager!.isCanceled()
     )
   }
 
-  private async commitAndPush(branchName: string): Promise<void> {
-    const commitMsg =
-      this.policy.worker?.commitMessage
-        ?.replace('{issue}', this.card?.remote_number_or_iid || '')
-        .replace('{title}', this.card?.title || '') ||
-      `#${this.card?.remote_number_or_iid} ${this.card?.title}`
-
-    const workingDir = this.getWorkingDir()
-
-    try {
-      await stageAll(workingDir)
-
-      if (!(await isWorkingTreeClean(workingDir))) {
-        await commit(workingDir, commitMsg)
-      }
-
-      // Update from origin before push
-      try {
-        await this.branchManager?.updateBranchFromOrigin(branchName)
-      } catch {
-        // Let push surface the issue
-      }
-
-      await push(workingDir, branchName)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      if (
-        message.includes('could not read Username') ||
-        message.includes('Authentication failed')
-      ) {
-        this.log('Git push failed: missing credentials.')
-      }
-      this.log(`Commit/push warning: ${message}`)
-      throw error
-    }
+  private async commitAndPushChanges(branchName: string): Promise<void> {
+    const ctx = this.buildPipelineContext()
+    await commitAndPush(ctx, branchName, this.branchManager, true)
   }
 
   private async createPR(
@@ -957,286 +737,34 @@ export class WorkerPipeline {
     plan: string,
     checksPass: boolean
   ): Promise<{ number: number; url: string; existing?: boolean } | null> {
-    if (!this.adapter || !this.card) return null
-
-    const linkedType = this.adapter.providerKey === 'github' ? 'pr' : 'mr'
-    const existingLink = listCardLinks(this.cardId).find((link) => link.linked_type === linkedType)
-    if (existingLink?.linked_url) {
-      const url = existingLink.linked_url
-      const numberMatch =
-        linkedType === 'pr' ? url.match(/\/pull\/(\d+)/) : url.match(/\/merge_requests\/(\d+)/)
-      const number = numberMatch ? parseInt(numberMatch[1], 10) : 0
-      return { number, url, existing: true }
-    }
-
-    const title = checksPass ? this.card.title : `[WIP] ${this.card.title}`
-
-    const body = `
-## Summary
-${this.card.body || 'Automated implementation'}
-
-## Plan
-${plan}
-
-## Testing
-${checksPass ? 'All checks passed' : 'Some checks failed - needs review'}
-
----
-Closes #${this.card.remote_number_or_iid}
-
-_Automated by FlowPatch_
-`.trim()
-
+    const ctx = this.buildPipelineContext()
     const baseBranch =
       this.branchManager?.getBaseBranch() ?? (await this.branchManager?.fetchBaseBranch()) ?? 'main'
-    const statusLabel = this.adapter.getStatusLabel('in_review')
-
-    const result = await this.adapter.createPullRequest(title, body, branchName, baseBranch, [
-      statusLabel
-    ])
-    return result ? { ...result, existing: false } : null
+    
+    return createPRPhase(ctx, branchName, plan, checksPass, baseBranch)
   }
-
-  // ==================== Iterative AI ====================
 
   private async runIterativeAI(plan: string): Promise<boolean> {
-    if (!this.project || !this.card) return false
+    if (!this.iterativeAIManager) return false
 
-    const sessionConfig = this.policy.worker?.session
-    const maxIterations = sessionConfig?.maxIterations ?? 5
-    const progressCheckpoint = sessionConfig?.progressCheckpoint ?? true
-    const contextCarryover = sessionConfig?.contextCarryover ?? 'summary'
-
-    // Initialize or resume progress tracking
-    let existingProgress = getWorkerProgress(this.cardId, this.projectId)
-    if (!existingProgress) {
-      existingProgress = createWorkerProgress({
-        projectId: this.projectId,
-        cardId: this.cardId,
-        jobId: this.jobId ?? undefined,
-        totalIterations: maxIterations
-      })
-    }
-
-    // Reset iteration to 0 if starting a new job (different jobId)
-    if (existingProgress.job_id !== this.jobId) {
-      existingProgress = {
-        ...existingProgress,
-        iteration: 0
-      }
-    }
-
-    this.progress = existingProgress
-
-    const startIteration = this.progress.iteration
-    this.log(`Starting iterative AI from iteration ${startIteration}/${maxIterations}`)
-
-    let contextSummary = this.progress.context_summary ?? ''
-    let allSuccess = true
-
-    for (let i = startIteration; i <= maxIterations; i++) {
-      this.ensureNotCanceled()
-
-      const iterationPrompt = await this.buildIterationPrompt(
-        plan,
-        i,
-        maxIterations,
-        contextSummary
-      )
-
-      this.log(`Running iteration ${i}/${maxIterations}`)
-
-      try {
-        const success = await this.runAIPhase(iterationPrompt)
-
-        if (!success) {
-          this.log(`Iteration ${i} failed`)
-          allSuccess = false
-        }
-
-        if (progressCheckpoint) {
-          await this.checkpointProgress(i, contextCarryover)
-        }
-
-        if (await this.isIterationComplete()) {
-          this.log(`Task completed after iteration ${i}`)
-          break
-        }
-
-        if (contextCarryover !== 'none') {
-          contextSummary = await this.generateContextSummary(contextCarryover)
-        }
-
-        if (this.progress) {
-          updateWorkerProgress(this.progress.id, {
-            iteration: i + 1,
-            contextSummary
-          })
-          this.persistRunCheckpoint(i)
-        }
-      } catch (error) {
-        if (error instanceof WorkerCanceledError) {
-          throw error
-        }
-        this.log(`Iteration ${i} error: ${error instanceof Error ? error.message : String(error)}`)
-        allSuccess = false
-        break
-      }
-    }
-
-    return allSuccess
-  }
-
-  private async buildIterationPrompt(
-    plan: string,
-    iteration: number,
-    maxIterations: number,
-    contextSummary: string
-  ): Promise<string> {
-    const ctx = this.buildPipelineContext()
-    const basePrompt = await buildAIPrompt(ctx, plan)
-
-    let iterationContext = `\n\n## Iteration Context
-This is iteration ${iteration} of ${maxIterations}.
-`
-
-    if (contextSummary) {
-      iterationContext += `\n### Previous Progress
-${contextSummary}
-
-Continue from where you left off. Focus on the next logical step.
-`
-    }
-
-    if (this.subtasks.length > 0) {
-      const pendingSubtasks = this.subtasks.filter((s) => s.status === 'pending')
-      const currentSubtask = pendingSubtasks[0]
-
-      if (currentSubtask) {
-        iterationContext += `\n### Current Subtask
-Focus on this subtask: ${currentSubtask.title}
-${currentSubtask.description || ''}
-
-Remaining subtasks: ${pendingSubtasks.length}
-`
-      }
-    }
-
-    iterationContext += `\n### Iteration Guidelines
-- Focus on making incremental progress
-- Commit meaningful chunks of work
-- Leave the codebase in a working state
-- If you complete the current subtask, move to the next one
-`
-
-    // Add follow-up context
-    const followUpContext = this.approvalManager?.buildFollowUpContext() ?? ''
-
-    return basePrompt + iterationContext + followUpContext
-  }
-
-  private async checkpointProgress(
-    iteration: number,
-    contextCarryover: 'full' | 'summary' | 'none'
-  ): Promise<void> {
-    const workingDir = this.getWorkingDir()
-
-    try {
-      if (await isWorkingTreeClean(workingDir)) {
-        this.log(`Iteration ${iteration}: No changes to checkpoint`)
-        return
-      }
-
-      await stageAll(workingDir)
-
-      const commitMsg = `[WIP] Iteration ${iteration}: Progress checkpoint
-
-Automated checkpoint by FlowPatch worker.
-Card: #${this.card?.remote_number_or_iid} ${this.card?.title}`
-
-      await commit(workingDir, commitMsg)
-
-      this.log(`Iteration ${iteration}: Progress checkpointed`)
-
-      await this.updateSubtaskProgress()
-
-      if (this.progress && contextCarryover !== 'none') {
-        const modifiedFiles = await getModifiedFiles(
-          workingDir,
-          this.branchManager?.getBaseHeadSha() ?? 'HEAD~1'
-        )
-        updateWorkerProgress(this.progress.id, {
-          iteration,
-          filesModified: modifiedFiles
-        })
-      }
-    } catch (error) {
-      this.log(`Checkpoint warning: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }
-
-  private async isIterationComplete(): Promise<boolean> {
-    if (this.subtasks.length > 0) {
-      return this.subtasks.every((s) => s.status === 'completed')
-    }
-    return false
-  }
-
-  private async generateContextSummary(mode: 'full' | 'summary' | 'none'): Promise<string> {
-    if (mode === 'none') return ''
-
-    const workingDir = this.getWorkingDir()
-    const baseRef = this.branchManager?.getBaseHeadSha() ?? 'HEAD~1'
-
-    try {
-      const diffStat = await getDiffStat(workingDir, baseRef)
-      const modifiedFiles = await getModifiedFiles(workingDir, baseRef)
-
-      let summary = `Files modified:\n${modifiedFiles.join('\n')}\n\nChange summary:\n${diffStat}`
-
-      if (mode === 'summary') {
-        const lines = summary.split('\n')
-        if (lines.length > 20) {
-          summary = lines.slice(0, 20).join('\n') + '\n... (truncated)'
-        }
-      }
-
-      return summary
-    } catch {
-      return ''
-    }
-  }
-
-  private async updateSubtaskProgress(): Promise<void> {
-    if (this.subtasks.length === 0) return
-
-    const inProgress = this.subtasks.find((s) => s.status === 'in_progress')
-    if (inProgress) {
-      updateSubtaskStatus(inProgress.id, 'completed')
-      const updated = this.taskDecomposer?.getExistingSubtasks(this.cardId)
-      if (updated) this.subtasks = updated
-    }
-
-    const nextPending = getNextPendingSubtask(this.cardId)
-    if (nextPending) {
-      updateSubtaskStatus(nextPending.id, 'in_progress')
-      const updated = this.taskDecomposer?.getExistingSubtasks(this.cardId)
-      if (updated) this.subtasks = updated
-    }
-
-    if (this.progress) {
-      const completed = this.subtasks.filter((s) => s.status === 'completed').length
-      updateWorkerProgress(this.progress.id, {
-        subtasksCompleted: completed,
-        subtaskIndex: this.subtasks.findIndex((s) => s.status === 'in_progress')
-      })
-    }
+    return this.iterativeAIManager.runIterativeAI(
+      plan,
+      () => this.buildPipelineContext(),
+      (prompt) => this.runAIPhase(prompt),
+      this.decompositionManager?.getTaskDecomposer() ?? null,
+      this.approvalManager,
+      this.subtasks,
+      this.branchManager?.getBaseHeadSha() ?? null,
+      (msg) => this.log(msg),
+      () => this.lifecycleManager!.ensureNotCanceled(),
+      (iteration) => this.persistRunCheckpoint(iteration)
+    )
   }
 
   // ==================== Context Builder ====================
 
-  private buildPipelineContext(): PipelineContext {
-    return {
+  private buildPipelineContext() {
+    return buildPipelineContext({
       projectId: this.projectId,
       cardId: this.cardId,
       jobId: this.jobId,
@@ -1245,23 +773,15 @@ Card: #${this.card?.remote_number_or_iid} ${this.card?.title}`
       card: this.card,
       policy: this.policy,
       adapter: this.adapter,
-      startingBranch: this.branchManager?.getStartingBranch() ?? null,
-      baseBranch: this.branchManager?.getBaseBranch() ?? null,
-      baseHeadSha: this.branchManager?.getBaseHeadSha() ?? null,
-      workerBranch:
-        this.branchManager?.getWorkerBranch() ?? this.worktreeManager?.getWorkerBranch() ?? null,
-      useWorktree: this.useWorktree,
-      worktreeManager: this.worktreeManager?.getWorktreeManager() ?? null,
-      worktreeRecord: this.worktreeManager?.getWorktreeRecord() ?? null,
-      worktreePath: this.worktreeManager?.getWorktreePath() ?? null,
-      taskDecomposer: this.taskDecomposer,
+      branchManager: this.branchManager,
+      worktreeManager: this.worktreeManager,
+      taskDecomposer: this.decompositionManager?.getTaskDecomposer() ?? null,
       subtasks: this.subtasks,
-      progress: this.progress,
+      progress: this.iterativeAIManager?.getProgress() ?? null,
       phase: this.logManager.getPhase(),
       logs: this.logManager.getLogs(),
-      lastPlan: undefined,
-      lastPersistMs: 0
-    }
+      useWorktree: this.useWorktree
+    })
   }
 }
 

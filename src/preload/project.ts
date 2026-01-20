@@ -273,6 +273,10 @@ const projectAPI: ProjectAPI = {
 
   getEvents: (limit) => ipcRenderer.invoke('project:getEvents', { limit }),
 
+  getCardEvents: (cardId, limit) => ipcRenderer.invoke('project:getCardEvents', { cardId, limit }),
+
+  getCardUsage: (cardId) => ipcRenderer.invoke('project:getCardUsage', { cardId }),
+
   getWorkspaceStatus: () => ipcRenderer.invoke('project:getWorkspaceStatus'),
 
   ensureWorkspace: () => ipcRenderer.invoke('project:ensureWorkspace'),

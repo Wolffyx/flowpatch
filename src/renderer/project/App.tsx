@@ -94,6 +94,7 @@ export default function App(): React.JSX.Element {
   const [cards, setCards] = useState<Card[]>([])
   const [cardLinks, setCardLinks] = useState<CardLink[]>([])
   const [jobs, setJobs] = useState<Job[]>([])
+  const [events, setEvents] = useState<Event[]>([])
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null)
   const [addCardOpen, setAddCardOpen] = useState(false)
   const [labelSetupOpen, setLabelSetupOpen] = useState(false)
@@ -106,6 +107,7 @@ export default function App(): React.JSX.Element {
   const [workerEnabled, setWorkerEnabled] = useState(false)
   const [workerLogsOpen, setWorkerLogsOpen] = useState(false)
   const [workerLogsByJobId, setWorkerLogsByJobId] = useState<Record<string, string[]>>({})
+  const [logsJobOverrideId, setLogsJobOverrideId] = useState<string | null>(null)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [workspaceStatus, setWorkspaceStatus] = useState<FlowPatchWorkspaceStatus | null>(null)
   const [workspaceStatusLoading, setWorkspaceStatusLoading] = useState(false)
@@ -262,7 +264,9 @@ export default function App(): React.JSX.Element {
         })
   const hasWorkerError = latestWorkerJob?.state === 'failed'
   const readyCards = cards.filter((c) => c.status === 'ready')
-  const jobForLogs = activeWorkerJob || latestWorkerJob
+  // Prefer override job if set, otherwise use active/latest
+  const overrideJob = logsJobOverrideId ? jobs.find((j) => j.id === logsJobOverrideId) : null
+  const jobForLogs = overrideJob || activeWorkerJob || latestWorkerJob
   const cardForLogs = jobForLogs?.card_id
     ? (cards.find((c) => c.id === jobForLogs.card_id) ?? null)
     : null
@@ -275,6 +279,37 @@ export default function App(): React.JSX.Element {
       setSelectedCardId(null)
     }
   }, [cards, linkedPrIndex, selectedCardId])
+
+  // Load card-specific events when a card is selected
+  useEffect(() => {
+    if (!selectedCardId) return
+
+    const loadCardEvents = async (): Promise<void> => {
+      try {
+        const cardEvents = await window.projectAPI.getCardEvents(selectedCardId, 200)
+        // Merge card events with existing events, avoiding duplicates
+        setEvents((prev) => {
+          const eventMap = new Map<string, Event>()
+          // Add existing events
+          for (const event of prev) {
+            eventMap.set(event.id, event)
+          }
+          // Add/update card events
+          for (const event of cardEvents) {
+            eventMap.set(event.id, event)
+          }
+          // Convert back to array and sort by created_at descending
+          return Array.from(eventMap.values()).sort(
+            (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          )
+        })
+      } catch (error) {
+        console.error('Failed to load card events:', error)
+      }
+    }
+
+    void loadCardEvents()
+  }, [selectedCardId])
 
   // Listen for project opened event
   useEffect(() => {
@@ -398,18 +433,28 @@ export default function App(): React.JSX.Element {
     })
   }, [])
 
+  const handleOpenWorkerLogsForJob = useCallback(
+    (jobId: string) => {
+      setLogsJobOverrideId(jobId)
+      setWorkerLogsOpen(true)
+    },
+    []
+  )
+
   // Initial load - shows loading screen
   async function loadData(): Promise<void> {
     setIsLoading(true)
     try {
-      const [cardsData, linksData, jobsData] = await Promise.all([
+      const [cardsData, linksData, jobsData, eventsData] = await Promise.all([
         window.projectAPI.getCards(),
         window.projectAPI.getCardLinks(),
-        window.projectAPI.getJobs()
+        window.projectAPI.getJobs(),
+        window.projectAPI.getEvents()
       ])
       setCards(cardsData)
       setCardLinks(linksData)
       setJobs(jobsData)
+      setEvents(eventsData)
     } catch (error) {
       console.error('Failed to load project data:', error)
     } finally {
@@ -420,14 +465,16 @@ export default function App(): React.JSX.Element {
   // Background refresh - does NOT show loading screen to avoid flashing
   async function refreshData(): Promise<void> {
     try {
-      const [cardsData, linksData, jobsData] = await Promise.all([
+      const [cardsData, linksData, jobsData, eventsData] = await Promise.all([
         window.projectAPI.getCards(),
         window.projectAPI.getCardLinks(),
-        window.projectAPI.getJobs()
+        window.projectAPI.getJobs(),
+        window.projectAPI.getEvents()
       ])
       setCards(cardsData)
       setCardLinks(linksData)
       setJobs(jobsData)
+      setEvents(eventsData)
     } catch (error) {
       console.error('Failed to refresh project data:', error)
     }
@@ -889,7 +936,7 @@ export default function App(): React.JSX.Element {
         <CardDialog
           card={selectedCard}
           linkedPRs={selectedCard ? (cardLinksByCardId[selectedCard.id] ?? []) : []}
-          events={[]} // TODO: Load events for card
+          events={events}
           projectId={projectInfo?.projectId ?? null}
           hasRemote={!!project?.remote_repo_key}
           remoteProvider={remoteProvider ?? undefined}
@@ -898,6 +945,7 @@ export default function App(): React.JSX.Element {
           onRunWorker={(cardId) => window.projectAPI.runWorker(cardId)}
           onSplitCard={handleOpenSplitDialog}
           onPushToRemote={handlePushToRemote}
+          onOpenWorkerLogsForJob={handleOpenWorkerLogsForJob}
         />
       </div>
 
@@ -923,7 +971,13 @@ export default function App(): React.JSX.Element {
 
       <WorkerLogDialog
         open={workerLogsOpen}
-        onOpenChange={setWorkerLogsOpen}
+        onOpenChange={(open) => {
+          setWorkerLogsOpen(open)
+          if (!open) {
+            // Clear override when dialog closes
+            setLogsJobOverrideId(null)
+          }
+        }}
         job={jobForLogs ?? null}
         card={cardForLogs}
         liveLogs={jobForLogs ? (workerLogsByJobId[jobForLogs.id] ?? []) : []}
