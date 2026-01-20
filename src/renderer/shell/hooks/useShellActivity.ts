@@ -27,16 +27,16 @@ interface UseShellActivityReturn {
   loadRecentJobs: () => Promise<void>
 }
 
-export function useShellActivity(
-  onStateUpdated?: () => void
-): UseShellActivityReturn {
+export function useShellActivity(onStateUpdated?: () => void): UseShellActivityReturn {
   const [activity, setActivity] = useState<ActivityState>({
     totalActiveRuns: 0,
     isBusy: false,
     busyProjects: []
   })
   const [recentJobs, setRecentJobs] = useState<Job[]>([])
-  const [projectWorkerStatus, setProjectWorkerStatus] = useState<Record<string, ProjectWorkerStatus>>({})
+  const [projectWorkerStatus, setProjectWorkerStatus] = useState<
+    Record<string, ProjectWorkerStatus>
+  >({})
 
   const loadActivity = useCallback(async (): Promise<void> => {
     try {
@@ -61,7 +61,7 @@ export function useShellActivity(
   useEffect(() => {
     const unsubscribe = window.shellAPI.onActivityUpdate((activityData) => {
       // Update per-project worker status for tab indicators
-      setProjectWorkerStatus(prev => ({
+      setProjectWorkerStatus((prev) => ({
         ...prev,
         [activityData.projectId]: {
           workerEnabled: true, // If we get updates, worker is enabled

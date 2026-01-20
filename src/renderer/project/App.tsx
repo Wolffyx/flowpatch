@@ -35,7 +35,19 @@ import { useDevServerStatus } from '../src/hooks/useDevServerStatus'
 import { Button } from '../src/components/ui/button'
 import { Switch } from '../src/components/ui/switch'
 import { Badge } from '../src/components/ui/badge'
-import { RefreshCw, Bot, Loader2, Play, Pause, AlertCircle, Terminal, Folder, Lightbulb, Network, Send } from 'lucide-react'
+import {
+  RefreshCw,
+  Bot,
+  Loader2,
+  Play,
+  Pause,
+  AlertCircle,
+  Terminal,
+  Folder,
+  Lightbulb,
+  Network,
+  Send
+} from 'lucide-react'
 import { cn } from '../src/lib/utils'
 import {
   buildLinkedPullRequestIndex,
@@ -146,7 +158,10 @@ export default function App(): React.JSX.Element {
 
   // Build dev server status map for cards
   const devServerStatusByCardId = useMemo(() => {
-    const statusMap: Record<string, { isRunning: boolean; port?: number; status?: 'starting' | 'running' | 'stopped' | 'error' }> = {}
+    const statusMap: Record<
+      string,
+      { isRunning: boolean; port?: number; status?: 'starting' | 'running' | 'stopped' | 'error' }
+    > = {}
     cards.forEach((card) => {
       if (isRunning(card.id)) {
         const status = getStatus(card.id)
@@ -228,9 +243,7 @@ export default function App(): React.JSX.Element {
   const visibleCards = useMemo(
     () =>
       filterOutLinkedPullRequestCards(
-        showPullRequestsSection
-          ? cards.filter((c) => c.type !== 'pr' && c.type !== 'mr')
-          : cards,
+        showPullRequestsSection ? cards.filter((c) => c.type !== 'pr' && c.type !== 'mr') : cards,
         linkedPrIndex
       ),
     [cards, linkedPrIndex, showPullRequestsSection]
@@ -366,7 +379,7 @@ export default function App(): React.JSX.Element {
         const result = await window.projectAPI.getPlanApproval({ approvalId: data.approvalId })
         if (result.approval) {
           setPendingApproval(result.approval)
-          const card = cards.find(c => c.id === data.cardId) ?? null
+          const card = cards.find((c) => c.id === data.cardId) ?? null
           setApprovalCard(card)
         }
       } catch (error) {
@@ -470,7 +483,8 @@ export default function App(): React.JSX.Element {
         : null
     : null
 
-  const repoIssueProvider = remoteProvider === 'github' || remoteProvider === 'gitlab' ? remoteProvider : null
+  const repoIssueProvider =
+    remoteProvider === 'github' || remoteProvider === 'gitlab' ? remoteProvider : null
   const canCreateRepoIssues = repoIssueProvider !== null
 
   const handleOpenAddCard = useCallback((): void => {
@@ -574,14 +588,14 @@ export default function App(): React.JSX.Element {
 
   const handleCreateCard = useCallback(
     async (data: { title: string; body: string; createType: CreateCardType }): Promise<void> => {
-    try {
-      const newCard = await window.projectAPI.createCard(data)
-      setCards((prev) => [...prev, newCard])
-      setAddCardOpen(false)
-    } catch (error) {
-      console.error('Failed to create card:', error)
-    }
-  },
+      try {
+        const newCard = await window.projectAPI.createCard(data)
+        setCards((prev) => [...prev, newCard])
+        setAddCardOpen(false)
+      } catch (error) {
+        console.error('Failed to create card:', error)
+      }
+    },
     []
   )
 
@@ -594,35 +608,59 @@ export default function App(): React.JSX.Element {
     setSplitDialogOpen(true)
   }, [])
 
-  // Follow-up instruction handler
-  const handleFollowUpSubmit = useCallback(async (data: {
-    jobId: string
-    cardId: string
-    instructionType: FollowUpInstructionType
-    content: string
-    priority?: number
-  }): Promise<void> => {
-    await window.projectAPI.createFollowUpInstruction({
-      jobId: data.jobId,
-      cardId: data.cardId,
-      instructionType: data.instructionType,
-      content: data.content,
-      priority: data.priority
+  const handlePushToRemote = useCallback(async (cardId: string): Promise<void> => {
+    const result = await window.projectAPI.pushCardToRemote(cardId)
+    if (result.error) {
+      toast.error(result.error)
+      return
+    }
+    toast.success(`Created issue #${result.issueNumber}`, {
+      action: {
+        label: 'Open',
+        onClick: () => window.electron.ipcRenderer.send('openExternal', result.url)
+      }
     })
+    refreshData()
   }, [])
+
+  // Follow-up instruction handler
+  const handleFollowUpSubmit = useCallback(
+    async (data: {
+      jobId: string
+      cardId: string
+      instructionType: FollowUpInstructionType
+      content: string
+      priority?: number
+    }): Promise<void> => {
+      await window.projectAPI.createFollowUpInstruction({
+        jobId: data.jobId,
+        cardId: data.cardId,
+        instructionType: data.instructionType,
+        content: data.content,
+        priority: data.priority
+      })
+    },
+    []
+  )
 
   // Plan approval handlers
-  const handleApprovePlan = useCallback(async (approvalId: string, notes?: string): Promise<void> => {
-    await window.projectAPI.approvePlan(approvalId, notes)
-    setPendingApproval(null)
-    setApprovalCard(null)
-  }, [])
+  const handleApprovePlan = useCallback(
+    async (approvalId: string, notes?: string): Promise<void> => {
+      await window.projectAPI.approvePlan(approvalId, notes)
+      setPendingApproval(null)
+      setApprovalCard(null)
+    },
+    []
+  )
 
-  const handleRejectPlan = useCallback(async (approvalId: string, notes?: string): Promise<void> => {
-    await window.projectAPI.rejectPlan(approvalId, notes)
-    setPendingApproval(null)
-    setApprovalCard(null)
-  }, [])
+  const handleRejectPlan = useCallback(
+    async (approvalId: string, notes?: string): Promise<void> => {
+      await window.projectAPI.rejectPlan(approvalId, notes)
+      setPendingApproval(null)
+      setApprovalCard(null)
+    },
+    []
+  )
 
   const handleSkipApproval = useCallback(async (approvalId: string): Promise<void> => {
     await window.projectAPI.skipPlanApproval(approvalId)
@@ -833,6 +871,8 @@ export default function App(): React.JSX.Element {
             cards={visibleCards}
             cardLinksByCardId={cardLinksByCardId}
             selectedCardId={selectedCardId}
+            hasRemote={!!project?.remote_repo_key}
+            remoteProvider={remoteProvider ?? undefined}
             onSelectCard={setSelectedCardId}
             onMoveCard={handleMoveCard}
             onAddCard={handleOpenAddCard}
@@ -840,6 +880,7 @@ export default function App(): React.JSX.Element {
             onSortDraftByPriority={handleSortDraftByPriority}
             onSortReadyByPriority={handleSortReadyByPriority}
             onSplitCard={handleOpenSplitDialog}
+            onPushToRemote={(card) => handlePushToRemote(card.id)}
             devServerStatusByCardId={devServerStatusByCardId}
           />
         </div>
@@ -847,13 +888,16 @@ export default function App(): React.JSX.Element {
         {/* Card Dialog */}
         <CardDialog
           card={selectedCard}
-          linkedPRs={selectedCard ? cardLinksByCardId[selectedCard.id] ?? [] : []}
+          linkedPRs={selectedCard ? (cardLinksByCardId[selectedCard.id] ?? []) : []}
           events={[]} // TODO: Load events for card
           projectId={projectInfo?.projectId ?? null}
+          hasRemote={!!project?.remote_repo_key}
+          remoteProvider={remoteProvider ?? undefined}
           onClose={handleCloseDrawer}
           onMoveCard={handleMoveCard}
           onRunWorker={(cardId) => window.projectAPI.runWorker(cardId)}
           onSplitCard={handleOpenSplitDialog}
+          onPushToRemote={handlePushToRemote}
         />
       </div>
 

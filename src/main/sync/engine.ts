@@ -124,7 +124,9 @@ export class SyncEngine {
           githubAdapter.listPullRequests(),
           githubAdapter.listProjectDrafts()
         ])
-        console.log(`[SyncEngine] Fetched from GitHub: issues=${issues.length}, prs=${prs.length}, drafts=${drafts.length}`)
+        console.log(
+          `[SyncEngine] Fetched from GitHub: issues=${issues.length}, prs=${prs.length}, drafts=${drafts.length}`
+        )
         remoteCards = [...issues, ...prs, ...drafts]
       } else {
         // GitLab or other adapters
@@ -339,9 +341,7 @@ export class SyncEngine {
         }
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error)
-        console.error(
-          `[SyncEngine] Failed to delete card ${card.id}: ${errorMsg}`
-        )
+        console.error(`[SyncEngine] Failed to delete card ${card.id}: ${errorMsg}`)
       }
     }
 
@@ -402,10 +402,7 @@ export class SyncEngine {
       let success = false
 
       // If GitHub Projects V2 is not explicitly disabled, try to update project status
-      if (
-        isGithubAdapter(this.adapter) &&
-        this.policy.sync?.githubProjectsV2?.enabled !== false
-      ) {
+      if (isGithubAdapter(this.adapter) && this.policy.sync?.githubProjectsV2?.enabled !== false) {
         const githubAdapter = this.adapter as IGithubAdapter
         success = await githubAdapter.updateProjectStatus(issueNumber, newStatus)
         if (success) {
@@ -432,7 +429,9 @@ export class SyncEngine {
       // Also update PR labels if card has a linked PR/MR
       if (success) {
         const cardLinks = listCardLinks(cardId)
-        const prLink = cardLinks.find((link) => link.linked_type === 'pr' || link.linked_type === 'mr')
+        const prLink = cardLinks.find(
+          (link) => link.linked_type === 'pr' || link.linked_type === 'mr'
+        )
         if (prLink?.linked_number_or_iid) {
           const prNumber = parseInt(prLink.linked_number_or_iid, 10)
           if (!isNaN(prNumber)) {

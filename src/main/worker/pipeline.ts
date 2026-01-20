@@ -50,6 +50,7 @@ import { writeCheckpoint, readCheckpoint } from '../services/flowpatch-runs'
 
 // Phase implementations
 import { runAI, buildAIPrompt } from './phases/ai'
+import { runInstall } from './phases/install'
 import { runBranchSyncPhase, type BranchSyncResult } from './phases/branch-sync'
 import { runE2EPhase as runE2EPhaseImpl, type E2EResult } from './phases/e2e'
 import { runChecks } from './phases/checks'
@@ -107,7 +108,7 @@ export class WorkerPipeline {
   private pipelineStartTime: number = 0
   private workerId: string = cryptoRandomId()
   private lastCancelCheck: number = 0
-  private cancelCheckThrottleMs: number = 500 // Minimum ms between cancel checks
+  private cancelCheckThrottleMs: number = 100 // Minimum ms between cancel checks (reduced for faster cancellation)
 
   // Managers
   private logManager: LogManager
@@ -176,7 +177,26 @@ export class WorkerPipeline {
   }
 
   private isCanceled(): boolean {
-    return this.getJobState() === 'canceled'
+    const jobState = this.getJobState()
+    if (jobState === 'canceled') return true
+
+    // Check if worker is globally disabled for this project
+    const project = getProject(this.projectId)
+    if (project && project.worker_enabled !== 1) {
+      this.cancelJobInternal('Worker disabled')
+      return true
+    }
+
+    // Also check if card was moved away from 'ready' status
+    // Refresh card from DB to get current status
+    const currentCard = getCard(this.cardId)
+    if (currentCard && currentCard.status !== 'ready') {
+      // Cancel job if card is no longer ready
+      this.cancelJobInternal(`Card status changed to ${currentCard.status}`)
+      return true
+    }
+
+    return false
   }
 
   private cancelJobInternal(reason?: string): void {
@@ -292,7 +312,9 @@ export class WorkerPipeline {
         policy: this.policy
       })
     } catch (error) {
-      this.log(`Failed to create adapter: ${error instanceof Error ? error.message : String(error)}`)
+      this.log(
+        `Failed to create adapter: ${error instanceof Error ? error.message : String(error)}`
+      )
       return false
     }
 
@@ -392,7 +414,12 @@ export class WorkerPipeline {
       const initialized = await this.initialize()
       if (!initialized) {
         outcome = 'failed'
-        return { success: false, phase: 'init', error: 'Failed to initialize', logs: this.logManager.getLogs() }
+        return {
+          success: false,
+          phase: 'init',
+          error: 'Failed to initialize',
+          logs: this.logManager.getLogs()
+        }
       }
 
       this.ensureNotCanceled()
@@ -526,6 +553,25 @@ export class WorkerPipeline {
       this.ensureNotCanceled()
       this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
 
+      // Phase 5.75: Install dependencies
+      this.setPhase('install')
+      this.log('Installing dependencies')
+      const installSuccess = await this.runInstallPhase()
+      this.ensureNotCanceled()
+      this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
+      if (!installSuccess) {
+        this.log('Install failed, moving card back to Ready for retry')
+        await this.cardStatusManager!.moveToReady('install_failed')
+        outcome = 'failed'
+        return {
+          success: false,
+          phase: 'install',
+          error: 'Install failed',
+          plan,
+          logs: this.logManager.getLogs()
+        }
+      }
+
       // Phase 6: Run AI tool
       this.setPhase('ai')
       const sessionMode = this.policy.worker?.session?.sessionMode ?? 'single'
@@ -559,7 +605,16 @@ export class WorkerPipeline {
       this.ensureNotCanceled()
       this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
       if (!checksPass) {
-        this.log('Checks failed, creating WIP PR')
+        this.log('Checks failed, moving card back to Ready for retry')
+        await this.cardStatusManager!.moveToReady('checks_failed')
+        outcome = 'failed'
+        return {
+          success: false,
+          phase: 'checks',
+          error: 'Verification checks failed',
+          plan,
+          logs: this.logManager.getLogs()
+        }
       }
 
       // Phase 7.5: Run E2E tests
@@ -577,6 +632,15 @@ export class WorkerPipeline {
         e2ePass = e2eResult.success
         if (!e2ePass) {
           this.log(`E2E tests failed after ${e2eResult.fixAttempts} fix attempts`)
+          await this.cardStatusManager!.moveToReady('e2e_failed')
+          outcome = 'failed'
+          return {
+            success: false,
+            phase: 'e2e',
+            error: 'E2E tests failed',
+            plan,
+            logs: this.logManager.getLogs()
+          }
         }
       }
 
@@ -595,6 +659,7 @@ export class WorkerPipeline {
       this.ensureNotCanceled()
       this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
       if (!prResult) {
+        await this.cardStatusManager!.moveToReady('pr_failed')
         outcome = 'failed'
         return {
           success: false,
@@ -628,7 +693,10 @@ export class WorkerPipeline {
           success: false,
           phase: 'canceled',
           error: 'Canceled',
-          plan: this.logManager.getLogs().find(l => l.includes('Plan'))?.slice(0, 1000),
+          plan: this.logManager
+            .getLogs()
+            .find((l) => l.includes('Plan'))
+            ?.slice(0, 1000),
           logs: this.logManager.getLogs()
         }
       }
@@ -729,7 +797,9 @@ export class WorkerPipeline {
   private async restoreStash(): Promise<void> {
     try {
       const stashOutput = await stashList(this.project!.local_path)
-      const line = stashOutput.split(/\r?\n|\n|\r/).find((l) => l.includes('flowpatch-worker-autostash'))
+      const line = stashOutput
+        .split(/\r?\n|\n|\r/)
+        .find((l) => l.includes('flowpatch-worker-autostash'))
       if (!line) return
 
       const m = line.match(/^(stash@\{\d+\}):/)
@@ -741,9 +811,7 @@ export class WorkerPipeline {
         await stashApplyDrop(this.project!.local_path, ref)
         this.log('Stashed changes restored')
       } catch (error) {
-        this.log(
-          `Warning: Failed to restore autostash (${ref}). Error: ${error}`
-        )
+        this.log(`Warning: Failed to restore autostash (${ref}). Error: ${error}`)
       }
     } catch (error) {
       this.log(`Warning: Failed to restore stash: ${error}`)
@@ -820,6 +888,15 @@ export class WorkerPipeline {
     return success
   }
 
+  private async runInstallPhase(): Promise<boolean> {
+    const ctx = this.buildPipelineContext()
+    return runInstall(
+      ctx,
+      (msg, meta) => this.log(msg, meta),
+      () => this.isCanceled()
+    )
+  }
+
   private async runChecksPhase(): Promise<boolean> {
     const ctx = this.buildPipelineContext()
     return runChecks(
@@ -864,7 +941,10 @@ export class WorkerPipeline {
       await push(workingDir, branchName)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      if (message.includes('could not read Username') || message.includes('Authentication failed')) {
+      if (
+        message.includes('could not read Username') ||
+        message.includes('Authentication failed')
+      ) {
         this.log('Git push failed: missing credentials.')
       }
       this.log(`Commit/push warning: ${message}`)
@@ -907,10 +987,13 @@ Closes #${this.card.remote_number_or_iid}
 _Automated by FlowPatch_
 `.trim()
 
-    const baseBranch = this.branchManager?.getBaseBranch() ?? await this.branchManager?.fetchBaseBranch() ?? 'main'
+    const baseBranch =
+      this.branchManager?.getBaseBranch() ?? (await this.branchManager?.fetchBaseBranch()) ?? 'main'
     const statusLabel = this.adapter.getStatusLabel('in_review')
 
-    const result = await this.adapter.createPullRequest(title, body, branchName, baseBranch, [statusLabel])
+    const result = await this.adapter.createPullRequest(title, body, branchName, baseBranch, [
+      statusLabel
+    ])
     return result ? { ...result, existing: false } : null
   }
 
@@ -925,14 +1008,24 @@ _Automated by FlowPatch_
     const contextCarryover = sessionConfig?.contextCarryover ?? 'summary'
 
     // Initialize or resume progress tracking
-    let existingProgress = getWorkerProgress(this.cardId)
+    let existingProgress = getWorkerProgress(this.cardId, this.projectId)
     if (!existingProgress) {
       existingProgress = createWorkerProgress({
+        projectId: this.projectId,
         cardId: this.cardId,
         jobId: this.jobId ?? undefined,
         totalIterations: maxIterations
       })
     }
+
+    // Reset iteration to 0 if starting a new job (different jobId)
+    if (existingProgress.job_id !== this.jobId) {
+      existingProgress = {
+        ...existingProgress,
+        iteration: 0
+      }
+    }
+
     this.progress = existingProgress
 
     const startIteration = this.progress.iteration
@@ -944,7 +1037,12 @@ _Automated by FlowPatch_
     for (let i = startIteration; i <= maxIterations; i++) {
       this.ensureNotCanceled()
 
-      const iterationPrompt = await this.buildIterationPrompt(plan, i, maxIterations, contextSummary)
+      const iterationPrompt = await this.buildIterationPrompt(
+        plan,
+        i,
+        maxIterations,
+        contextSummary
+      )
 
       this.log(`Running iteration ${i}/${maxIterations}`)
 
@@ -1150,7 +1248,8 @@ Card: #${this.card?.remote_number_or_iid} ${this.card?.title}`
       startingBranch: this.branchManager?.getStartingBranch() ?? null,
       baseBranch: this.branchManager?.getBaseBranch() ?? null,
       baseHeadSha: this.branchManager?.getBaseHeadSha() ?? null,
-      workerBranch: this.branchManager?.getWorkerBranch() ?? this.worktreeManager?.getWorkerBranch() ?? null,
+      workerBranch:
+        this.branchManager?.getWorkerBranch() ?? this.worktreeManager?.getWorkerBranch() ?? null,
       useWorktree: this.useWorktree,
       worktreeManager: this.worktreeManager?.getWorktreeManager() ?? null,
       worktreeRecord: this.worktreeManager?.getWorktreeRecord() ?? null,

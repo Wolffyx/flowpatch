@@ -4,18 +4,14 @@
  * Strict TypeScript types for IPC communication between main and renderer processes.
  */
 
-import type {
-  Project,
-  Card,
-  CardLink,
-  Event,
-  Job,
-  CardStatus,
-  PolicyConfig,
-  RepoLabel,
-  RemoteInfo,
-  Worktree
-} from '../types'
+import type { Project } from './interfaces/project'
+import type { Card, CardLink, CardStatus } from './interfaces/card'
+import type { Event } from './interfaces/event'
+import type { Job } from './interfaces/job'
+import type { PolicyConfig } from './interfaces/policy-config'
+import type { RemoteInfo } from './interfaces/remote-info'
+import type { Worktree } from './interfaces/worktree'
+import type { ThemePreference } from './interfaces/theme'
 
 // ============================================================================
 // Common Result Types
@@ -233,8 +229,6 @@ export interface SyncProjectResult {
 // Settings Operations
 // ============================================================================
 
-export type ThemePreference = 'light' | 'dark' | 'system'
-
 export interface SetThemePreferenceResult {
   success?: boolean
   error?: string
@@ -318,6 +312,17 @@ export interface SplitCardResult {
   error?: string
 }
 
+export interface PushCardToRemotePayload {
+  cardId: string
+}
+
+export interface PushCardToRemoteResult {
+  card?: Card
+  issueNumber?: number
+  url?: string
+  error?: string
+}
+
 // ============================================================================
 // UI Settings
 // ============================================================================
@@ -369,6 +374,12 @@ export interface DismissGithubProjectPromptPayload {
 
 export interface ResetGithubProjectPromptPayload {
   projectId: string
+}
+
+export interface RepoLabel {
+  name: string
+  color?: string
+  description?: string
 }
 
 export interface ListRepoLabelsPayload {
@@ -501,6 +512,7 @@ export interface IPCChannels {
   createCard: { payload: CreateCardPayload; result: CreateCardResult }
   splitCard: { payload: SplitCardPayload; result: SplitCardResult }
   moveCard: { payload: MoveCardPayload; result: MoveCardResult }
+  pushCardToRemote: { payload: PushCardToRemotePayload; result: PushCardToRemoteResult }
 
   // Worker
   toggleWorker: { payload: ToggleWorkerPayload; result: ToggleWorkerResult }

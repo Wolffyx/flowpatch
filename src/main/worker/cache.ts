@@ -206,8 +206,7 @@ export async function warmupAIToolsCache(): Promise<AIToolAvailability> {
 
 // ==================== Git Version Cache ====================
 
-let gitVersionCache: { version: string; supportsWorktree: boolean; checkedAt: number } | null =
-  null
+let gitVersionCache: { version: string; supportsWorktree: boolean; checkedAt: number } | null = null
 const GIT_VERSION_TTL = 60 * 60 * 1000 // 1 hour
 
 /**

@@ -1,5 +1,5 @@
 function App(): React.JSX.Element {
-  return (<></>)
+  return <></>
 }
 
 export default App

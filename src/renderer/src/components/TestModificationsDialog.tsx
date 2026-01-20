@@ -250,7 +250,11 @@ export function TestModificationsDialog({
   const statusBadge = useMemo(() => {
     switch (serverStatus) {
       case 'running':
-        return <Badge variant="default" className="bg-green-500">Running</Badge>
+        return (
+          <Badge variant="default" className="bg-green-500">
+            Running
+          </Badge>
+        )
       case 'starting':
         return (
           <Badge variant="secondary" className="flex items-center gap-1">
@@ -339,7 +343,9 @@ export function TestModificationsDialog({
                 {testInfo.branchName && (
                   <div className="flex items-center gap-2">
                     <span className="text-muted-foreground">Branch:</span>
-                    <code className="text-xs bg-muted px-2 py-1 rounded">{testInfo.branchName}</code>
+                    <code className="text-xs bg-muted px-2 py-1 rounded">
+                      {testInfo.branchName}
+                    </code>
                   </div>
                 )}
                 {port && (
@@ -361,7 +367,11 @@ export function TestModificationsDialog({
                 className="w-full flex items-center justify-between p-3 hover:bg-muted/50 transition-colors"
               >
                 <span className="font-medium text-sm">Commands</span>
-                {showCommands ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                {showCommands ? (
+                  <ChevronUp className="h-4 w-4" />
+                ) : (
+                  <ChevronDown className="h-4 w-4" />
+                )}
               </button>
               {showCommands && (
                 <div className="px-3 pb-3 space-y-2 text-sm border-t">
@@ -369,7 +379,9 @@ export function TestModificationsDialog({
                     <div className="flex items-center justify-between">
                       <div>
                         <span className="text-muted-foreground">Install:</span>
-                        <code className="ml-2 text-xs bg-muted px-2 py-1 rounded">{testInfo.commands.install}</code>
+                        <code className="ml-2 text-xs bg-muted px-2 py-1 rounded">
+                          {testInfo.commands.install}
+                        </code>
                       </div>
                     </div>
                   )}
@@ -377,7 +389,9 @@ export function TestModificationsDialog({
                     <div className="flex items-center justify-between">
                       <div>
                         <span className="text-muted-foreground">Dev:</span>
-                        <code className="ml-2 text-xs bg-muted px-2 py-1 rounded">{testInfo.commands.dev}</code>
+                        <code className="ml-2 text-xs bg-muted px-2 py-1 rounded">
+                          {testInfo.commands.dev}
+                        </code>
                       </div>
                     </div>
                   )}
@@ -385,7 +399,9 @@ export function TestModificationsDialog({
                     <div className="flex items-center justify-between">
                       <div>
                         <span className="text-muted-foreground">Build:</span>
-                        <code className="ml-2 text-xs bg-muted px-2 py-1 rounded">{testInfo.commands.build}</code>
+                        <code className="ml-2 text-xs bg-muted px-2 py-1 rounded">
+                          {testInfo.commands.build}
+                        </code>
                       </div>
                     </div>
                   )}
@@ -467,7 +483,9 @@ export function TestModificationsDialog({
                     <div className="text-muted-foreground text-center py-8">No output yet</div>
                   ) : (
                     output.map((line, idx) => {
-                      const isError = line.toLowerCase().includes('error') || line.toLowerCase().includes('failed')
+                      const isError =
+                        line.toLowerCase().includes('error') ||
+                        line.toLowerCase().includes('failed')
                       return (
                         <div
                           key={idx}

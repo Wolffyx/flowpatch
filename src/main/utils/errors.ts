@@ -19,12 +19,7 @@ export class FlowPatchError extends Error {
   public readonly timestamp: number
   public readonly cause?: Error
 
-  constructor(
-    message: string,
-    code: string,
-    context: Record<string, unknown> = {},
-    cause?: Error
-  ) {
+  constructor(message: string, code: string, context: Record<string, unknown> = {}, cause?: Error) {
     super(message)
     this.name = 'FlowPatchError'
     this.code = code
@@ -49,11 +44,13 @@ export class FlowPatchError extends Error {
       context: this.context,
       timestamp: this.timestamp,
       stack: this.stack,
-      cause: this.cause ? {
-        name: this.cause.name,
-        message: this.cause.message,
-        stack: this.cause.stack
-      } : undefined
+      cause: this.cause
+        ? {
+            name: this.cause.name,
+            message: this.cause.message,
+            stack: this.cause.stack
+          }
+        : undefined
     }
   }
 }
@@ -127,7 +124,12 @@ export class ApiError extends FlowPatchError {
     context: Record<string, unknown> = {},
     cause?: Error
   ) {
-    super(message, `API_${provider.toUpperCase()}_${status || 'ERROR'}`, { provider, status, endpoint, ...context }, cause)
+    super(
+      message,
+      `API_${provider.toUpperCase()}_${status || 'ERROR'}`,
+      { provider, status, endpoint, ...context },
+      cause
+    )
     this.name = 'ApiError'
     this.provider = provider
     this.status = status
@@ -195,12 +197,7 @@ export class ValidationError extends FlowPatchError {
 export class ConfigError extends FlowPatchError {
   public readonly key: string
 
-  constructor(
-    message: string,
-    key: string,
-    context: Record<string, unknown> = {},
-    cause?: Error
-  ) {
+  constructor(message: string, key: string, context: Record<string, unknown> = {}, cause?: Error) {
     super(message, 'CONFIG_ERROR', { key, ...context }, cause)
     this.name = 'ConfigError'
     this.key = key
@@ -220,7 +217,12 @@ export class TimeoutError extends FlowPatchError {
     context: Record<string, unknown> = {},
     cause?: Error
   ) {
-    super(`${operation} timed out after ${timeoutMs}ms`, 'TIMEOUT', { operation, timeoutMs, ...context }, cause)
+    super(
+      `${operation} timed out after ${timeoutMs}ms`,
+      'TIMEOUT',
+      { operation, timeoutMs, ...context },
+      cause
+    )
     this.name = 'TimeoutError'
     this.operation = operation
     this.timeoutMs = timeoutMs
@@ -254,7 +256,12 @@ export class ResourceError extends FlowPatchError {
     context: Record<string, unknown> = {},
     cause?: Error
   ) {
-    super(message, `RESOURCE_${resourceType.toUpperCase()}`, { resourceType, resourceId, ...context }, cause)
+    super(
+      message,
+      `RESOURCE_${resourceType.toUpperCase()}`,
+      { resourceType, resourceId, ...context },
+      cause
+    )
     this.name = 'ResourceError'
     this.resourceType = resourceType
     this.resourceId = resourceId
@@ -332,8 +339,7 @@ class ErrorAggregatorClass {
    * Get aggregated error summary.
    */
   getSummary(): AggregatedError[] {
-    return Array.from(this.errors.values())
-      .sort((a, b) => b.count - a.count)
+    return Array.from(this.errors.values()).sort((a, b) => b.count - a.count)
   }
 
   /**
@@ -385,12 +391,7 @@ export function wrapError(
 ): FlowPatchError {
   const cause = error instanceof Error ? error : new Error(String(error))
 
-  return new FlowPatchError(
-    `${message}: ${cause.message}`,
-    'WRAPPED_ERROR',
-    context,
-    cause
-  )
+  return new FlowPatchError(`${message}: ${cause.message}`, 'WRAPPED_ERROR', context, cause)
 }
 
 /**
@@ -418,14 +419,15 @@ export function logError(
   context?: Record<string, unknown>,
   aggregate = true
 ): void {
-  const flowpatchError = error instanceof FlowPatchError
-    ? error
-    : new FlowPatchError(
-        getErrorMessage(error),
-        'UNKNOWN_ERROR',
-        context,
-        error instanceof Error ? error : undefined
-      )
+  const flowpatchError =
+    error instanceof FlowPatchError
+      ? error
+      : new FlowPatchError(
+          getErrorMessage(error),
+          'UNKNOWN_ERROR',
+          context,
+          error instanceof Error ? error : undefined
+        )
 
   if (aggregate) {
     const isNew = ErrorAggregator.record(flowpatchError)

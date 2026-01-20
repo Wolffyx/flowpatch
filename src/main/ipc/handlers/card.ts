@@ -42,8 +42,14 @@ function appendUniqueLines(body: string | null, lines: string[]): string {
   return `${trimmed}\n\n${toAdd.join('\n')}`
 }
 
-function buildParentBacklink(card: { title: string; remote_number_or_iid: string | null; remote_url: string | null }): string[] {
-  const issueRef = card.remote_number_or_iid ? `#${card.remote_number_or_iid} ${card.title}` : card.title
+function buildParentBacklink(card: {
+  title: string
+  remote_number_or_iid: string | null
+  remote_url: string | null
+}): string[] {
+  const issueRef = card.remote_number_or_iid
+    ? `#${card.remote_number_or_iid} ${card.title}`
+    : card.title
   const label = card.remote_number_or_iid ? `Parent issue: ${issueRef}` : `Parent card: ${issueRef}`
   const lines = [label]
   if (card.remote_url) lines.push(card.remote_url)
@@ -128,7 +134,9 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
         const authResult = await adapter.checkAuth()
         if (!authResult.authenticated) {
           const provider = createType === 'github_issue' ? 'GitHub' : 'GitLab'
-          return { error: `${provider} authentication failed: ${authResult.error || 'Not logged in'}` }
+          return {
+            error: `${provider} authentication failed: ${authResult.error || 'Not logged in'}`
+          }
         }
 
         // Create the issue via unified interface
@@ -191,8 +199,7 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
         return { error: 'At least one card title is required' }
       }
 
-      const createType: 'local' | 'repo_issue' =
-        parent.remote_repo_key ? 'repo_issue' : 'local'
+      const createType: 'local' | 'repo_issue' = parent.remote_repo_key ? 'repo_issue' : 'local'
 
       const policy = parsePolicyJson(project.policy_json)
       const adapter =
@@ -209,7 +216,9 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
         const authResult = await adapter.checkAuth()
         if (!authResult.authenticated) {
           const provider = adapter.providerKey === 'gitlab' ? 'GitLab' : 'GitHub'
-          return { error: `${provider} authentication failed: ${authResult.error || 'Not logged in'}` }
+          return {
+            error: `${provider} authentication failed: ${authResult.error || 'Not logged in'}`
+          }
         }
       }
 
@@ -222,7 +231,9 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
 
         if (createType === 'local') {
           const card = createLocalTestCard(project.id, item.title.trim())
-          const updatedCard = bodyWithBacklink ? upsertCard({ ...card, body: bodyWithBacklink }) : card
+          const updatedCard = bodyWithBacklink
+            ? upsertCard({ ...card, body: bodyWithBacklink })
+            : card
           createEvent(project.id, 'card_created', card.id, {
             title: item.title.trim(),
             type: 'local',
@@ -230,7 +241,10 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
           })
           createdCards.push(updatedCard)
         } else {
-          const result = await adapter!.createIssue(item.title.trim(), bodyWithBacklink || undefined)
+          const result = await adapter!.createIssue(
+            item.title.trim(),
+            bodyWithBacklink || undefined
+          )
           if (!result) {
             const provider = adapter!.providerKey === 'gitlab' ? 'GitLab' : 'GitHub'
             return { error: `Failed to create ${provider} issue` }
@@ -498,7 +512,10 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
               )
             }
             // For issues and PRs/MRs, use the standard updateIssueBody method
-            else if (card.remote_number_or_iid && (card.type === 'issue' || card.type === 'pr' || card.type === 'mr')) {
+            else if (
+              card.remote_number_or_iid &&
+              (card.type === 'issue' || card.type === 'pr' || card.type === 'mr')
+            ) {
               const issueNumber = parseInt(card.remote_number_or_iid, 10)
               if (!isNaN(issueNumber)) {
                 success = await adapter.updateIssueBody(issueNumber, payload.body)
@@ -507,9 +524,15 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
 
             if (success) {
               upsertCard({ ...updatedCard, sync_state: 'ok' })
-              logAction('editCardBody:remotePush:success', { cardId: payload.cardId, type: card.type })
+              logAction('editCardBody:remotePush:success', {
+                cardId: payload.cardId,
+                type: card.type
+              })
             } else {
-              logAction('editCardBody:remotePush:failed', { cardId: payload.cardId, type: card.type })
+              logAction('editCardBody:remotePush:failed', {
+                cardId: payload.cardId,
+                type: card.type
+              })
             }
             notifyRenderer()
           } catch (error) {
@@ -598,13 +621,110 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
     }
   )
 
+  ipcMain.handle('updateCardTimestamp', (_e, payload: { cardId: string; timestamp: string }) => {
+    logAction('updateCardTimestamp', payload)
+    updateCardTimestamp(payload.cardId, payload.timestamp)
+    notifyRenderer()
+    return { success: true }
+  })
+
+  // Push local card to remote (create issue on GitHub/GitLab)
+  ipcMain.handle('pushCardToRemote', async (_e, payload: { cardId: string }) => {
+    logAction('pushCardToRemote', payload)
+
+    // 1. Get the local card
+    const card = getCard(payload.cardId)
+    if (!card) {
+      return { error: 'Card not found' }
+    }
+
+    // 2. Verify it's a local card (no remote_repo_key)
+    if (card.remote_repo_key) {
+      return { error: 'Card is already linked to a remote issue' }
+    }
+
+    // 3. Get project and verify remote is configured
+    const project = getProject(card.project_id)
+    if (!project) {
+      return { error: 'Project not found' }
+    }
+    if (!project.remote_repo_key) {
+      return { error: 'No remote configured for this project' }
+    }
+
+    // 4. Create adapter and check auth
+    const policy = parsePolicyJson(project.policy_json)
+    const adapter = AdapterRegistry.create({
+      repoKey: project.remote_repo_key,
+      providerHint: project.provider_hint,
+      repoPath: project.local_path,
+      policy
+    })
+
+    const authResult = await adapter.checkAuth()
+    if (!authResult.authenticated) {
+      const provider = adapter.providerKey === 'gitlab' ? 'GitLab' : 'GitHub'
+      return { error: `${provider} authentication failed: ${authResult.error || 'Not logged in'}` }
+    }
+
+    // 5. Create issue on remote with current status label
+    const statusLabel = adapter.getStatusLabel(card.status)
+    const result = await adapter.createIssue(card.title, card.body || undefined, [statusLabel])
+    if (!result) {
+      const provider = adapter.providerKey === 'gitlab' ? 'GitLab' : 'GitHub'
+      return { error: `Failed to create ${provider} issue` }
+    }
+
+    // 6. Update local card with remote references
+    const updatedCard = upsertCard({
+      ...card,
+      provider: adapter.provider,
+      type: 'issue',
+      remote_url: result.url,
+      remote_repo_key: project.remote_repo_key,
+      remote_number_or_iid: String(result.number),
+      remote_node_id: result.card.remote_node_id,
+      sync_state: 'ok',
+      updated_remote_at: new Date().toISOString()
+    })
+
+    // 7. Log event
+    createEvent(card.project_id, 'card_pushed_to_remote', card.id, {
+      issueNumber: result.number,
+      url: result.url,
+      provider: adapter.providerKey
+    })
+
+    logAction('pushCardToRemote:success', {
+      cardId: card.id,
+      issueNumber: result.number,
+      url: result.url
+    })
+    notifyRenderer()
+
+    return {
+      card: updatedCard,
+      issueNumber: result.number,
+      url: result.url
+    }
+  })
+
+  // Diagnostic: Get card eligibility for worker processing
   ipcMain.handle(
-    'updateCardTimestamp',
-    (_e, payload: { cardId: string; timestamp: string }) => {
-      logAction('updateCardTimestamp', payload)
-      updateCardTimestamp(payload.cardId, payload.timestamp)
-      notifyRenderer()
-      return { success: true }
+    'getCardEligibilityDiagnostic',
+    (_e, payload: { cardId: string; projectId?: string }) => {
+      const { getCardEligibilityDiagnostic } = require('../../db')
+      const diagnostic = getCardEligibilityDiagnostic(payload.cardId, payload.projectId)
+      logAction('getCardEligibilityDiagnostic', { cardId: payload.cardId, diagnostic })
+      return { diagnostic }
     }
   )
+
+  // Diagnostic: Get all ready cards that are not being processed
+  ipcMain.handle('getReadyCardsNotProcessing', (_e, payload: { projectId: string }) => {
+    const { getReadyCardsNotProcessing } = require('../../db')
+    const diagnostics = getReadyCardsNotProcessing(payload.projectId)
+    logAction('getReadyCardsNotProcessing', { projectId: payload.projectId, count: diagnostics.length })
+    return { diagnostics }
+  })
 }

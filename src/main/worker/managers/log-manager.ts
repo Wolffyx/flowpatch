@@ -45,11 +45,7 @@ export class LogManager {
   private phase: string = 'init'
   private lastPlan: string | undefined
 
-  constructor(
-    projectId: string,
-    cardId: string,
-    config: Partial<LogManagerConfig> = {}
-  ) {
+  constructor(projectId: string, cardId: string, config: Partial<LogManagerConfig> = {}) {
     this.projectId = projectId
     this.cardId = cardId
     this.config = { ...DEFAULT_CONFIG, ...config }
@@ -180,9 +176,7 @@ export class LogManager {
     if (!this.jobId) return
     const now = Date.now()
 
-    const throttleMs = force
-      ? this.config.forcePersistThrottleMs
-      : this.config.persistThrottleMs
+    const throttleMs = force ? this.config.forcePersistThrottleMs : this.config.persistThrottleMs
     if (!force && now - this.lastPersistMs < throttleMs) return
     this.lastPersistMs = now
 

@@ -4,12 +4,7 @@
  * Handles card status transitions with remote synchronization.
  */
 
-import {
-  getCard,
-  updateCardStatus,
-  createEvent,
-  ensureCardLink
-} from '../../db'
+import { getCard, updateCardStatus, createEvent, ensureCardLink } from '../../db'
 import { broadcastToRenderers } from '../../ipc/broadcast'
 import { WorkerCanceledError } from '../errors'
 import type { IRepoAdapter } from '../../adapters'

@@ -22,7 +22,10 @@ interface KanbanColumnProps {
   onAddCard?: () => void
   onGenerateCards?: () => void
   onSortByPriority?: () => void
-  devServerStatusByCardId?: Record<string, { isRunning: boolean; port?: number; status?: 'starting' | 'running' | 'stopped' | 'error' }>
+  devServerStatusByCardId?: Record<
+    string,
+    { isRunning: boolean; port?: number; status?: 'starting' | 'running' | 'stopped' | 'error' }
+  >
 }
 
 export function KanbanColumn({
@@ -60,7 +63,12 @@ export function KanbanColumn({
       {/* Column header */}
       <div className="flex items-center justify-between p-3 pb-2">
         <div className="flex items-center gap-2.5">
-          <div className={cn('h-3 w-3 rounded-full ring-2 ring-offset-2 ring-offset-background', color)} />
+          <div
+            className={cn(
+              'h-3 w-3 rounded-full ring-2 ring-offset-2 ring-offset-background',
+              color
+            )}
+          />
           <h3 className="font-semibold text-sm">{label}</h3>
           <span
             className={cn(

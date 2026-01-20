@@ -75,10 +75,7 @@ export function registerDiffHandlers(): void {
 
       try {
         // Get diff --numstat for additions/deletions
-        const numstat = await gitExec(
-          ['diff', '--numstat', wt.base_ref, 'HEAD'],
-          wt.worktree_path
-        )
+        const numstat = await gitExec(['diff', '--numstat', wt.base_ref, 'HEAD'], wt.worktree_path)
 
         // Get diff --name-status for file status
         const nameStatus = await gitExec(

@@ -15,13 +15,7 @@ import ReactFlow, {
 } from 'reactflow'
 import dagre from '@dagrejs/dagre'
 import 'reactflow/dist/style.css'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle
-} from './ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
 import { Badge } from './ui/badge'
 import { cn } from '../lib/utils'
@@ -363,11 +357,7 @@ export function GraphViewDialog({
           onClick={() => setIsFullscreen(!isFullscreen)}
           title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
         >
-          {isFullscreen ? (
-            <Minimize2 className="h-4 w-4" />
-          ) : (
-            <Maximize2 className="h-4 w-4" />
-          )}
+          {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
         </Button>
       </div>
 
@@ -402,16 +392,8 @@ export function GraphViewDialog({
             attributionPosition="bottom-left"
             proOptions={{ hideAttribution: true }}
           >
-            <Background
-              variant={BackgroundVariant.Dots}
-              color="#333"
-              gap={20}
-              size={1}
-            />
-            <Controls
-              showInteractive={false}
-              className="bg-background/80 border rounded-lg"
-            />
+            <Background variant={BackgroundVariant.Dots} color="#333" gap={20} size={1} />
+            <Controls showInteractive={false} className="bg-background/80 border rounded-lg" />
             {showMinimap && (
               <MiniMap
                 nodeStrokeWidth={3}
@@ -425,7 +407,10 @@ export function GraphViewDialog({
                 }}
               />
             )}
-            <Panel position="bottom-right" className="bg-background/90 p-3 rounded-lg border shadow-lg m-2">
+            <Panel
+              position="bottom-right"
+              className="bg-background/90 p-3 rounded-lg border shadow-lg m-2"
+            >
               <div className="text-xs font-medium text-muted-foreground mb-2">Status Legend</div>
               <div className="grid grid-cols-3 gap-x-4 gap-y-1.5 text-xs">
                 {Object.entries(STATUS_COLORS).map(([status, colors]) => (
@@ -434,7 +419,9 @@ export function GraphViewDialog({
                       className="w-3 h-3 rounded-sm border"
                       style={{ backgroundColor: colors.bg, borderColor: colors.border }}
                     />
-                    <span className="text-muted-foreground">{STATUS_LABELS[status as CardStatus]}</span>
+                    <span className="text-muted-foreground">
+                      {STATUS_LABELS[status as CardStatus]}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -451,9 +438,7 @@ export function GraphViewDialog({
         <DialogContent className="max-w-[100vw] w-screen h-screen p-0 m-0 rounded-none">
           <DialogHeader className="sr-only">
             <DialogTitle>Dependency Graph</DialogTitle>
-            <DialogDescription>
-              Visual representation of card dependencies
-            </DialogDescription>
+            <DialogDescription>Visual representation of card dependencies</DialogDescription>
           </DialogHeader>
           {dialogContent}
         </DialogContent>
@@ -470,8 +455,8 @@ export function GraphViewDialog({
             Dependency Graph
           </DialogTitle>
           <DialogDescription>
-            Visual representation of card dependencies. Arrows point from dependency to
-            dependent card.
+            Visual representation of card dependencies. Arrows point from dependency to dependent
+            card.
           </DialogDescription>
         </DialogHeader>
         {dialogContent}

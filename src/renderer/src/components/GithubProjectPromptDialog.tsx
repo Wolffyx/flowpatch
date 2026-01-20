@@ -251,7 +251,11 @@ export function GithubProjectPromptDialog({
             Not now
           </Button>
           {mode === 'select' && (
-            <Button type="button" onClick={linkExisting} disabled={isProcessing || !selectedProjectId}>
+            <Button
+              type="button"
+              onClick={linkExisting}
+              disabled={isProcessing || !selectedProjectId}
+            >
               {isLinking && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Link Project
             </Button>

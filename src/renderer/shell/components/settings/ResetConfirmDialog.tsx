@@ -22,7 +22,10 @@ interface ResetConfirmDialogProps {
   onOpenChange: (open: boolean) => void
 }
 
-export function ResetConfirmDialog({ open, onOpenChange }: ResetConfirmDialogProps): React.JSX.Element {
+export function ResetConfirmDialog({
+  open,
+  onOpenChange
+}: ResetConfirmDialogProps): React.JSX.Element {
   const [isResetting, setIsResetting] = useState(false)
 
   const handleReset = useCallback(async () => {

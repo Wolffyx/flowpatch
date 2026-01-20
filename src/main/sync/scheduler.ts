@@ -223,7 +223,10 @@ export function getSyncSchedulerConfigFromPolicy(policy: PolicyConfig | null): S
   }
 }
 
-export function updateSyncSchedulerConfig(projectId: string, config: Partial<SyncSchedulerConfig>): void {
+export function updateSyncSchedulerConfig(
+  projectId: string,
+  config: Partial<SyncSchedulerConfig>
+): void {
   const scheduler = activeSchedulers.get(projectId)
   scheduler?.updateConfig(config)
 }

@@ -54,12 +54,12 @@ export function registerFeatureSuggestionHandlers(notifyRenderer: () => void): v
     'featureSuggestions:get',
     async (
       _e,
-      suggestionId: string
+      params: { projectId: string; suggestionId: string }
     ): Promise<{ suggestion: FeatureSuggestion | null; error?: string }> => {
-      logAction('featureSuggestions:get', { suggestionId })
+      logAction('featureSuggestions:get', { suggestionId: params.suggestionId })
 
       try {
-        const suggestion = getFeatureSuggestion(suggestionId)
+        const suggestion = getFeatureSuggestion(params.projectId, params.suggestionId)
         return { suggestion }
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err)
@@ -108,12 +108,12 @@ export function registerFeatureSuggestionHandlers(notifyRenderer: () => void): v
     'featureSuggestions:update',
     async (
       _e,
-      params: { suggestionId: string; data: UpdateFeatureSuggestionData }
+      params: { projectId: string; suggestionId: string; data: UpdateFeatureSuggestionData }
     ): Promise<{ suggestion: FeatureSuggestion | null; error?: string }> => {
       logAction('featureSuggestions:update', { suggestionId: params.suggestionId })
 
       try {
-        const suggestion = updateFeatureSuggestion(params.suggestionId, params.data)
+        const suggestion = updateFeatureSuggestion(params.projectId, params.suggestionId, params.data)
         if (suggestion) {
           notifyRenderer()
         }
@@ -130,7 +130,7 @@ export function registerFeatureSuggestionHandlers(notifyRenderer: () => void): v
     'featureSuggestions:updateStatus',
     async (
       _e,
-      params: { suggestionId: string; status: FeatureSuggestionStatus }
+      params: { projectId: string; suggestionId: string; status: FeatureSuggestionStatus }
     ): Promise<{ success: boolean; error?: string }> => {
       logAction('featureSuggestions:updateStatus', {
         suggestionId: params.suggestionId,
@@ -138,7 +138,7 @@ export function registerFeatureSuggestionHandlers(notifyRenderer: () => void): v
       })
 
       try {
-        const success = updateFeatureSuggestionStatus(params.suggestionId, params.status)
+        const success = updateFeatureSuggestionStatus(params.projectId, params.suggestionId, params.status)
         if (success) {
           notifyRenderer()
         }
@@ -153,11 +153,11 @@ export function registerFeatureSuggestionHandlers(notifyRenderer: () => void): v
   // Delete a feature suggestion
   ipcMain.handle(
     'featureSuggestions:delete',
-    async (_e, suggestionId: string): Promise<{ success: boolean; error?: string }> => {
-      logAction('featureSuggestions:delete', { suggestionId })
+    async (_e, params: { projectId: string; suggestionId: string }): Promise<{ success: boolean; error?: string }> => {
+      logAction('featureSuggestions:delete', { suggestionId: params.suggestionId })
 
       try {
-        const success = deleteFeatureSuggestion(suggestionId)
+        const success = deleteFeatureSuggestion(params.projectId, params.suggestionId)
         if (success) {
           notifyRenderer()
         }
@@ -174,7 +174,7 @@ export function registerFeatureSuggestionHandlers(notifyRenderer: () => void): v
     'featureSuggestions:vote',
     async (
       _e,
-      params: { suggestionId: string; voteType: 'up' | 'down'; voterId?: string }
+      params: { projectId: string; suggestionId: string; voteType: 'up' | 'down'; voterId?: string }
     ): Promise<{ voteCount: number; userVote: 'up' | 'down' | null; error?: string }> => {
       logAction('featureSuggestions:vote', {
         suggestionId: params.suggestionId,
@@ -182,7 +182,7 @@ export function registerFeatureSuggestionHandlers(notifyRenderer: () => void): v
       })
 
       try {
-        const result = voteOnSuggestion(params.suggestionId, params.voteType, params.voterId)
+        const result = voteOnSuggestion(params.projectId, params.suggestionId, params.voteType, params.voterId)
         if (!result) {
           return { voteCount: 0, userVote: null, error: 'Suggestion not found' }
         }
@@ -200,12 +200,12 @@ export function registerFeatureSuggestionHandlers(notifyRenderer: () => void): v
     'featureSuggestions:getUserVote',
     async (
       _e,
-      params: { suggestionId: string; voterId?: string }
+      params: { projectId: string; suggestionId: string; voterId?: string }
     ): Promise<{ voteType: 'up' | 'down' | null; error?: string }> => {
       logAction('featureSuggestions:getUserVote', { suggestionId: params.suggestionId })
 
       try {
-        const vote = getUserVote(params.suggestionId, params.voterId)
+        const vote = getUserVote(params.projectId, params.suggestionId, params.voterId)
         return { voteType: vote ? (vote.vote_type as 'up' | 'down') : null }
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err)

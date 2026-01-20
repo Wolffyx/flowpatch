@@ -4,7 +4,13 @@
  */
 
 import { ipcMain } from 'electron'
-import { getProject, createJob, updateJobState, createEvent, updateProjectPolicyJson } from '../../db'
+import {
+  getProject,
+  createJob,
+  updateJobState,
+  createEvent,
+  updateProjectPolicyJson
+} from '../../db'
 import { runSync } from '../../sync/engine'
 import {
   startSyncScheduler,

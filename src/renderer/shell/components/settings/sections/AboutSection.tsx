@@ -9,7 +9,14 @@
  */
 
 import { useEffect, useState } from 'react'
-import { RefreshCw, ExternalLink, Download, RotateCcw, CheckCircle2, AlertCircle } from 'lucide-react'
+import {
+  RefreshCw,
+  ExternalLink,
+  Download,
+  RotateCcw,
+  CheckCircle2,
+  AlertCircle
+} from 'lucide-react'
 import { Button } from '../../../../src/components/ui/button'
 import { useAutoUpdater } from '../../../hooks'
 import { cn } from '../../../../src/lib/utils'
@@ -60,7 +67,13 @@ export function AboutSection(): React.JSX.Element {
           </div>
 
           {/* Update Status */}
-          {hasChecked && <UpdateStatusDisplay status={updateStatus} onDownload={downloadUpdate} onInstall={installUpdate} />}
+          {hasChecked && (
+            <UpdateStatusDisplay
+              status={updateStatus}
+              onDownload={downloadUpdate}
+              onInstall={installUpdate}
+            />
+          )}
         </div>
       </div>
 
@@ -105,7 +118,11 @@ interface UpdateStatusDisplayProps {
   onInstall: () => void
 }
 
-function UpdateStatusDisplay({ status, onDownload, onInstall }: UpdateStatusDisplayProps): React.JSX.Element | null {
+function UpdateStatusDisplay({
+  status,
+  onDownload,
+  onInstall
+}: UpdateStatusDisplayProps): React.JSX.Element | null {
   switch (status.state) {
     case 'not-available':
       return (

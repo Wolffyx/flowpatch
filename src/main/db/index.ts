@@ -38,9 +38,11 @@ export {
   deleteCard,
   getNextReadyCard,
   getNextReadyCards,
-  isCardBlockedByDependencies
+  isCardBlockedByDependencies,
+  getCardEligibilityDiagnostic,
+  getReadyCardsNotProcessing
 } from './cards'
-export type { Card, CardStatus } from './cards'
+export type { Card, CardStatus, CardEligibilityDiagnostic } from './cards'
 
 // Jobs
 export {
@@ -263,10 +265,7 @@ export {
   deleteDependenciesByProject,
   deleteDependencyBetweenCards
 } from './card-dependencies'
-export type {
-  CreateCardDependencyData,
-  UpdateCardDependencyData
-} from './card-dependencies'
+export type { CreateCardDependencyData, UpdateCardDependencyData } from './card-dependencies'
 
 // Query Cache
 export {
@@ -283,6 +282,44 @@ export {
   cardKey,
   jobKey
 } from './query-cache'
+
+// Project Database (per-project local storage)
+export {
+  initProjectDb,
+  getProjectDrizzle,
+  getProjectSqlite,
+  hasProjectDb,
+  getProjectDbPath,
+  closeProjectDb,
+  closeAllProjectDbs,
+  getOpenConnectionCount,
+  getOpenProjectPaths,
+  projectSchema
+} from './project-db'
+
+// Project Migration
+export {
+  migrateProjectToLocalDb,
+  isProjectMigrated,
+  getMigrationStatus,
+  cleanupCentralData,
+  hasDataInCentralDb,
+  getCentralDataCounts
+} from './migration'
+export type { MigrationResult, MigrationStatus } from './migration'
+
+// Database Resolver (for automatic DB selection)
+export {
+  resolveProjectDb,
+  resolveProjectDbByPath,
+  getProjectPath,
+  isProjectUsingLocalDb,
+  getProjectMigrationFlag,
+  clearProjectPathCache,
+  cacheProjectPath,
+  getCachedProjectPaths
+} from './db-resolver'
+export type { ResolvedDb } from './db-resolver'
 
 // Utility re-export for backward compatibility
 export { generateId as cryptoRandomId } from '@shared/utils'

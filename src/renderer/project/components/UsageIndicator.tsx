@@ -63,11 +63,11 @@ function formatCost(cost: number): string {
 
 function formatTimeRemaining(seconds: number): string {
   if (seconds <= 0) return 'now'
-  
+
   const hours = Math.floor(seconds / 3600)
   const minutes = Math.floor((seconds % 3600) / 60)
   const secs = seconds % 60
-  
+
   if (hours > 0) {
     return `${hours}h ${minutes}m`
   }
@@ -79,10 +79,10 @@ function formatTimeRemaining(seconds: number): string {
 
 function formatLastUpdated(date: Date | null): string {
   if (!date) return ''
-  
+
   const now = new Date()
   const diffSeconds = Math.floor((now.getTime() - date.getTime()) / 1000)
-  
+
   if (diffSeconds < 5) return 'just now'
   if (diffSeconds < 60) return `${diffSeconds}s ago`
   if (diffSeconds < 3600) return `${Math.floor(diffSeconds / 60)}m ago`
@@ -123,7 +123,13 @@ interface LimitProgressProps {
   resetsIn?: number // seconds until reset
 }
 
-function LimitProgress({ used, limit, label, type, resetsIn }: LimitProgressProps): React.JSX.Element | null {
+function LimitProgress({
+  used,
+  limit,
+  label,
+  type,
+  resetsIn
+}: LimitProgressProps): React.JSX.Element | null {
   if (!limit) return null
 
   const remaining = Math.max(0, limit - used)
@@ -372,7 +378,8 @@ export function UsageIndicator({ className }: UsageIndicatorProps): React.JSX.El
             variant={badgeContent.variant === 'destructive' ? 'destructive' : 'secondary'}
             className={cn(
               'ml-1 px-1.5 py-0 text-xs',
-              badgeContent.variant === 'warning' && 'bg-yellow-500/20 text-yellow-600 dark:text-yellow-400'
+              badgeContent.variant === 'warning' &&
+                'bg-yellow-500/20 text-yellow-600 dark:text-yellow-400'
             )}
           >
             {criticalLimit?.isDanger && <AlertTriangle className="h-3 w-3 mr-0.5" />}
@@ -380,7 +387,10 @@ export function UsageIndicator({ className }: UsageIndicatorProps): React.JSX.El
           </Badge>
         )}
         <ChevronDown
-          className={cn('h-3 w-3 text-muted-foreground transition-transform', isOpen && 'rotate-180')}
+          className={cn(
+            'h-3 w-3 text-muted-foreground transition-transform',
+            isOpen && 'rotate-180'
+          )}
         />
       </button>
 
@@ -401,7 +411,10 @@ export function UsageIndicator({ className }: UsageIndicatorProps): React.JSX.El
                   title="Refresh usage data"
                 >
                   <RefreshCw
-                    className={cn('h-3.5 w-3.5 text-muted-foreground', isRefreshing && 'animate-spin')}
+                    className={cn(
+                      'h-3.5 w-3.5 text-muted-foreground',
+                      isRefreshing && 'animate-spin'
+                    )}
                   />
                 </button>
               </div>

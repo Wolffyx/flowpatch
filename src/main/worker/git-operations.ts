@@ -163,10 +163,10 @@ export async function fetchOriginWithRetry(
   branch?: string,
   maxRetries = DEFAULT_MAX_RETRIES
 ): Promise<void> {
-  return retryGitOperation(
-    () => fetchOrigin(cwd, branch),
-    { maxRetries, operationName: `fetch origin${branch ? ` ${branch}` : ''}` }
-  )
+  return retryGitOperation(() => fetchOrigin(cwd, branch), {
+    maxRetries,
+    operationName: `fetch origin${branch ? ` ${branch}` : ''}`
+  })
 }
 
 /**
@@ -448,10 +448,10 @@ export async function pullRebaseWithRetry(
   branch: string,
   maxRetries = DEFAULT_MAX_RETRIES
 ): Promise<void> {
-  return retryGitOperation(
-    () => pullRebase(cwd, branch),
-    { maxRetries, operationName: `pull --rebase origin ${branch}` }
-  )
+  return retryGitOperation(() => pullRebase(cwd, branch), {
+    maxRetries,
+    operationName: `pull --rebase origin ${branch}`
+  })
 }
 
 /**
@@ -510,10 +510,10 @@ export async function pushWithRetry(
   branch: string,
   maxRetries = DEFAULT_MAX_RETRIES
 ): Promise<void> {
-  return retryGitOperation(
-    () => push(cwd, branch),
-    { maxRetries, operationName: `push -u origin ${branch}` }
-  )
+  return retryGitOperation(() => push(cwd, branch), {
+    maxRetries,
+    operationName: `push -u origin ${branch}`
+  })
 }
 
 /**
@@ -656,7 +656,9 @@ export class GitOperations {
     return remoteBranchExists(this.cwd, branchName)
   }
 
-  async checkBranchExists(branchName: string): Promise<{ localExists: boolean; remoteExists: boolean }> {
+  async checkBranchExists(
+    branchName: string
+  ): Promise<{ localExists: boolean; remoteExists: boolean }> {
     return checkBranchExists(this.cwd, branchName)
   }
 

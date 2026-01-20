@@ -158,7 +158,13 @@ export function AIDescriptionDialog({
             ))}
           </div>
           <div className="flex-1" />
-          <Button type="button" size="sm" variant="outline" onClick={handleSeed} disabled={isRunning}>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={handleSeed}
+            disabled={isRunning}
+          >
             Seed prompt
           </Button>
         </div>
@@ -234,4 +240,3 @@ export function AIDescriptionDialog({
     </Dialog>
   )
 }
-

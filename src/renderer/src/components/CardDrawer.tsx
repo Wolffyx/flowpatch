@@ -108,7 +108,9 @@ export function CardDrawer({
         const cardJobs = jobs.filter((j) => j.card_id === card.id)
         if (cardJobs.length > 0) {
           // Sort by created_at descending and get the most recent
-          cardJobs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+          cardJobs.sort(
+            (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          )
           setLatestJob(cardJobs[0])
         } else {
           setLatestJob(null)
@@ -182,7 +184,8 @@ export function CardDrawer({
   }
 
   // Check if test button should be shown - show if card has worktree or is in progress/ready
-  const showTestButton = worktree || (card && (card.status === 'in_progress' || card.status === 'ready'))
+  const showTestButton =
+    worktree || (card && (card.status === 'in_progress' || card.status === 'ready'))
 
   // Reset edit state when card changes
   useEffect(() => {
@@ -362,11 +365,7 @@ export function CardDrawer({
                   autoFocus
                 />
                 <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    onClick={handleSaveDescription}
-                    disabled={isSavingDescription}
-                  >
+                  <Button size="sm" onClick={handleSaveDescription} disabled={isSavingDescription}>
                     <Save className="h-3 w-3 mr-1" />
                     {isSavingDescription ? 'Saving...' : 'Save'}
                   </Button>
@@ -615,7 +614,6 @@ export function CardDrawer({
               cardTitle={card.title}
             />
           )}
-
 
           {/* Timeline */}
           <div>

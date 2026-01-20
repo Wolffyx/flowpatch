@@ -150,8 +150,9 @@ export class GithubAdapter extends BaseAdapter implements IGithubAdapter {
       // Pre-fetch project statuses once (auto-detects project if not explicitly disabled)
       const projectConfig = this.policy.sync?.githubProjectsV2
       // Only skip if explicitly disabled with a configured projectId
-      const shouldFetchProjectStatus =
-        !(projectConfig?.enabled === false && projectConfig?.projectId)
+      const shouldFetchProjectStatus = !(
+        projectConfig?.enabled === false && projectConfig?.projectId
+      )
       if (shouldFetchProjectStatus && !this.projectStatusCache) {
         await this.fetchProjectStatusMap()
       }
@@ -208,11 +209,7 @@ export class GithubAdapter extends BaseAdapter implements IGithubAdapter {
     }
   }
 
-  async createIssue(
-    title: string,
-    body?: string,
-    labels?: string[]
-  ): Promise<IssueResult | null> {
+  async createIssue(title: string, body?: string, labels?: string[]): Promise<IssueResult | null> {
     try {
       const args = ['issue', 'create', '--repo', `${this.owner}/${this.repo}`, '--title', title]
 
@@ -407,8 +404,9 @@ export class GithubAdapter extends BaseAdapter implements IGithubAdapter {
       // Pre-fetch project statuses if not already fetched (auto-detects project)
       const projectConfig = this.policy.sync?.githubProjectsV2
       // Only skip if explicitly disabled with a configured projectId
-      const shouldFetchProjectStatus =
-        !(projectConfig?.enabled === false && projectConfig?.projectId)
+      const shouldFetchProjectStatus = !(
+        projectConfig?.enabled === false && projectConfig?.projectId
+      )
       if (shouldFetchProjectStatus && !this.projectStatusCache) {
         await this.fetchProjectStatusMap()
       }

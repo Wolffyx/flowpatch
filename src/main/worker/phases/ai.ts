@@ -34,9 +34,11 @@ import { WorkerCanceledError } from '../process-runner'
  * Check if usage limits are exceeded for a tool.
  * Checks in order: hourly -> daily -> monthly (most restrictive first)
  */
-export function checkLimitsExceeded(
-  toolType: AIToolType
-): { exceeded: boolean; reason?: string; fallbackAllowed?: boolean } {
+export function checkLimitsExceeded(toolType: AIToolType): {
+  exceeded: boolean
+  reason?: string
+  fallbackAllowed?: boolean
+} {
   const limits = getToolLimits(toolType)
   if (!limits) return { exceeded: false }
 
@@ -329,7 +331,11 @@ function recordAIUsage(
 ): void {
   try {
     const totalTokens = result.inputTokens + result.outputTokens
-    const costUsd = provider.calculateCost(result.inputTokens, result.outputTokens, result.thinkingTokens)
+    const costUsd = provider.calculateCost(
+      result.inputTokens,
+      result.outputTokens,
+      result.thinkingTokens
+    )
 
     createUsageRecord({
       projectId: ctx.project!.id,
@@ -358,7 +364,39 @@ function recordAIUsage(
 // ============================================================================
 
 /**
+ * Try to execute with a single provider.
+ * Returns the result and whether a rate limit error was detected.
+ */
+async function tryProvider(
+  provider: ICLIProvider,
+  prompt: string,
+  timeoutMs: number,
+  workingDir: string,
+  log: LogFn,
+  isCanceled: () => boolean,
+  thinkingMode?: ThinkingMode,
+  thinkingBudget?: number
+): Promise<{ result: CLIExecutionResult; isRateLimited: boolean }> {
+  const result = await provider.execute({
+    prompt,
+    timeoutMs,
+    cwd: workingDir,
+    log: log as CLILogFn,
+    isCanceled,
+    thinkingMode: provider.capabilities.supportsThinking ? thinkingMode : undefined,
+    thinkingBudget
+  })
+
+  const isRateLimited = !result.success && result.error
+    ? provider.isRetryableLimitError(result.error)
+    : false
+
+  return { result, isRateLimited }
+}
+
+/**
  * Run AI implementation using the provider registry.
+ * Automatically tries fallback providers when rate limits are hit.
  */
 export async function runAI(
   ctx: PipelineContext,
@@ -372,14 +410,28 @@ export async function runAI(
   const timeoutMs = maxMinutes * 60 * 1000
   const workingDir = getWorkingDir(ctx)
 
-  // Use registry to select provider
-  const { provider, fallbackUsed, reason } = await CLIProviderRegistry.selectProvider(
+  // Build the prompt once (reused across providers)
+  const prompt = await buildAIPrompt(ctx, plan)
+
+  // Get thinking mode configuration from policy
+  const thinkingConfig = ctx.policy.features?.thinking
+  const thinkingEnabled = thinkingConfig?.enabled !== false
+  const thinkingMode = thinkingEnabled ? thinkingConfig?.mode : undefined
+  const thinkingBudget = thinkingConfig?.budgetTokens
+
+  // Track which provider keys have been tried (to avoid retrying)
+  const triedProviderKeys = new Set<string>()
+  // Track which provider keys hit rate limits (for fallback selection)
+  const rateLimitedProviderKeys = new Set<string>()
+
+  // Use registry to select initial provider
+  const { provider: initialProvider, fallbackUsed, reason } = await CLIProviderRegistry.selectProvider(
     ctx.policy,
     checkLimitsExceeded
   )
 
-  if (!provider) {
-    log(`No AI tool available: ${reason}`)
+  if (!initialProvider) {
+    log(`❌ No AI tool available: ${reason}`)
     await createStubPlan(ctx, plan, workingDir, reason || 'No AI tool available')
     return false
   }
@@ -388,76 +440,116 @@ export async function runAI(
     log(`↪️ Note: ${reason}`)
   }
 
-  try {
-    log(`Running ${provider.metadata.displayName} with ${maxMinutes} minute timeout`)
+  let currentProvider: ICLIProvider | null = initialProvider
+  let lastError: string | undefined
 
-    // Build the prompt for the AI tool
-    const prompt = await buildAIPrompt(ctx, plan)
+  // Try providers until one succeeds or all fail
+  while (currentProvider) {
+    // Check for cancellation
+    if (isCanceled()) {
+      throw new WorkerCanceledError('Job canceled')
+    }
 
-    // Get thinking mode configuration from policy
-    const thinkingConfig = ctx.policy.features?.thinking
-    const thinkingEnabled = thinkingConfig?.enabled !== false && provider.capabilities.supportsThinking
-    const thinkingMode = thinkingEnabled ? thinkingConfig?.mode : undefined
-    const thinkingBudget = thinkingConfig?.budgetTokens
+    triedProviderKeys.add(currentProvider.metadata.key)
 
-    // Execute using provider
-    const result = await provider.execute({
-      prompt,
-      timeoutMs,
-      cwd: workingDir,
-      log: log as CLILogFn,
-      isCanceled,
-      thinkingMode,
-      thinkingBudget
-    })
+    try {
+      log(`🤖 Running ${currentProvider.metadata.displayName} with ${maxMinutes} minute timeout`)
 
-    // Handle failure with potential fallback
-    if (!result.success) {
-      if (result.error && provider.isRetryableLimitError(result.error)) {
-        // Try to find a fallback provider
-        const { provider: fallback } = await CLIProviderRegistry.selectProvider(
+      const { result, isRateLimited } = await tryProvider(
+        currentProvider,
+        prompt,
+        timeoutMs,
+        workingDir,
+        log,
+        isCanceled,
+        thinkingMode,
+        thinkingBudget
+      )
+
+      if (result.success) {
+        // Success! Record usage and return
+        recordAIUsage(ctx, currentProvider, result, log)
+        log('✅ AI implementation completed')
+        return true
+      }
+
+      // Execution failed
+      lastError = result.error || 'AI execution failed'
+
+      if (isRateLimited) {
+        rateLimitedProviderKeys.add(currentProvider.metadata.key)
+        log(`⚠️ ${currentProvider.metadata.displayName} rate limited: ${lastError}`)
+
+        // Try to find another provider
+        const { provider: nextProvider } = await CLIProviderRegistry.selectProvider(
           { ...ctx.policy, worker: { ...ctx.policy.worker, toolPreference: 'auto' } },
-          (toolType) =>
-            toolType === provider.metadata.toolType
-              ? { exceeded: true, reason: 'Rate limited' }
-              : checkLimitsExceeded(toolType)
+          (toolType) => {
+            // Check if this toolType's provider was already tried or rate limited
+            const provider = CLIProviderRegistry.get(toolType)
+            if (provider && (triedProviderKeys.has(provider.metadata.key) || rateLimitedProviderKeys.has(provider.metadata.key))) {
+              return { exceeded: true, reason: 'Already tried or rate limited' }
+            }
+            return checkLimitsExceeded(toolType)
+          }
         )
 
-        if (fallback && fallback.metadata.key !== provider.metadata.key) {
-          log(`${provider.metadata.displayName} rate limited; falling back to ${fallback.metadata.displayName}...`)
+        if (nextProvider && !triedProviderKeys.has(nextProvider.metadata.key)) {
+          log(`↪️ Falling back to ${nextProvider.metadata.displayName}...`)
+          currentProvider = nextProvider
+          continue
+        }
 
-          const fallbackResult = await fallback.execute({
-            prompt,
-            timeoutMs,
-            cwd: workingDir,
-            log: log as CLILogFn,
-            isCanceled
-          })
+        // No more providers to try
+        log(`❌ All available AI providers have been exhausted`)
+        currentProvider = null
+      } else {
+        // Non-rate-limit error - don't try other providers for this type of failure
+        log(`❌ ${currentProvider.metadata.displayName} failed: ${lastError}`)
+        currentProvider = null
+      }
+    } catch (error) {
+      if (error instanceof WorkerCanceledError) {
+        throw error
+      }
 
-          if (fallbackResult.success) {
-            recordAIUsage(ctx, fallback, fallbackResult, log)
-            log('AI implementation completed')
-            return true
+      lastError = error instanceof Error ? error.message : String(error)
+      const providerName = currentProvider?.metadata.displayName ?? 'Unknown provider'
+      const providerKey = currentProvider?.metadata.key
+      log(`❌ ${providerName} error: ${lastError}`)
+
+      // Check if this is a rate limit error from exception
+      if (currentProvider && currentProvider.isRetryableLimitError(lastError)) {
+        if (providerKey) rateLimitedProviderKeys.add(providerKey)
+
+        // Try to find another provider
+        const { provider: nextProvider } = await CLIProviderRegistry.selectProvider(
+          { ...ctx.policy, worker: { ...ctx.policy.worker, toolPreference: 'auto' } },
+          (toolType) => {
+            const provider = CLIProviderRegistry.get(toolType)
+            if (provider && (triedProviderKeys.has(provider.metadata.key) || rateLimitedProviderKeys.has(provider.metadata.key))) {
+              return { exceeded: true, reason: 'Already tried or rate limited' }
+            }
+            return checkLimitsExceeded(toolType)
           }
+        )
+
+        if (nextProvider && !triedProviderKeys.has(nextProvider.metadata.key)) {
+          log(`↪️ Falling back to ${nextProvider.metadata.displayName}...`)
+          currentProvider = nextProvider
+          continue
         }
       }
 
-      throw new Error(result.error || 'AI execution failed')
+      currentProvider = null
     }
-
-    // Record usage for successful execution
-    recordAIUsage(ctx, provider, result, log)
-    log('AI implementation completed')
-    return true
-  } catch (error) {
-    if (error instanceof WorkerCanceledError) {
-      throw error
-    }
-
-    log(`AI error: ${error}`)
-    await createStubPlan(ctx, plan, workingDir, error instanceof Error ? error.message : String(error))
-    return false
   }
+
+  // All providers failed
+  const triedList = Array.from(triedProviderKeys).join(', ')
+  const finalReason = `All AI providers failed. Tried: ${triedList}. Last error: ${lastError || 'Unknown error'}`
+  log(`❌ ${finalReason}`)
+  await createStubPlan(ctx, plan, workingDir, finalReason)
+  return false
 }
 
 // ============================================================================

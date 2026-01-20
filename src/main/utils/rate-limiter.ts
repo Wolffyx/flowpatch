@@ -419,7 +419,9 @@ export class BackpressureHandler<T> {
 /**
  * Create a rate limiter for API calls.
  */
-export function createApiRateLimiter(requestsPerSecond = DEFAULT_RATE_LIMIT_RPS): TokenBucketRateLimiter {
+export function createApiRateLimiter(
+  requestsPerSecond = DEFAULT_RATE_LIMIT_RPS
+): TokenBucketRateLimiter {
   return new TokenBucketRateLimiter({
     maxTokens: requestsPerSecond * 2, // Allow burst of 2x normal rate
     refillRate: requestsPerSecond

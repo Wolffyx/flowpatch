@@ -20,7 +20,9 @@ export const cardDependencies = sqliteTable(
     depends_on_card_id: text('depends_on_card_id')
       .notNull()
       .references(() => cards.id, { onDelete: 'cascade' }),
-    blocking_statuses_json: text('blocking_statuses_json').notNull().default('["ready","in_progress"]'),
+    blocking_statuses_json: text('blocking_statuses_json')
+      .notNull()
+      .default('["ready","in_progress"]'),
     required_status: text('required_status').notNull().default('done'),
     is_active: integer('is_active').notNull().default(1),
     created_at: text('created_at').notNull(),

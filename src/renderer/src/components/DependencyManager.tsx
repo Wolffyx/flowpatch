@@ -112,9 +112,7 @@ export function DependencyManager({ card }: DependencyManagerProps): React.JSX.E
       const cards = await window.projectAPI.getCards()
       // Filter out current card and cards that are already dependencies
       const existingDepIds = dependencies.map((d) => d.depends_on_card_id)
-      const filtered = cards.filter(
-        (c: Card) => c.id !== card.id && !existingDepIds.includes(c.id)
-      )
+      const filtered = cards.filter((c: Card) => c.id !== card.id && !existingDepIds.includes(c.id))
       setAvailableCards(filtered)
     } catch (err) {
       toast.error('Failed to load cards')
@@ -247,7 +245,9 @@ export function DependencyManager({ card }: DependencyManagerProps): React.JSX.E
                       className={cn(
                         'flex items-center gap-2 p-2 rounded-md border',
                         !isActive && 'opacity-50',
-                        isMet ? 'border-green-500/30 bg-green-500/5' : 'border-yellow-500/30 bg-yellow-500/5'
+                        isMet
+                          ? 'border-green-500/30 bg-green-500/5'
+                          : 'border-yellow-500/30 bg-yellow-500/5'
                       )}
                     >
                       {isMet ? (
@@ -305,9 +305,7 @@ export function DependencyManager({ card }: DependencyManagerProps): React.JSX.E
               </div>
             </div>
           ) : (
-            <div className="text-sm text-muted-foreground text-center py-2">
-              No dependencies
-            </div>
+            <div className="text-sm text-muted-foreground text-center py-2">No dependencies</div>
           )}
 
           {/* What depends on this card */}
@@ -372,12 +370,7 @@ export function DependencyManager({ card }: DependencyManagerProps): React.JSX.E
                     >
                       <div className="font-medium text-sm truncate">{c.title}</div>
                       <div className="flex items-center gap-2 mt-1">
-                        <div
-                          className={cn(
-                            'h-2 w-2 rounded-full',
-                            STATUS_COLORS[c.status]
-                          )}
-                        />
+                        <div className={cn('h-2 w-2 rounded-full', STATUS_COLORS[c.status])} />
                         <span className="text-xs text-muted-foreground">
                           {STATUS_LABELS[c.status]}
                         </span>
@@ -393,10 +386,7 @@ export function DependencyManager({ card }: DependencyManagerProps): React.JSX.E
             <Button variant="outline" onClick={() => setShowAddDialog(false)}>
               Cancel
             </Button>
-            <Button
-              onClick={handleAddDependency}
-              disabled={!selectedCardId || saving}
-            >
+            <Button onClick={handleAddDependency} disabled={!selectedCardId || saving}>
               {saving ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />

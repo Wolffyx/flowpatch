@@ -45,7 +45,9 @@ _Automated by FlowPatch_
   const statusLabel = ctx.adapter.getStatusLabel('in_review')
 
   // Use unified interface - works for both GitHub and GitLab
-  const result = await ctx.adapter.createPullRequest(title, body, branchName, undefined, [statusLabel])
+  const result = await ctx.adapter.createPullRequest(title, body, branchName, undefined, [
+    statusLabel
+  ])
   return result ? { number: result.number, url: result.url } : null
 }
 

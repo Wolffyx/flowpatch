@@ -6,13 +6,7 @@
  */
 
 import type { Card, CardStatus, PolicyConfig, Provider, RepoLabel } from '../../shared/types'
-import type {
-  AuthResult,
-  IRepoAdapter,
-  IssueResult,
-  LabelResult,
-  PRResult
-} from './types'
+import type { AuthResult, IRepoAdapter, IssueResult, LabelResult, PRResult } from './types'
 
 /**
  * Abstract base adapter that implements shared functionality.
@@ -52,11 +46,7 @@ export abstract class BaseAdapter implements IRepoAdapter {
   abstract checkAuth(): Promise<AuthResult>
   abstract listIssues(): Promise<Card[]>
   abstract getIssue(id: number): Promise<Card | null>
-  abstract createIssue(
-    title: string,
-    body?: string,
-    labels?: string[]
-  ): Promise<IssueResult | null>
+  abstract createIssue(title: string, body?: string, labels?: string[]): Promise<IssueResult | null>
   abstract listPullRequests(): Promise<Card[]>
   abstract createPullRequest(
     title: string,

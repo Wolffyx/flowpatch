@@ -181,13 +181,7 @@ export class GitlabAdapter extends BaseAdapter {
    */
   async updateIssueBody(issueIid: number, body: string | null): Promise<boolean> {
     try {
-      const args = [
-        'issue',
-        'update',
-        String(issueIid),
-        '--description',
-        body ?? ''
-      ]
+      const args = ['issue', 'update', String(issueIid), '--description', body ?? '']
 
       await execFileAsync('glab', args, { cwd: this.repoPath })
       console.log(`[GitLabAdapter] updateIssueBody: Success iid=${issueIid}`)

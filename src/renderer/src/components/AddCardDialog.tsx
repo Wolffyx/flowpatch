@@ -101,7 +101,8 @@ export function AddCardDialog({
     [hasRemote, isSubmitting, onOpenChange, remoteProvider]
   )
 
-  const canCreateRepoIssue = hasRemote && (remoteProvider === 'github' || remoteProvider === 'gitlab')
+  const canCreateRepoIssue =
+    hasRemote && (remoteProvider === 'github' || remoteProvider === 'gitlab')
   const aiButtonTitle = !title.trim()
     ? 'Add a title first'
     : !projectId

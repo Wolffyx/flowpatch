@@ -55,7 +55,12 @@ export function detectExistingE2ETests(cwd: string, testDirs: string[]): string[
     try {
       const files = readdirSync(fullPath, { recursive: true, withFileTypes: true })
       for (const file of files) {
-        if (file.isFile() && (file.name.endsWith('.spec.ts') || file.name.endsWith('.test.ts') || file.name.endsWith('.e2e.ts'))) {
+        if (
+          file.isFile() &&
+          (file.name.endsWith('.spec.ts') ||
+            file.name.endsWith('.test.ts') ||
+            file.name.endsWith('.e2e.ts'))
+        ) {
           testFiles.push(join(dir, file.name))
         }
       }
@@ -195,7 +200,8 @@ async function runE2ETests(
     }
     return {
       success: false,
-      output: outputLines.join('\n') + '\n' + (error instanceof Error ? error.message : String(error))
+      output:
+        outputLines.join('\n') + '\n' + (error instanceof Error ? error.message : String(error))
     }
   }
 }
@@ -371,7 +377,13 @@ export async function runE2EPhase(
     const creationSuccess = await createE2ETests(ctx, log, isCanceled)
     if (!creationSuccess) {
       log('Failed to create E2E tests, continuing without E2E validation')
-      return { success: false, testsCreated: false, testsRun: false, fixAttempts: 0, lastError: 'Failed to create E2E tests' }
+      return {
+        success: false,
+        testsCreated: false,
+        testsRun: false,
+        fixAttempts: 0,
+        lastError: 'Failed to create E2E tests'
+      }
     }
     testsCreated = true
 
@@ -379,7 +391,13 @@ export async function runE2EPhase(
     existingTests = detectExistingE2ETests(cwd, testDirs)
     if (existingTests.length === 0) {
       log('AI did not create any E2E test files, continuing without E2E validation')
-      return { success: false, testsCreated: true, testsRun: false, fixAttempts: 0, lastError: 'No E2E test files created' }
+      return {
+        success: false,
+        testsCreated: true,
+        testsRun: false,
+        fixAttempts: 0,
+        lastError: 'No E2E test files created'
+      }
     }
 
     log(`E2E tests created: ${existingTests.join(', ')}`)

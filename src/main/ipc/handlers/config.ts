@@ -27,10 +27,7 @@ export function registerConfigHandlers(notifyRenderer: () => void): void {
    */
   ipcMain.handle(
     'syncProjectConfig',
-    async (
-      _e,
-      payload: { projectId: string; priorityOverride?: ConfigSyncPriority }
-    ) => {
+    async (_e, payload: { projectId: string; priorityOverride?: ConfigSyncPriority }) => {
       const project = getProject(payload.projectId)
       if (!project) {
         return { success: false, error: 'Project not found' }
@@ -119,11 +116,7 @@ export function registerConfigHandlers(notifyRenderer: () => void): void {
         return { success: false, error: 'Project not found' }
       }
 
-      const result = setConfigSyncPriority(
-        payload.projectId,
-        project.local_path,
-        payload.priority
-      )
+      const result = setConfigSyncPriority(payload.projectId, project.local_path, payload.priority)
 
       if (result.success) {
         notifyRenderer()
@@ -141,30 +134,23 @@ export function registerConfigHandlers(notifyRenderer: () => void): void {
   /**
    * Start watching config file for changes.
    */
-  ipcMain.handle(
-    'startConfigFileWatcher',
-    (_e, payload: { projectId: string }) => {
-      const project = getProject(payload.projectId)
-      if (!project) {
-        return { success: false, error: 'Project not found' }
-      }
-
-      const success = startConfigFileWatcher(
-        payload.projectId,
-        project.local_path,
-        (result) => {
-          // Notify the specific project tab about config changes
-          sendToTab(payload.projectId, 'configChanged', {
-            policy: result.policy,
-            source: result.source
-          })
-          notifyRenderer()
-        }
-      )
-
-      return { success }
+  ipcMain.handle('startConfigFileWatcher', (_e, payload: { projectId: string }) => {
+    const project = getProject(payload.projectId)
+    if (!project) {
+      return { success: false, error: 'Project not found' }
     }
-  )
+
+    const success = startConfigFileWatcher(payload.projectId, project.local_path, (result) => {
+      // Notify the specific project tab about config changes
+      sendToTab(payload.projectId, 'configChanged', {
+        policy: result.policy,
+        source: result.source
+      })
+      notifyRenderer()
+    })
+
+    return { success }
+  })
 
   /**
    * Stop watching config file for changes.

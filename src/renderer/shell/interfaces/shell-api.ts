@@ -92,7 +92,10 @@ declare global {
       getSystemTheme: () => Promise<'light' | 'dark'>
 
       // Agent Chat
-      getChatMessages: (jobId: string, limit?: number) => Promise<{
+      getChatMessages: (
+        jobId: string,
+        limit?: number
+      ) => Promise<{
         messages: {
           id: string
           job_id: string
@@ -129,23 +132,27 @@ declare global {
         error?: string
       }>
       markChatAsRead: (jobId: string) => Promise<{ success: boolean; error?: string }>
-      clearChatHistory: (jobId: string) => Promise<{ success: boolean; count: number; error?: string }>
-      onChatMessage: (callback: (data: {
-        type: string
-        message: {
-          id: string
-          job_id: string
-          card_id: string
-          project_id: string
-          role: 'user' | 'agent' | 'system'
-          content: string
-          status: 'sent' | 'delivered' | 'read' | 'error'
-          metadata_json?: string
-          created_at: string
-          updated_at?: string
-        }
+      clearChatHistory: (
         jobId: string
-      }) => void) => () => void
+      ) => Promise<{ success: boolean; count: number; error?: string }>
+      onChatMessage: (
+        callback: (data: {
+          type: string
+          message: {
+            id: string
+            job_id: string
+            card_id: string
+            project_id: string
+            role: 'user' | 'agent' | 'system'
+            content: string
+            status: 'sent' | 'delivered' | 'read' | 'error'
+            metadata_json?: string
+            created_at: string
+            updated_at?: string
+          }
+          jobId: string
+        }) => void
+      ) => () => void
 
       // App Reset (Dev only)
       resetEverything: () => Promise<{ success: boolean; error?: string }>
@@ -164,7 +171,14 @@ declare global {
 
 // Auto-Updater types
 export interface UpdateStatus {
-  state: 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
+  state:
+    | 'idle'
+    | 'checking'
+    | 'available'
+    | 'not-available'
+    | 'downloading'
+    | 'downloaded'
+    | 'error'
   version?: string
   releaseNotes?: string
   releaseDate?: string

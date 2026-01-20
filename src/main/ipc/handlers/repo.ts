@@ -181,16 +181,15 @@ async function openRepoAtPath(repoPath: string): Promise<OpenRepoResult> {
   const selectedRemoteName = existing?.selected_remote_name ?? null
   const selectedRemote =
     (selectedRemoteName
-      ? remotes.find((r) => r.name.startsWith(`${selectedRemoteName}:`)) ?? null
-      : null) ??
-    getDefaultRemote(remotes)
+      ? (remotes.find((r) => r.name.startsWith(`${selectedRemoteName}:`)) ?? null)
+      : null) ?? getDefaultRemote(remotes)
 
   const providerHint =
     existing?.provider_hint && existing.provider_hint !== 'auto'
       ? existing.provider_hint
       : selectedRemote
         ? detectProviderFromRemote(selectedRemote.url)
-        : existing?.provider_hint ?? 'auto'
+        : (existing?.provider_hint ?? 'auto')
 
   const project = upsertProject({
     id,

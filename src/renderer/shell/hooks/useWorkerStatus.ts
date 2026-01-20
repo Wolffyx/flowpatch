@@ -45,18 +45,19 @@ export function useWorkerStatus(
     // Initialize from projects (worker_enabled field)
     for (const project of projects) {
       const workerJobs = recentJobs.filter(
-        j => j.project_id === project.id && j.type === 'worker_run'
+        (j) => j.project_id === project.id && j.type === 'worker_run'
       )
       const activeWorkerJobs = workerJobs.filter(
-        j => j.state === 'running' || j.state === 'queued'
+        (j) => j.state === 'running' || j.state === 'queued'
       )
-      const latestWorkerJob = workerJobs.length > 0
-        ? workerJobs.reduce((latest, job) => {
-            const latestTime = latest.updated_at || latest.created_at
-            const jobTime = job.updated_at || job.created_at
-            return jobTime > latestTime ? job : latest
-          })
-        : null
+      const latestWorkerJob =
+        workerJobs.length > 0
+          ? workerJobs.reduce((latest, job) => {
+              const latestTime = latest.updated_at || latest.created_at
+              const jobTime = job.updated_at || job.created_at
+              return jobTime > latestTime ? job : latest
+            })
+          : null
 
       let lastJobState: 'running' | 'completed' | 'failed' | null = null
       if (activeWorkerJobs.length > 0) {
@@ -89,27 +90,28 @@ export function useWorkerStatus(
   }, [projects, recentJobs, projectWorkerStatus])
 
   // Enrich tabs with worker status for tab indicators
-  const tabsWithStatus = useMemo(() =>
-    tabs.map(tab => {
-      const status = computedWorkerStatus[tab.projectId]
-      let workerStatus: 'idle' | 'running' | 'ready' | 'error' | null = null
+  const tabsWithStatus = useMemo(
+    () =>
+      tabs.map((tab) => {
+        const status = computedWorkerStatus[tab.projectId]
+        let workerStatus: 'idle' | 'running' | 'ready' | 'error' | null = null
 
-      if (status?.activeRuns > 0) {
-        workerStatus = 'running'
-      } else if (status?.lastJobState === 'failed') {
-        workerStatus = 'error'
-      } else if (status?.lastJobState === 'completed') {
-        workerStatus = 'ready'
-      } else if (status?.workerEnabled) {
-        workerStatus = 'idle'
-      }
+        if (status?.activeRuns > 0) {
+          workerStatus = 'running'
+        } else if (status?.lastJobState === 'failed') {
+          workerStatus = 'error'
+        } else if (status?.lastJobState === 'completed') {
+          workerStatus = 'ready'
+        } else if (status?.workerEnabled) {
+          workerStatus = 'idle'
+        }
 
-      return {
-        ...tab,
-        workerStatus,
-        activeRuns: status?.activeRuns ?? 0
-      }
-    }),
+        return {
+          ...tab,
+          workerStatus,
+          activeRuns: status?.activeRuns ?? 0
+        }
+      }),
     [tabs, computedWorkerStatus]
   )
 

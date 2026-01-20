@@ -5,7 +5,13 @@ import { Badge } from '../../../src/components/ui/badge'
 import { ScrollArea } from '../../../src/components/ui/scroll-area'
 import { RefreshCw } from 'lucide-react'
 import type { Job, FlowPatchWorkspaceStatus } from '@shared/types'
-import { latestJobOfType, jobIsActive, parseJobResult, defaultApproval, type ApprovalState } from './types'
+import {
+  latestJobOfType,
+  jobIsActive,
+  parseJobResult,
+  defaultApproval,
+  type ApprovalState
+} from './types'
 import {
   WorkspaceSection,
   IndexSection,
@@ -30,7 +36,11 @@ export function WorkspaceDialog({
   jobs,
   onRefreshStatus
 }: WorkspaceDialogProps): React.JSX.Element {
-  const [confirm, setConfirm] = useState<{ title: string; body: string; onConfirm: () => void } | null>(null)
+  const [confirm, setConfirm] = useState<{
+    title: string
+    body: string
+    onConfirm: () => void
+  } | null>(null)
   const [approval, setApproval] = useState<ApprovalState | null>(null)
 
   const jobMap = useMemo(
@@ -55,7 +65,9 @@ export function WorkspaceDialog({
     | undefined
 
   const previewResult = parseJobResult(jobMap.preview)
-  const previewIncluded = (previewResult?.artifacts as any)?.included as { path: string; score: number }[] | undefined
+  const previewIncluded = (previewResult?.artifacts as any)?.included as
+    | { path: string; score: number }[]
+    | undefined
 
   const run = useCallback(
     async (fn: () => Promise<unknown>): Promise<void> => {
@@ -76,10 +88,7 @@ export function WorkspaceDialog({
     []
   )
 
-  const anyBusy = useMemo(
-    () => Object.values(jobMap).some(jobIsActive),
-    [jobMap]
-  )
+  const anyBusy = useMemo(() => Object.values(jobMap).some(jobIsActive), [jobMap])
 
   const loadApproval = useCallback(async (): Promise<void> => {
     try {
@@ -104,7 +113,8 @@ export function WorkspaceDialog({
   }, [])
 
   const indexState = status?.index.state
-  const indexBadgeVariant = indexState === 'ready' ? 'default' : indexState === 'blocked' ? 'destructive' : 'secondary'
+  const indexBadgeVariant =
+    indexState === 'ready' ? 'default' : indexState === 'blocked' ? 'destructive' : 'secondary'
 
   return (
     <Dialog
@@ -162,7 +172,11 @@ export function WorkspaceDialog({
               onRefreshStatus={onRefreshStatus}
               jobs={{ docs: jobMap.docs }}
             />
-            <ConfigSection run={run} jobs={{ validate: jobMap.validate }} diagnostics={diagnostics} />
+            <ConfigSection
+              run={run}
+              jobs={{ validate: jobMap.validate }}
+              diagnostics={diagnostics}
+            />
             <ContextPreviewSection
               approval={approval}
               maybeConfirm={maybeConfirm}

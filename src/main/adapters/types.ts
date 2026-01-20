@@ -120,11 +120,7 @@ export interface IRepoAdapter {
    * Create a new issue on the remote repository.
    * LocalAdapter returns null (cannot create remote issues).
    */
-  createIssue(
-    title: string,
-    body?: string,
-    labels?: string[]
-  ): Promise<IssueResult | null>
+  createIssue(title: string, body?: string, labels?: string[]): Promise<IssueResult | null>
 
   /**
    * Update the body of an issue on the remote repository.
@@ -175,11 +171,7 @@ export interface IRepoAdapter {
    * Update labels on an issue.
    * LocalAdapter returns true (no-op success).
    */
-  updateLabels(
-    issueId: number,
-    labelsToAdd: string[],
-    labelsToRemove: string[]
-  ): Promise<boolean>
+  updateLabels(issueId: number, labelsToAdd: string[], labelsToRemove: string[]): Promise<boolean>
 
   /**
    * Update labels on a pull request / merge request.
@@ -246,11 +238,13 @@ export interface IGithubAdapter extends IRepoAdapter {
   updateProjectDraftBody(draftNodeId: string, title: string, body: string | null): Promise<boolean>
 
   /** List PR to issue links */
-  listPRIssueLinks(): Promise<Array<{
-    prNumber: number
-    prUrl: string
-    issueNumbers: number[]
-  }>>
+  listPRIssueLinks(): Promise<
+    Array<{
+      prNumber: number
+      prUrl: string
+      issueNumbers: number[]
+    }>
+  >
 
   /** Add a sub-issue relationship (child) to a parent issue using GitHub's sub-issues API */
   addSubIssue(

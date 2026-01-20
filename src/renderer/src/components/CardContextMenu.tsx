@@ -1,23 +1,29 @@
 import { useEffect, useMemo, useRef } from 'react'
-import { Scissors, ArrowRight } from 'lucide-react'
+import { Scissors, ArrowRight, Upload } from 'lucide-react'
 import type { Card } from '../../../shared/types'
 
 interface CardContextMenuProps {
   open: boolean
   position: { x: number; y: number } | null
   card: Card | null
+  hasRemote?: boolean
+  remoteProvider?: string
   onClose: () => void
   onOpenCard: (card: Card) => void
   onSplitCard: (card: Card) => void
+  onPushToRemote?: (card: Card) => void
 }
 
 export function CardContextMenu({
   open,
   position,
   card,
+  hasRemote,
+  remoteProvider,
   onClose,
   onOpenCard,
-  onSplitCard
+  onSplitCard,
+  onPushToRemote
 }: CardContextMenuProps): React.JSX.Element | null {
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -90,6 +96,19 @@ export function CardContextMenu({
         <Scissors className="h-4 w-4" />
         Split with AI
       </button>
+      {card.provider === 'local' && hasRemote && onPushToRemote && (
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-muted"
+          onClick={() => {
+            onPushToRemote(card)
+            onClose()
+          }}
+        >
+          <Upload className="h-4 w-4" />
+          Push to {remoteProvider === 'github' ? 'GitHub' : 'GitLab'}
+        </button>
+      )}
     </div>
   )
 }

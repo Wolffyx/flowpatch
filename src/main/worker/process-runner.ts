@@ -28,9 +28,70 @@ import type { ExecutionOrigin, CommandGuardConfig } from '../../shared/types'
 import { logAction } from '../../shared/utils'
 import { WorkerCanceledError } from './errors'
 
-function resolveWindowsSpawnCommand(command: string, env: NodeJS.ProcessEnv): string {
-  // If the caller passed a path or explicit extension, don't try to resolve it.
-  if (command.includes('\\') || command.includes('/') || /\.[A-Za-z0-9]+$/.test(command)) return command
+export interface ResolvedCommand {
+  command: string
+  prependArgs?: string[]
+}
+
+function detectNodeJsWrapper(cmdPath: string): ResolvedCommand | null {
+  try {
+    const content = execFileSync('cmd.exe', ['/c', 'type', cmdPath], {
+      encoding: 'utf-8',
+      windowsHide: true
+    })
+
+    const lines = content.split(/\r?\n/)
+    const cmdDir = cmdPath.substring(0, cmdPath.lastIndexOf('\\') + 1)
+    let scriptPath: string | null = null
+
+    for (const line of lines) {
+      const trimmed = line.trim()
+
+      if (!trimmed.includes('%dp0%') || !trimmed.includes('.js')) continue
+
+      const expandedLine = trimmed.replace(/%dp0%/gi, cmdDir)
+      const jsMatches = expandedLine.match(/"([^"]+\.js)"|'([^']+\.js)'|(\S+\.js)/gi)
+
+      if (jsMatches) {
+        for (const match of jsMatches) {
+          const path = match.replace(/^"|"$/g, '').replace(/^'|'$/g, '')
+          if (path.includes('.js')) {
+            scriptPath = path
+          }
+        }
+      }
+
+      if (scriptPath) break
+    }
+
+    if (!scriptPath) {
+      return null
+    }
+
+    const localNodePath = `${cmdDir}node.exe`
+    let nodeExePath: string
+
+    try {
+      execFileSync('cmd.exe', ['/c', 'if', 'exist', localNodePath, 'echo', 'exists'], {
+        windowsHide: true
+      })
+      nodeExePath = localNodePath
+    } catch {
+      nodeExePath = 'node'
+    }
+
+    return {
+      command: nodeExePath,
+      prependArgs: [scriptPath]
+    }
+  } catch {
+    return null
+  }
+}
+
+function resolveWindowsSpawnCommand(command: string, env: NodeJS.ProcessEnv): ResolvedCommand {
+  if (command.includes('\\') || command.includes('/') || /\.[A-Za-z0-9]+$/.test(command))
+    return { command }
 
   try {
     const raw = execFileSync('where', [command], {
@@ -44,17 +105,24 @@ function resolveWindowsSpawnCommand(command: string, env: NodeJS.ProcessEnv): st
       .map((s) => s.trim())
       .filter(Boolean)
 
-    if (!matches.length) return command
+    if (!matches.length) return { command }
 
     const preferredExts = ['.exe', '.cmd', '.bat', '.com']
     for (const ext of preferredExts) {
       const hit = matches.find((m) => m.toLowerCase().endsWith(ext))
-      if (hit) return hit
+      if (hit) {
+        if (ext === '.cmd' || ext === '.bat') {
+          const wrapperInfo = detectNodeJsWrapper(hit)
+          if (wrapperInfo) return wrapperInfo
+          return { command: 'cmd.exe', prependArgs: ['/c', hit] }
+        }
+        return { command: hit }
+      }
     }
 
-    return matches[0]
+    return { command: matches[0] }
   } catch {
-    return command
+    return { command }
   }
 }
 
@@ -82,7 +150,7 @@ export interface ProcessStreamingOptions {
 
 /**
  * Run a process with streaming output and timeout support.
- * 
+ *
  * Security: Commands are validated against the policy's allowlist before execution.
  * Blocked commands (e.g., rm, sudo, curl) are always rejected regardless of policy.
  */
@@ -139,12 +207,15 @@ export async function runProcessStreaming(options: ProcessStreamingOptions): Pro
   }
 
   await new Promise<void>((resolve, reject) => {
-    const spawnCommand =
+    const resolved =
       process.platform === 'win32'
         ? resolveWindowsSpawnCommand(command, env ?? process.env)
-        : command
+        : { command }
 
-    const child = spawn(spawnCommand, args, {
+    const spawnCommand = resolved.command
+    const finalArgs = resolved.prependArgs ? [...resolved.prependArgs, ...args] : args
+
+    const child = spawn(spawnCommand, finalArgs, {
       cwd,
       env: env ?? process.env,
       stdio: [stdin ? 'pipe' : 'ignore', 'pipe', 'pipe']
@@ -297,17 +368,22 @@ const ALLOWED_AI_TOOLS = ['claude', 'codex']
  */
 export async function runSecureAIProcess(options: ProcessStreamingOptions): Promise<void> {
   const { command } = options
-  
+
   // Extract base command name
-  const baseCommand = command.split(/[\\/]/).pop()?.toLowerCase().replace(/\.(exe|cmd|bat)$/i, '') ?? ''
-  
+  const baseCommand =
+    command
+      .split(/[\\/]/)
+      .pop()
+      ?.toLowerCase()
+      .replace(/\.(exe|cmd|bat)$/i, '') ?? ''
+
   // Verify this is a whitelisted AI tool
   if (!ALLOWED_AI_TOOLS.includes(baseCommand)) {
     const error = `Security: '${command}' is not a recognized AI tool. Allowed: ${ALLOWED_AI_TOOLS.join(', ')}`
     logAction('security:aiToolRejected', { command, baseCommand, allowed: ALLOWED_AI_TOOLS })
     throw new Error(error)
   }
-  
+
   // Run with worker_pipeline origin (trusted internal operation)
   return runProcessStreaming({
     ...options,
@@ -320,7 +396,9 @@ export async function runSecureAIProcess(options: ProcessStreamingOptions): Prom
  * Run a git command securely.
  * Git commands are allowed for internal operations.
  */
-export async function runSecureGitProcess(options: Omit<ProcessStreamingOptions, 'command'>): Promise<void> {
+export async function runSecureGitProcess(
+  options: Omit<ProcessStreamingOptions, 'command'>
+): Promise<void> {
   return runProcessStreaming({
     ...options,
     command: 'git',

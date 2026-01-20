@@ -7,19 +7,19 @@ import { cn } from '../../lib/utils'
 const buttonVariants = cva(
   [
     // Base styles
-    "inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-medium",
+    'inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-medium',
     // Transitions - smooth hover/active animations
-    "transition-all duration-150 ease-out",
+    'transition-all duration-150 ease-out',
     // Active state - subtle press effect
-    "active:scale-[0.98]",
+    'active:scale-[0.98]',
     // Disabled state
-    "disabled:pointer-events-none disabled:opacity-50",
+    'disabled:pointer-events-none disabled:opacity-50',
     // SVG sizing
     "[&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0",
     // Focus ring
-    "outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+    'outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background',
     // Invalid state
-    "aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive"
+    'aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive'
   ].join(' '),
   {
     variants: {
@@ -40,14 +40,10 @@ const buttonVariants = cva(
           'hover:bg-accent hover:text-accent-foreground hover:border-accent',
           'dark:bg-input/30 dark:border-input dark:hover:bg-input/50'
         ].join(' '),
-        secondary: [
-          'bg-secondary text-secondary-foreground',
-          'hover:bg-secondary/80'
-        ].join(' '),
-        ghost: [
-          'hover:bg-accent hover:text-accent-foreground',
-          'dark:hover:bg-accent/50'
-        ].join(' '),
+        secondary: ['bg-secondary text-secondary-foreground', 'hover:bg-secondary/80'].join(' '),
+        ghost: ['hover:bg-accent hover:text-accent-foreground', 'dark:hover:bg-accent/50'].join(
+          ' '
+        ),
         link: 'text-primary underline-offset-4 hover:underline active:scale-100'
       },
       size: {

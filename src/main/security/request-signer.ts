@@ -50,17 +50,17 @@ export function verifySignature(
   timestamp: number
 ): boolean {
   const expectedSignature = signWithSecret(payload, secret, nonce, timestamp)
-  
+
   // Use timing-safe comparison to prevent timing attacks
   if (signature.length !== expectedSignature.length) {
     return false
   }
-  
+
   let result = 0
   for (let i = 0; i < signature.length; i++) {
     result |= signature.charCodeAt(i) ^ expectedSignature.charCodeAt(i)
   }
-  
+
   return result === 0
 }
 
@@ -72,18 +72,15 @@ export function verifySignature(
  * Create a signed request wrapper.
  * This is called from preload scripts using the derived token.
  */
-export function createSignedRequest<T>(
-  payload: T,
-  token: string
-): SignedRequest<T> {
+export function createSignedRequest<T>(payload: T, token: string): SignedRequest<T> {
   const nonce = generateNonce()
   const timestamp = Date.now()
-  
+
   // Sign with the derived token
   const payloadStr = JSON.stringify(payload)
   const data = `${payloadStr}:${nonce}:${timestamp}`
   const signature = createHmac('sha256', token).update(data).digest('hex')
-  
+
   return {
     payload,
     signature,
@@ -130,7 +127,7 @@ export function deriveGlobalToken(sessionSecret: Buffer): string {
  */
 export function isSignedRequest(obj: unknown): obj is SignedRequest<unknown> {
   if (!obj || typeof obj !== 'object') return false
-  
+
   const req = obj as Record<string, unknown>
   return (
     'payload' in req &&
@@ -155,19 +152,19 @@ export function extractSignedPayload<T>(
   if (!isSignedRequest(ipcPayload)) {
     throw new Error('Invalid signed request format')
   }
-  
+
   const { payload, signature, nonce, timestamp } = ipcPayload as SignedRequest<T>
-  
+
   // Check timestamp freshness
   const age = Date.now() - timestamp
   if (age > maxAgeMs) {
     throw new Error(`Request expired (age: ${age}ms, max: ${maxAgeMs}ms)`)
   }
-  
+
   // Verify signature
   if (!verifySignature(payload, signature, secret, nonce, timestamp)) {
     throw new Error('Invalid request signature')
   }
-  
+
   return payload
 }

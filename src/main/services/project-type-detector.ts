@@ -115,7 +115,10 @@ export function detectProjectType(projectPath: string): ProjectTypeInfo {
           info.port = 3000
         } else if (scripts.start?.includes('react-scripts')) {
           info.port = 3000
-        } else if (packageJson.dependencies?.express || packageJson.dependencies?.['@nestjs/core']) {
+        } else if (
+          packageJson.dependencies?.express ||
+          packageJson.dependencies?.['@nestjs/core']
+        ) {
           info.port = 3000
         }
       }

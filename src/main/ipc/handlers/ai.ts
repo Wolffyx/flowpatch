@@ -1,7 +1,7 @@
 /**
  * IPC handlers for AI-assisted drafting.
  * Handles: generateCardDescription, generateCardList
- * 
+ *
  * Security: All AI handlers verify IPC origin to prevent unauthorized command execution.
  */
 
@@ -136,7 +136,10 @@ function extractLikelyJson(raw: string): string {
   return text
 }
 
-function parseCardListJson(raw: string, expectedCount: number): Array<{ title: string; body: string }> {
+function parseCardListJson(
+  raw: string,
+  expectedCount: number
+): Array<{ title: string; body: string }> {
   const extracted = extractLikelyJson(raw)
   let parsed: unknown
   try {
@@ -155,7 +158,8 @@ function parseCardListJson(raw: string, expectedCount: number): Array<{ title: s
     if (!item || typeof item !== 'object') throw new Error(`Card ${idx + 1} must be an object`)
     const title = (item as { title?: unknown }).title
     const body = (item as { body?: unknown }).body
-    if (typeof title !== 'string' || !title.trim()) throw new Error(`Card ${idx + 1} missing valid "title"`)
+    if (typeof title !== 'string' || !title.trim())
+      throw new Error(`Card ${idx + 1} missing valid "title"`)
     if (typeof body !== 'string') throw new Error(`Card ${idx + 1} missing valid "body"`)
     return { title: title.trim(), body: body.trim() }
   })
@@ -187,7 +191,8 @@ async function checkCommand(cmd: string): Promise<boolean> {
 }
 
 function resolveWindowsSpawnCommand(command: string): string {
-  if (command.includes('\\') || command.includes('/') || /\.[A-Za-z0-9]+$/.test(command)) return command
+  if (command.includes('\\') || command.includes('/') || /\.[A-Za-z0-9]+$/.test(command))
+    return command
 
   try {
     const raw = execFileSync('where', [command], { encoding: 'utf-8', windowsHide: true })

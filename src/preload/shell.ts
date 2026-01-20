@@ -85,7 +85,10 @@ export interface ShellAPI {
   onShortcutsUpdated: (callback: () => void) => () => void
 
   // Agent Chat
-  getChatMessages: (jobId: string, limit?: number) => Promise<{ messages: AgentChatMessage[]; error?: string }>
+  getChatMessages: (
+    jobId: string,
+    limit?: number
+  ) => Promise<{ messages: AgentChatMessage[]; error?: string }>
   sendChatMessage: (params: {
     jobId: string
     cardId: string
@@ -95,7 +98,9 @@ export interface ShellAPI {
   }) => Promise<{ message: AgentChatMessage; error?: string }>
   markChatAsRead: (jobId: string) => Promise<{ success: boolean; error?: string }>
   clearChatHistory: (jobId: string) => Promise<{ success: boolean; count: number; error?: string }>
-  onChatMessage: (callback: (data: { type: string; message: AgentChatMessage; jobId: string }) => void) => () => void
+  onChatMessage: (
+    callback: (data: { type: string; message: AgentChatMessage; jobId: string }) => void
+  ) => () => void
 
   // App Reset (Dev only)
   resetEverything: () => Promise<{ success: boolean; error?: string }>
@@ -205,7 +210,14 @@ interface AgentChatMessage {
 
 // Auto-Updater types
 interface UpdateStatus {
-  state: 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
+  state:
+    | 'idle'
+    | 'checking'
+    | 'available'
+    | 'not-available'
+    | 'downloading'
+    | 'downloaded'
+    | 'error'
   version?: string
   releaseNotes?: string
   releaseDate?: string
@@ -488,8 +500,13 @@ const shellAPI: ShellAPI = {
     return ipcRenderer.invoke('chat:clearHistory', jobId)
   },
 
-  onChatMessage: (callback: (data: { type: string; message: AgentChatMessage; jobId: string }) => void) => {
-    const handler = (_event: IpcRendererEvent, data: { type: string; message: AgentChatMessage; jobId: string }) => {
+  onChatMessage: (
+    callback: (data: { type: string; message: AgentChatMessage; jobId: string }) => void
+  ) => {
+    const handler = (
+      _event: IpcRendererEvent,
+      data: { type: string; message: AgentChatMessage; jobId: string }
+    ) => {
       callback(data)
     }
     ipcRenderer.on('agentChatMessage', handler)

@@ -44,7 +44,7 @@ function simpleHash(str: string): string {
   let hash = 0
   for (let i = 0; i < str.length; i++) {
     const char = str.charCodeAt(i)
-    hash = ((hash << 5) - hash) + char
+    hash = (hash << 5) - hash + char
     hash = hash & hash // Convert to 32-bit integer
   }
   return hash.toString(36)
@@ -163,13 +163,19 @@ export function validatePolicy(policy: PolicyConfig): PolicyValidationResult {
     }
 
     if (policy.worker.leaseRenewalIntervalMs !== undefined) {
-      if (typeof policy.worker.leaseRenewalIntervalMs !== 'number' || policy.worker.leaseRenewalIntervalMs < 10000) {
+      if (
+        typeof policy.worker.leaseRenewalIntervalMs !== 'number' ||
+        policy.worker.leaseRenewalIntervalMs < 10000
+      ) {
         errors.push('worker.leaseRenewalIntervalMs must be at least 10000ms')
       }
     }
 
     if (policy.worker.pipelineTimeoutMs !== undefined) {
-      if (typeof policy.worker.pipelineTimeoutMs !== 'number' || policy.worker.pipelineTimeoutMs < 60000) {
+      if (
+        typeof policy.worker.pipelineTimeoutMs !== 'number' ||
+        policy.worker.pipelineTimeoutMs < 60000
+      ) {
         errors.push('worker.pipelineTimeoutMs must be at least 60000ms (1 minute)')
       }
     }
@@ -220,9 +226,10 @@ export function parsePolicyJson(json: string | null | undefined): PolicyConfig {
  * Parse and validate a policy JSON string.
  * Returns the policy and validation results.
  */
-export function parsePolicyJsonWithValidation(
-  json: string | null | undefined
-): { policy: PolicyConfig; validation: PolicyValidationResult } {
+export function parsePolicyJsonWithValidation(json: string | null | undefined): {
+  policy: PolicyConfig
+  validation: PolicyValidationResult
+} {
   const policy = parsePolicyJson(json)
   const validation = validatePolicy(policy)
   return { policy, validation }
@@ -403,10 +410,8 @@ export function mergePolicyUpdate(
         current.worker?.e2e?.createTestsIfMissing ??
         true,
       testCommand: update.worker?.e2e?.testCommand ?? current.worker?.e2e?.testCommand,
-      testDirectories:
-        update.worker?.e2e?.testDirectories ??
-        current.worker?.e2e?.testDirectories ??
-        ['e2e', 'tests/e2e', 'test/e2e'],
+      testDirectories: update.worker?.e2e?.testDirectories ??
+        current.worker?.e2e?.testDirectories ?? ['e2e', 'tests/e2e', 'test/e2e'],
       fixToolPriority: 'claude-first'
     }
   }
@@ -463,6 +468,8 @@ export function isWorkerEnabled(policy: PolicyConfig): boolean {
 /**
  * Get the tool preference from policy.
  */
-export function getToolPreference(policy: PolicyConfig): 'auto' | 'claude' | 'codex' | 'opencode' | 'cursor' {
+export function getToolPreference(
+  policy: PolicyConfig
+): 'auto' | 'claude' | 'codex' | 'opencode' | 'cursor' {
   return policy.worker?.toolPreference ?? 'auto'
 }

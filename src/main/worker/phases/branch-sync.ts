@@ -73,9 +73,7 @@ IMPORTANT: You must resolve ALL conflicts. Do not leave any conflict markers in 
  * Check if a file still has conflict markers.
  */
 function hasConflictMarkers(content: string): boolean {
-  return (
-    content.includes('<<<<<<<') || content.includes('=======') || content.includes('>>>>>>>')
-  )
+  return content.includes('<<<<<<<') || content.includes('=======') || content.includes('>>>>>>>')
 }
 
 /**

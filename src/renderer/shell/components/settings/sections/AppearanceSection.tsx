@@ -46,9 +46,7 @@ export function AppearanceSection(): React.JSX.Element {
       {/* Color Theme Section */}
       <div>
         <h3 className="text-sm font-medium mb-1">Color Theme</h3>
-        <p className="text-xs text-muted-foreground mb-4">
-          Choose your preferred color palette.
-        </p>
+        <p className="text-xs text-muted-foreground mb-4">Choose your preferred color palette.</p>
         <div className="grid grid-cols-3 gap-3 sm:grid-cols-4">
           {availableThemes.map((theme) => (
             <ThemeSwatch
@@ -100,7 +98,9 @@ function ThemeSwatch({
       className={cn(
         'group relative flex flex-col items-center gap-2 rounded-lg border p-3 transition-all',
         'hover:shadow-sm hover:border-primary/50',
-        isSelected ? 'border-primary bg-primary/5 ring-2 ring-primary ring-offset-2' : 'border-border'
+        isSelected
+          ? 'border-primary bg-primary/5 ring-2 ring-primary ring-offset-2'
+          : 'border-border'
       )}
       title={label}
     >

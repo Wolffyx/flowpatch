@@ -51,7 +51,7 @@ export interface PoolConfig {
 /**
  * WorkerPool manages parallel worker execution for a project.
  * It maintains a pool of worker slots and assigns ready cards to available slots.
- * 
+ *
  * Features adaptive polling that backs off when idle and speeds up when active.
  */
 export class WorkerPool {
@@ -85,9 +85,7 @@ export class WorkerPool {
     this.adaptivePolling = config.adaptivePolling !== false // Default true
     this.minPollInterval = config.minPollIntervalMs ?? 1000 // 1 second
     this.maxPollInterval = config.maxPollIntervalMs ?? 60_000 // 60 seconds
-    this.currentPollInterval = this.adaptivePolling
-      ? this.minPollInterval
-      : config.pollIntervalMs
+    this.currentPollInterval = this.adaptivePolling ? this.minPollInterval : config.pollIntervalMs
   }
 
   // ==================== Slot Acquisition with Retry ====================
@@ -117,7 +115,7 @@ export class WorkerPool {
 
       // Wait with exponential backoff before retry
       const delay = SLOT_ACQUISITION_RETRY_DELAY_MS * Math.pow(2, attempt - 1)
-      await new Promise(resolve => setTimeout(resolve, delay))
+      await new Promise((resolve) => setTimeout(resolve, delay))
 
       logAction('workerPool:slotAcquisitionRetry', {
         projectId: this.projectId,
@@ -299,7 +297,7 @@ export class WorkerPool {
    */
   private scheduleNextPoll(): void {
     if (this.isShuttingDown) return
-    
+
     this.pollTimeout = setTimeout(() => this.poll(), this.currentPollInterval)
   }
 
@@ -332,15 +330,15 @@ export class WorkerPool {
    */
   wakeUp(): void {
     if (this.isShuttingDown || !this.pollTimeout) return
-    
+
     // Reset to fast polling
     this.consecutiveEmptyPolls = 0
     this.currentPollInterval = this.minPollInterval
-    
+
     // Clear existing timeout and poll immediately
     clearTimeout(this.pollTimeout)
     this.pollTimeout = null
-    
+
     logAction('workerPool:wakeUp', { projectId: this.projectId })
     this.poll()
   }
@@ -430,7 +428,20 @@ export class WorkerPool {
 
     try {
       const project = getProject(this.projectId)
-      if (!project || !project.worker_enabled) {
+      if (!project) {
+        logAction('workerPool:pollSkipped', {
+          projectId: this.projectId,
+          reason: 'Project not found'
+        })
+        return
+      }
+
+      if (!project.worker_enabled) {
+        logAction('workerPool:pollSkipped', {
+          projectId: this.projectId,
+          reason: 'Worker disabled for project',
+          projectName: project.name
+        })
         return
       }
 
@@ -479,12 +490,15 @@ export class WorkerPool {
       })
     } finally {
       this.isPolling = false
-      
+
       // Adjust polling interval based on whether we found cards
       this.adjustPollInterval(foundCards)
-      
+
       // Schedule next poll with (potentially adjusted) interval
-      this.scheduleNextPoll()
+      // Don't schedule if shutting down
+      if (!this.isShuttingDown) {
+        this.scheduleNextPoll()
+      }
     }
   }
 

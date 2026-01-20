@@ -1,12 +1,16 @@
 /**
  * Event Database Operations
+ *
+ * Supports both central database (legacy) and project-local database.
  */
 
 import { desc, eq } from 'drizzle-orm'
 import { getDrizzle } from './drizzle'
 import { events } from './schema'
+import { events as projectEvents } from './schema/project'
 import { generateId } from '@shared/utils'
 import type { Event, EventType } from '@shared/types'
+import { resolveProjectDb } from './db-resolver'
 
 export type { Event, EventType }
 
@@ -14,7 +18,21 @@ export type { Event, EventType }
  * List events for a project.
  */
 export function listEvents(projectId: string, limit = 100): Event[] {
-  const db = getDrizzle()
+  const { db, isLocalDb } = resolveProjectDb(projectId)
+
+  if (isLocalDb) {
+    // Project DB - no project_id filter needed (implicit)
+    const rows = db
+      .select()
+      .from(projectEvents)
+      .orderBy(desc(projectEvents.created_at))
+      .limit(limit)
+      .all()
+    // Add project_id to match Event type
+    return rows.map((r) => ({ ...r, project_id: projectId })) as Event[]
+  }
+
+  // Central DB - filter by project_id
   return db
     .select()
     .from(events)
@@ -26,8 +44,26 @@ export function listEvents(projectId: string, limit = 100): Event[] {
 
 /**
  * List events for a card.
+ * @param cardId - The card ID
+ * @param limit - Maximum number of events to return
+ * @param projectId - Optional project ID for direct DB resolution
  */
-export function listCardEvents(cardId: string, limit = 50): Event[] {
+export function listCardEvents(cardId: string, limit = 50, projectId?: string): Event[] {
+  if (projectId) {
+    const { db, isLocalDb } = resolveProjectDb(projectId)
+    if (isLocalDb) {
+      const rows = db
+        .select()
+        .from(projectEvents)
+        .where(eq(projectEvents.card_id, cardId))
+        .orderBy(desc(projectEvents.created_at))
+        .limit(limit)
+        .all()
+      return rows.map((r) => ({ ...r, project_id: projectId })) as Event[]
+    }
+  }
+
+  // Central DB fallback
   const db = getDrizzle()
   return db
     .select()
@@ -47,9 +83,26 @@ export function createEvent(
   cardId?: string,
   payload?: unknown
 ): Event {
-  const db = getDrizzle()
+  const { db, isLocalDb } = resolveProjectDb(projectId)
   const id = generateId()
   const now = new Date().toISOString()
+
+  if (isLocalDb) {
+    // Project DB - no project_id column
+    db.insert(projectEvents)
+      .values({
+        id,
+        card_id: cardId ?? null,
+        type,
+        payload_json: payload ? JSON.stringify(payload) : null,
+        created_at: now
+      })
+      .run()
+    const row = db.select().from(projectEvents).where(eq(projectEvents.id, id)).get()
+    return { ...row!, project_id: projectId } as Event
+  }
+
+  // Central DB - includes project_id
   db.insert(events)
     .values({
       id,

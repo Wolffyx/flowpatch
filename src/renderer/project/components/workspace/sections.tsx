@@ -2,7 +2,15 @@ import { useState } from 'react'
 import { Badge } from '../../../src/components/ui/badge'
 import { Input } from '../../../src/components/ui/input'
 import { Switch } from '../../../src/components/ui/switch'
-import { RefreshCw, Wrench, FolderOpen, ShieldCheck, Eye, FileText, ArrowUpRight } from 'lucide-react'
+import {
+  RefreshCw,
+  Wrench,
+  FolderOpen,
+  ShieldCheck,
+  Eye,
+  FileText,
+  ArrowUpRight
+} from 'lucide-react'
 import { Section, ActionButton } from './ui'
 import { jobIsActive, type ApprovalState } from './types'
 import type { Job, FlowPatchWorkspaceStatus } from '@shared/types'
@@ -39,7 +47,13 @@ interface JobSectionProps extends SectionProps {
   }
 }
 
-export function WorkspaceSection({ run, jobs }: { run: RunFn; jobs: { ensure: Job | null } }): React.JSX.Element {
+export function WorkspaceSection({
+  run,
+  jobs
+}: {
+  run: RunFn
+  jobs: { ensure: Job | null }
+}): React.JSX.Element {
   return (
     <Section title="Workspace">
       <div className="flex gap-2">
@@ -65,15 +79,23 @@ export function IndexSection({
   run,
   jobs
 }: Pick<JobSectionProps, 'status' | 'approval' | 'maybeConfirm' | 'run'> & {
-  jobs: { indexBuild: Job | null; indexRefresh: Job | null; watchStart: Job | null; watchStop: Job | null }
+  jobs: {
+    indexBuild: Job | null
+    indexRefresh: Job | null
+    watchStart: Job | null
+    watchStop: Job | null
+  }
 }): React.JSX.Element {
   return (
     <Section title="Index">
       <div className="flex items-center gap-2">
         <ActionButton
           onClick={() =>
-            maybeConfirm(approval?.confirmIndexBuild, 'Run index build?', 'Scans repo and writes to .flowpatch/state/', () =>
-              void run(() => window.projectAPI.indexBuild())
+            maybeConfirm(
+              approval?.confirmIndexBuild,
+              'Run index build?',
+              'Scans repo and writes to .flowpatch/state/',
+              () => void run(() => window.projectAPI.indexBuild())
             )
           }
           loading={jobIsActive(jobs.indexBuild)}
@@ -83,8 +105,11 @@ export function IndexSection({
         </ActionButton>
         <ActionButton
           onClick={() =>
-            maybeConfirm(approval?.confirmIndexRefresh, 'Refresh index?', 'Rescans repo and rewrites index', () =>
-              void run(() => window.projectAPI.indexRefresh())
+            maybeConfirm(
+              approval?.confirmIndexRefresh,
+              'Refresh index?',
+              'Rescans repo and rewrites index',
+              () => void run(() => window.projectAPI.indexRefresh())
             )
           }
           loading={jobIsActive(jobs.indexRefresh)}
@@ -102,14 +127,18 @@ export function IndexSection({
                 approval?.confirmWatchToggle,
                 next ? 'Enable auto indexing?' : 'Disable auto indexing?',
                 next ? 'Starts background indexing' : 'Stops background indexing',
-                () => void run(() => (next ? window.projectAPI.indexWatchStart() : window.projectAPI.indexWatchStop()))
+                () =>
+                  void run(() =>
+                    next ? window.projectAPI.indexWatchStart() : window.projectAPI.indexWatchStop()
+                  )
               )
             }
           />
         </div>
       </div>
       <p className="text-xs text-muted-foreground truncate">
-        Head: {status?.index.headSha?.slice(0, 8) ?? '—'} · Indexed: {status?.index.lastIndexedSha?.slice(0, 8) ?? '—'}
+        Head: {status?.index.headSha?.slice(0, 8) ?? '—'} · Indexed:{' '}
+        {status?.index.lastIndexedSha?.slice(0, 8) ?? '—'}
       </p>
     </Section>
   )
@@ -132,8 +161,11 @@ export function DocsPlanSection({
       <div className="flex gap-2">
         <ActionButton
           onClick={() =>
-            maybeConfirm(approval?.confirmDocsRefresh, 'Refresh docs?', 'Updates generated sections in .flowpatch/docs/', () =>
-              void run(() => window.projectAPI.docsRefresh())
+            maybeConfirm(
+              approval?.confirmDocsRefresh,
+              'Refresh docs?',
+              'Updates generated sections in .flowpatch/docs/',
+              () => void run(() => window.projectAPI.docsRefresh())
             )
           }
           loading={jobIsActive(jobs.docs)}
@@ -190,8 +222,13 @@ export function ConfigSection({
         <div className="space-y-1 mt-2">
           {diagnostics.map((d, idx) => (
             <div key={idx} className="flex items-center justify-between text-xs">
-              <span className={d.level === 'error' ? 'text-destructive' : 'text-muted-foreground'}>{d.message}</span>
-              <Badge variant={d.level === 'error' ? 'destructive' : 'secondary'} className="text-[10px] h-5">
+              <span className={d.level === 'error' ? 'text-destructive' : 'text-muted-foreground'}>
+                {d.message}
+              </span>
+              <Badge
+                variant={d.level === 'error' ? 'destructive' : 'secondary'}
+                className="text-[10px] h-5"
+              >
                 {d.level}
               </Badge>
             </div>
@@ -225,8 +262,11 @@ export function ContextPreviewSection({
         />
         <ActionButton
           onClick={() =>
-            maybeConfirm(approval?.confirmContextPreview, 'Generate preview?', 'Builds context bundle and writes to state/', () =>
-              void run(() => window.projectAPI.contextPreview(previewTask))
+            maybeConfirm(
+              approval?.confirmContextPreview,
+              'Generate preview?',
+              'Builds context bundle and writes to state/',
+              () => void run(() => window.projectAPI.contextPreview(previewTask))
             )
           }
           loading={jobIsActive(jobs.preview)}
@@ -264,8 +304,11 @@ export function MaintenanceSection({
       <div className="flex gap-2">
         <ActionButton
           onClick={() =>
-            maybeConfirm(approval?.confirmRepair, 'Repair workspace?', 'Creates missing templates and updates .gitignore', () =>
-              void run(() => window.projectAPI.repairWorkspace())
+            maybeConfirm(
+              approval?.confirmRepair,
+              'Repair workspace?',
+              'Creates missing templates and updates .gitignore',
+              () => void run(() => window.projectAPI.repairWorkspace())
             )
           }
           loading={jobIsActive(jobs.repair)}
@@ -275,8 +318,11 @@ export function MaintenanceSection({
         </ActionButton>
         <ActionButton
           onClick={() =>
-            maybeConfirm(approval?.confirmMigrate, 'Migrate workspace?', 'Updates config and templates to newer schema', () =>
-              void run(() => window.projectAPI.migrateWorkspace())
+            maybeConfirm(
+              approval?.confirmMigrate,
+              'Migrate workspace?',
+              'Updates config and templates to newer schema',
+              () => void run(() => window.projectAPI.migrateWorkspace())
             )
           }
           loading={jobIsActive(jobs.migrate)}

@@ -4,7 +4,13 @@
  */
 
 import { ipcMain } from 'electron'
-import { getProject, getAppSetting, setAppSetting, updateProjectPolicyJson, listCards } from '../../db'
+import {
+  getProject,
+  getAppSetting,
+  setAppSetting,
+  updateProjectPolicyJson,
+  listCards
+} from '../../db'
 import { AdapterRegistry } from '../../adapters'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
@@ -231,7 +237,11 @@ export function registerOnboardingHandlers(notifyRenderer: () => void): void {
 
         return { created, skipped }
       } catch (error) {
-        return { created: [], skipped: [], error: error instanceof Error ? error.message : String(error) }
+        return {
+          created: [],
+          skipped: [],
+          error: error instanceof Error ? error.message : String(error)
+        }
       }
     }
   )
@@ -299,38 +309,44 @@ export function registerOnboardingHandlers(notifyRenderer: () => void): void {
   })
 
   // List GitHub Projects V2 linked to repository
-  ipcMain.handle(
-    'listGithubRepositoryProjects',
-    async (_e, payload: { projectId: string }) => {
-      if (!payload?.projectId) return { projects: [], error: 'Project ID required' }
+  ipcMain.handle('listGithubRepositoryProjects', async (_e, payload: { projectId: string }) => {
+    if (!payload?.projectId) return { projects: [], error: 'Project ID required' }
 
-      const project = getProject(payload.projectId)
-      if (!project) return { projects: [], error: 'Project not found' }
-      if (!project.remote_repo_key?.startsWith('github:'))
-        return { projects: [], error: 'Project is not GitHub-backed' }
+    const project = getProject(payload.projectId)
+    if (!project) return { projects: [], error: 'Project not found' }
+    if (!project.remote_repo_key?.startsWith('github:'))
+      return { projects: [], error: 'Project is not GitHub-backed' }
 
-      const policy = parsePolicyJson(project.policy_json)
+    const policy = parsePolicyJson(project.policy_json)
 
-      try {
-        const adapter = AdapterRegistry.create({
-          repoKey: project.remote_repo_key,
-          providerHint: project.provider_hint,
-          repoPath: project.local_path,
-          policy
-        })
+    try {
+      const adapter = AdapterRegistry.create({
+        repoKey: project.remote_repo_key,
+        providerHint: project.provider_hint,
+        repoPath: project.local_path,
+        policy
+      })
 
-        // Check if adapter has listRepositoryProjects method (GitHub only)
-        if ('listRepositoryProjects' in adapter && typeof adapter.listRepositoryProjects === 'function') {
-          const projects = await (adapter as { listRepositoryProjects: () => Promise<Array<{ id: string; title: string; number: number }>> }).listRepositoryProjects()
-          return { projects }
-        }
-
-        return { projects: [] }
-      } catch (error) {
-        return { projects: [], error: error instanceof Error ? error.message : String(error) }
+      // Check if adapter has listRepositoryProjects method (GitHub only)
+      if (
+        'listRepositoryProjects' in adapter &&
+        typeof adapter.listRepositoryProjects === 'function'
+      ) {
+        const projects = await (
+          adapter as {
+            listRepositoryProjects: () => Promise<
+              Array<{ id: string; title: string; number: number }>
+            >
+          }
+        ).listRepositoryProjects()
+        return { projects }
       }
+
+      return { projects: [] }
+    } catch (error) {
+      return { projects: [], error: error instanceof Error ? error.message : String(error) }
     }
-  )
+  })
 
   // Link an existing GitHub Project V2 to this project
   ipcMain.handle(

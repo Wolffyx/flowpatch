@@ -12,7 +12,7 @@ export interface FlowPatchWorkspaceEnsureResult {
 
 //todo add in the feature the state folder
 // const STATE_GITIGNORE_ENTRY =  '.flowpatch/state/'
-const STATE_GITIGNORE_ENTRY =  '.flowpatch/'
+const STATE_GITIGNORE_ENTRY = '.flowpatch/'
 
 function tryWriteProbe(dir: string): boolean {
   try {

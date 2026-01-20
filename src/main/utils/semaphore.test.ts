@@ -2,13 +2,7 @@
  * Unit tests for Semaphore implementations.
  */
 import { describe, it, expect } from 'vitest'
-import {
-  Semaphore,
-  Mutex,
-  ReadWriteLock,
-  KeyedSemaphore,
-  BatchExecutor
-} from './semaphore'
+import { Semaphore, Mutex, ReadWriteLock, KeyedSemaphore, BatchExecutor } from './semaphore'
 
 describe('Semaphore', () => {
   describe('basic operations', () => {
@@ -340,11 +334,7 @@ describe('BatchExecutor', () => {
       })
 
       expect(results).toEqual([2, 4, 6, 8, 10, 12, 14])
-      expect(batches).toEqual([
-        [1, 2, 3],
-        [4, 5, 6],
-        [7]
-      ])
+      expect(batches).toEqual([[1, 2, 3], [4, 5, 6], [7]])
     })
   })
 })

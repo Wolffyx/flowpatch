@@ -30,8 +30,18 @@ export function ActionButton({
   children: React.ReactNode
 }): React.JSX.Element {
   return (
-    <Button variant="outline" size="sm" onClick={onClick} disabled={loading || disabled} className="h-8">
-      {loading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Icon className="mr-1.5 h-3.5 w-3.5" />}
+    <Button
+      variant="outline"
+      size="sm"
+      onClick={onClick}
+      disabled={loading || disabled}
+      className="h-8"
+    >
+      {loading ? (
+        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+      ) : (
+        <Icon className="mr-1.5 h-3.5 w-3.5" />
+      )}
       {children}
     </Button>
   )

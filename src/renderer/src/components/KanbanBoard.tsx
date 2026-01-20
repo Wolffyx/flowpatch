@@ -38,6 +38,8 @@ interface KanbanBoardProps {
   cards: Card[]
   cardLinksByCardId: Record<string, CardLink[]>
   selectedCardId: string | null
+  hasRemote?: boolean
+  remoteProvider?: string
   onSelectCard: (id: string | null) => void
   onMoveCard: (cardId: string, status: CardStatus) => void
   onAddCard: () => void
@@ -45,13 +47,19 @@ interface KanbanBoardProps {
   onSortDraftByPriority: () => void
   onSortReadyByPriority: () => void
   onSplitCard: (card: Card) => void
-  devServerStatusByCardId?: Record<string, { isRunning: boolean; port?: number; status?: 'starting' | 'running' | 'stopped' | 'error' }>
+  onPushToRemote?: (card: Card) => void
+  devServerStatusByCardId?: Record<
+    string,
+    { isRunning: boolean; port?: number; status?: 'starting' | 'running' | 'stopped' | 'error' }
+  >
 }
 
 export function KanbanBoard({
   cards,
   cardLinksByCardId,
   selectedCardId,
+  hasRemote,
+  remoteProvider,
   onSelectCard,
   onMoveCard,
   onAddCard,
@@ -59,12 +67,15 @@ export function KanbanBoard({
   onSortDraftByPriority,
   onSortReadyByPriority,
   onSplitCard,
+  onPushToRemote,
   devServerStatusByCardId
 }: KanbanBoardProps): React.JSX.Element {
   const [activeCard, setActiveCard] = useState<Card | null>(null)
   const [overColumnId, setOverColumnId] = useState<CardStatus | null>(null)
   const [contextMenuCard, setContextMenuCard] = useState<Card | null>(null)
-  const [contextMenuPosition, setContextMenuPosition] = useState<{ x: number; y: number } | null>(null)
+  const [contextMenuPosition, setContextMenuPosition] = useState<{ x: number; y: number } | null>(
+    null
+  )
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const { onDragMove: autoScrollOnDragMove, cleanup: cleanupAutoScroll } =
     useDragAutoScroll(scrollContainerRef)
@@ -249,9 +260,12 @@ export function KanbanBoard({
         open={!!contextMenuCard}
         position={contextMenuPosition}
         card={contextMenuCard}
+        hasRemote={hasRemote}
+        remoteProvider={remoteProvider}
         onClose={closeContextMenu}
         onOpenCard={(card) => onSelectCard(card.id)}
         onSplitCard={onSplitCard}
+        onPushToRemote={onPushToRemote}
       />
 
       <DragOverlay>

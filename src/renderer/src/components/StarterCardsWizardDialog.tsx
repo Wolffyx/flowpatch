@@ -80,7 +80,8 @@ export function StarterCardsWizardDialog({
   }, [canCreateRepoIssues, createType])
 
   const safeProjectId = projectId || ''
-  const canGenerate = safeProjectId.trim().length > 0 && description.trim().length > 0 && !isGenerating
+  const canGenerate =
+    safeProjectId.trim().length > 0 && description.trim().length > 0 && !isGenerating
 
   const title = mode === 'onboarding' ? 'Create starter cards' : 'Generate cards with AI'
   const subtitle =
@@ -134,15 +135,20 @@ export function StarterCardsWizardDialog({
     setCards((prev) => prev.filter((_, i) => i !== index))
   }, [])
 
-  const updateCard = useCallback((index: number, patch: Partial<{ title: string; body: string }>) => {
-    setCards((prev) => prev.map((c, i) => (i === index ? { ...c, ...patch } : c)))
-  }, [])
+  const updateCard = useCallback(
+    (index: number, patch: Partial<{ title: string; body: string }>) => {
+      setCards((prev) => prev.map((c, i) => (i === index ? { ...c, ...patch } : c)))
+    },
+    []
+  )
 
   const validCards = useMemo(() => cards.filter((c) => c.title.trim().length > 0), [cards])
 
   const handleCreate = useCallback(async (): Promise<void> => {
     if (isCreating) return
-    const items = validCards.map((c) => ({ title: c.title.trim(), body: c.body.trim() })).slice(0, 15)
+    const items = validCards
+      .map((c) => ({ title: c.title.trim(), body: c.body.trim() }))
+      .slice(0, 15)
     if (items.length === 0) {
       setError('Add at least one card title before creating.')
       return
@@ -171,7 +177,9 @@ export function StarterCardsWizardDialog({
       return
     }
     try {
-      await window.electron.ipcRenderer.invoke('dismissStarterCardsWizard', { projectId: safeProjectId })
+      await window.electron.ipcRenderer.invoke('dismissStarterCardsWizard', {
+        projectId: safeProjectId
+      })
     } catch {
       // ignore
     } finally {
@@ -232,9 +240,7 @@ export function StarterCardsWizardDialog({
                       disabled={isGenerating || isCreating}
                       className={cn(
                         'flex items-center gap-3 rounded-lg border p-3 text-left transition-colors',
-                        createType === 'local'
-                          ? 'border-primary bg-primary/5'
-                          : 'hover:bg-muted/50'
+                        createType === 'local' ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'
                       )}
                     >
                       <div
@@ -413,7 +419,12 @@ export function StarterCardsWizardDialog({
               Back
             </Button>
           ) : (
-            <Button type="button" variant="outline" onClick={handleSkip} disabled={isGenerating || isCreating}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleSkip}
+              disabled={isGenerating || isCreating}
+            >
               {mode === 'onboarding' ? 'Skip' : 'Close'}
             </Button>
           )}
@@ -430,19 +441,23 @@ export function StarterCardsWizardDialog({
               )}
             </Button>
           ) : (
-              <Button type="button" onClick={handleCreate} disabled={isCreating || validCards.length === 0}>
-                {isCreating ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Creating…
-                  </>
-                ) : (
-                  createType === 'repo_issue'
-                    ? `Create ${validCards.length} repo issues`
-                    : `Create ${validCards.length} draft cards`
-                )}
-              </Button>
-            )}
+            <Button
+              type="button"
+              onClick={handleCreate}
+              disabled={isCreating || validCards.length === 0}
+            >
+              {isCreating ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Creating…
+                </>
+              ) : createType === 'repo_issue' ? (
+                `Create ${validCards.length} repo issues`
+              ) : (
+                `Create ${validCards.length} draft cards`
+              )}
+            </Button>
+          )}
         </DialogFooter>
 
         <AIDescriptionDialog

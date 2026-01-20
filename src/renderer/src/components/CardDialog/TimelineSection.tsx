@@ -1,5 +1,14 @@
 import { useMemo, useState } from 'react'
-import { Clock, RefreshCw, Play, CheckCircle2, AlertCircle, Search, Filter, XCircle } from 'lucide-react'
+import {
+  Clock,
+  RefreshCw,
+  Play,
+  CheckCircle2,
+  AlertCircle,
+  Search,
+  Filter,
+  XCircle
+} from 'lucide-react'
 import { Input } from '../ui/input'
 import { Button } from '../ui/button'
 import { formatRelativeTime } from '../../lib/utils'
@@ -144,7 +153,12 @@ export function TimelineSection({ events }: TimelineSectionProps): React.JSX.Ele
             </Button>
           )}
           {showAll && (
-            <Button variant="outline" size="sm" onClick={() => setShowAll(false)} className="w-full">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowAll(false)}
+              className="w-full"
+            >
               Show less
             </Button>
           )}

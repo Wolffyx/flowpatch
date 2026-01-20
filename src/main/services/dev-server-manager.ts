@@ -118,7 +118,10 @@ export class DevServerManager {
 
       // Handle stdout
       child.stdout?.on('data', (chunk: Buffer) => {
-        const lines = chunk.toString().split(/\r?\n/).filter((line) => line.trim())
+        const lines = chunk
+          .toString()
+          .split(/\r?\n/)
+          .filter((line) => line.trim())
         for (const line of lines) {
           processInfo.output.push(line)
           this.detectPort(line, processInfo)
@@ -128,7 +131,10 @@ export class DevServerManager {
 
       // Handle stderr
       child.stderr?.on('data', (chunk: Buffer) => {
-        const lines = chunk.toString().split(/\r?\n/).filter((line) => line.trim())
+        const lines = chunk
+          .toString()
+          .split(/\r?\n/)
+          .filter((line) => line.trim())
         for (const line of lines) {
           processInfo.output.push(line)
           this.detectPort(line, processInfo)

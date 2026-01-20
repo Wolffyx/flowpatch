@@ -33,11 +33,7 @@ export function registerUsageHandlers(notifyRenderer: () => void): void {
     'usage:getSummary',
     (_e, payload: { projectId?: string; startDate: string; endDate: string }) => {
       logAction('usage:getSummary', payload)
-      const summary = getUsageSummary(
-        payload.projectId ?? null,
-        payload.startDate,
-        payload.endDate
-      )
+      const summary = getUsageSummary(payload.projectId ?? null, payload.startDate, payload.endDate)
       return { summary }
     }
   )

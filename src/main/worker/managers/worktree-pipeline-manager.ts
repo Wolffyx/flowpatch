@@ -95,7 +95,9 @@ export class WorktreePipelineManager {
     }
 
     if (!this.checkWorktreeSupport()) {
-      this.log('Git version does not support worktrees (requires 2.17+), falling back to stash mode')
+      this.log(
+        'Git version does not support worktrees (requires 2.17+), falling back to stash mode'
+      )
       return false
     }
 

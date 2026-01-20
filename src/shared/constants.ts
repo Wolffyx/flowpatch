@@ -2,7 +2,7 @@
  * Shared constants used across the application.
  */
 
-import type { CardStatus, JobType, EventType, WorktreeStatus } from './types'
+import type { CardStatus, JobType, EventType, WorktreeStatus, PolicyConfig } from './types'
 
 // ============================================================================
 // Card Status Constants
@@ -216,3 +216,170 @@ export const MAX_SHELL_LOGS = 500
  * Job retry cooldown in minutes.
  */
 export const DEFAULT_RETRY_COOLDOWN_MINUTES = 30
+
+// ============================================================================
+// Kanban Board Constants
+// ============================================================================
+
+/**
+ * Column configuration for the Kanban board.
+ */
+export const KANBAN_COLUMNS: { id: CardStatus; label: string; color: string }[] = [
+  { id: 'draft', label: 'Draft', color: 'bg-muted-foreground' },
+  { id: 'ready', label: 'Ready', color: 'bg-chart-1' },
+  { id: 'in_progress', label: 'In Progress', color: 'bg-chart-4' },
+  { id: 'in_review', label: 'In Review', color: 'bg-chart-5' },
+  { id: 'testing', label: 'Testing', color: 'bg-chart-3' },
+  { id: 'done', label: 'Done', color: 'bg-chart-2' }
+]
+
+// ============================================================================
+// Default Policy Configuration
+// ============================================================================
+
+/**
+ * Default policy configuration for new projects.
+ */
+export const DEFAULT_POLICY: PolicyConfig = {
+  version: 1,
+  ui: {
+    showPullRequestsSection: false
+  },
+  sync: {
+    webhookPreferred: true,
+    pollingFallbackMinutes: 3,
+    readyLabel: 'ready',
+    statusLabels: {
+      draft: 'Draft',
+      ready: 'Ready',
+      inProgress: 'In Progress',
+      inReview: 'In Review',
+      testing: 'Testing',
+      done: 'Done'
+    },
+    githubProjectsV2: {},
+    configPriority: 'database',
+    syncOnStartup: true,
+    watchFileChanges: true,
+    pollInterval: 180000,
+    autoSyncOnAction: true,
+    debounceDelay: 5000
+  },
+  features: {
+    thinking: {
+      enabled: false,
+      mode: 'none',
+      budgetTokens: 4096
+    },
+    planning: {
+      enabled: true,
+      mode: 'lite',
+      approvalRequired: false
+    },
+    multiAgent: {
+      enabled: false,
+      mergeStrategy: 'sequential',
+      conflictResolution: 'auto',
+      maxAgentsPerCard: 3
+    },
+    chat: {
+      enabled: true,
+      persistSessions: true,
+      maxHistoryMessages: 500
+    },
+    notifications: {
+      audioEnabled: false,
+      soundOnComplete: true,
+      soundOnError: true,
+      soundOnApproval: true
+    },
+    diffViewer: {
+      enabled: true,
+      defaultView: 'side-by-side',
+      showMinimap: false
+    },
+    graphView: {
+      enabled: true,
+      defaultLayout: 'dagre',
+      showMinimap: true
+    },
+    usageTracking: {
+      enabled: true,
+      trackCosts: true,
+      exportFormat: 'csv'
+    },
+    images: {
+      enabled: true,
+      maxSizeMb: 10,
+      allowedFormats: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg']
+    },
+    aiProfiles: {
+      enabled: true
+    },
+    featureSuggestions: {
+      enabled: true,
+      autoSuggestOnAnalysis: false
+    },
+    dependencies: {
+      enabled: true,
+      blockOnIncomplete: true,
+      showInKanban: true
+    },
+    followUpInstructions: {
+      enabled: true,
+      maxQueueSize: 10
+    }
+  },
+  worker: {
+    enabled: true,
+    toolPreference: 'auto',
+    planFirst: true,
+    maxMinutes: 25,
+    allowNetwork: false,
+    rollbackOnCancel: false,
+    branchPattern: 'kanban/{id}-{slug}',
+    commitMessage: '#{issue} {title}',
+    allowedCommands: ['pnpm install', 'pnpm lint', 'pnpm test', 'pnpm build'],
+    lintCommand: 'pnpm lint',
+    testCommand: 'pnpm test',
+    buildCommand: 'pnpm build',
+    forbidPaths: ['.github/workflows/', '.gitlab-ci.yml'],
+    worktree: {
+      enabled: false,
+      root: 'repo',
+      branchPrefix: 'flowpatch/',
+      cleanup: {
+        onSuccess: 'immediate',
+        onFailure: 'delay',
+        delayMinutes: 30
+      },
+      maxConcurrent: 1,
+      skipInstallIfCached: false
+    },
+    pool: {
+      maxWorkers: 1,
+      queueStrategy: 'fifo'
+    },
+    decomposition: {
+      enabled: false,
+      threshold: 'auto',
+      createSubIssues: true,
+      maxSubtasks: 5
+    },
+    session: {
+      sessionMode: 'single',
+      maxIterations: 5,
+      progressCheckpoint: false,
+      contextCarryover: 'summary'
+    },
+    e2e: {
+      enabled: false,
+      framework: 'playwright',
+      maxRetries: 3,
+      timeoutMinutes: 10,
+      createTestsIfMissing: true,
+      testDirectories: ['e2e', 'tests/e2e', 'test/e2e'],
+      fixToolPriority: 'claude-first'
+    }
+  }
+}

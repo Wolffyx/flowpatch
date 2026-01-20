@@ -5,8 +5,12 @@
  */
 
 import { and, count, desc, eq } from 'drizzle-orm'
-import { getDrizzle } from './drizzle'
 import { featureSuggestions, featureSuggestionVotes } from './schema'
+import {
+  featureSuggestions as projectFeatureSuggestions,
+  featureSuggestionVotes as projectFeatureSuggestionVotes
+} from './schema/project'
+import { resolveProjectDb } from './db-resolver'
 import { generateId } from '@shared/utils'
 import type {
   FeatureSuggestion,
@@ -32,25 +36,42 @@ export interface CreateFeatureSuggestionData {
  * Create a new feature suggestion.
  */
 export function createFeatureSuggestion(data: CreateFeatureSuggestionData): FeatureSuggestion {
-  const db = getDrizzle()
+  const { db, isLocalDb } = resolveProjectDb(data.projectId)
   const id = generateId()
   const now = new Date().toISOString()
 
-  db.insert(featureSuggestions)
-    .values({
-      id,
-      project_id: data.projectId,
-      title: data.title,
-      description: data.description,
-      category: data.category ?? 'feature',
-      priority: data.priority ?? 0,
-      vote_count: 0,
-      status: 'open',
-      created_by: data.createdBy ?? null,
-      created_at: now,
-      updated_at: now
-    })
-    .run()
+  if (isLocalDb) {
+    db.insert(projectFeatureSuggestions)
+      .values({
+        id,
+        title: data.title,
+        description: data.description,
+        category: data.category ?? 'feature',
+        priority: data.priority ?? 0,
+        vote_count: 0,
+        status: 'open',
+        created_by: data.createdBy ?? null,
+        created_at: now,
+        updated_at: now
+      })
+      .run()
+  } else {
+    db.insert(featureSuggestions)
+      .values({
+        id,
+        project_id: data.projectId,
+        title: data.title,
+        description: data.description,
+        category: data.category ?? 'feature',
+        priority: data.priority ?? 0,
+        vote_count: 0,
+        status: 'open',
+        created_by: data.createdBy ?? null,
+        created_at: now,
+        updated_at: now
+      })
+      .run()
+  }
 
   return {
     id,
@@ -71,22 +92,25 @@ export function createFeatureSuggestion(data: CreateFeatureSuggestionData): Feat
 // Read Operations
 // ============================================================================
 
-function rowToSuggestion(row: {
-  id: string
-  project_id: string
-  title: string
-  description: string
-  category: string
-  priority: number
-  vote_count: number
-  status: string
-  created_by: string | null
-  created_at: string
-  updated_at: string
-}): FeatureSuggestion {
+function rowToSuggestion(
+  row: {
+    id: string
+    project_id?: string
+    title: string
+    description: string
+    category: string
+    priority: number
+    vote_count: number
+    status: string
+    created_by: string | null
+    created_at: string
+    updated_at: string
+  },
+  projectId: string
+): FeatureSuggestion {
   return {
     id: row.id,
-    project_id: row.project_id,
+    project_id: row.project_id ?? projectId,
     title: row.title,
     description: row.description,
     category: row.category as FeatureSuggestionCategory,
@@ -118,14 +142,29 @@ function rowToVote(row: {
 /**
  * Get a feature suggestion by ID.
  */
-export function getFeatureSuggestion(suggestionId: string): FeatureSuggestion | null {
-  const db = getDrizzle()
+export function getFeatureSuggestion(
+  projectId: string,
+  suggestionId: string
+): FeatureSuggestion | null {
+  const { db, isLocalDb } = resolveProjectDb(projectId)
+
+  if (isLocalDb) {
+    const row = db
+      .select()
+      .from(projectFeatureSuggestions)
+      .where(eq(projectFeatureSuggestions.id, suggestionId))
+      .get()
+    return row ? rowToSuggestion(row, projectId) : null
+  }
+
   const row = db
     .select()
     .from(featureSuggestions)
-    .where(eq(featureSuggestions.id, suggestionId))
+    .where(
+      and(eq(featureSuggestions.id, suggestionId), eq(featureSuggestions.project_id, projectId))
+    )
     .get()
-  return row ? rowToSuggestion(row) : null
+  return row ? rowToSuggestion(row, projectId) : null
 }
 
 export interface GetFeatureSuggestionsOptions {
@@ -144,14 +183,31 @@ export function getFeatureSuggestionsByProject(
   projectId: string,
   options: GetFeatureSuggestionsOptions = {}
 ): FeatureSuggestion[] {
-  const db = getDrizzle()
+  const { db, isLocalDb } = resolveProjectDb(projectId)
 
-  // Build base query - we'll handle conditions dynamically
-  let rows = db
-    .select()
-    .from(featureSuggestions)
-    .where(eq(featureSuggestions.project_id, projectId))
-    .all()
+  let rows: Array<{
+    id: string
+    project_id?: string
+    title: string
+    description: string
+    category: string
+    priority: number
+    vote_count: number
+    status: string
+    created_by: string | null
+    created_at: string
+    updated_at: string
+  }>
+
+  if (isLocalDb) {
+    rows = db.select().from(projectFeatureSuggestions).all()
+  } else {
+    rows = db
+      .select()
+      .from(featureSuggestions)
+      .where(eq(featureSuggestions.project_id, projectId))
+      .all()
+  }
 
   // Apply additional filters
   if (options.status) {
@@ -193,7 +249,7 @@ export function getFeatureSuggestionsByProject(
     rows = rows.slice(0, options.limit)
   }
 
-  return rows.map(rowToSuggestion)
+  return rows.map((r) => rowToSuggestion(r, projectId))
 }
 
 /**
@@ -203,7 +259,21 @@ export function countFeatureSuggestions(
   projectId: string,
   status?: FeatureSuggestionStatus
 ): number {
-  const db = getDrizzle()
+  const { db, isLocalDb } = resolveProjectDb(projectId)
+
+  if (isLocalDb) {
+    if (status) {
+      const result = db
+        .select({ count: count() })
+        .from(projectFeatureSuggestions)
+        .where(eq(projectFeatureSuggestions.status, status))
+        .get()
+      return result?.count ?? 0
+    }
+
+    const result = db.select({ count: count() }).from(projectFeatureSuggestions).get()
+    return result?.count ?? 0
+  }
 
   if (status) {
     const result = db
@@ -240,10 +310,11 @@ export interface UpdateFeatureSuggestionData {
  * Update a feature suggestion.
  */
 export function updateFeatureSuggestion(
+  projectId: string,
   suggestionId: string,
   data: UpdateFeatureSuggestionData
 ): FeatureSuggestion | null {
-  const db = getDrizzle()
+  const { db, isLocalDb } = resolveProjectDb(projectId)
   const now = new Date().toISOString()
 
   const updateData: Record<string, unknown> = { updated_at: now }
@@ -254,30 +325,55 @@ export function updateFeatureSuggestion(
   if (data.priority !== undefined) updateData.priority = data.priority
   if (data.status !== undefined) updateData.status = data.status
 
-  const result = db
-    .update(featureSuggestions)
-    .set(updateData)
-    .where(eq(featureSuggestions.id, suggestionId))
-    .run()
+  if (isLocalDb) {
+    const result = db
+      .update(projectFeatureSuggestions)
+      .set(updateData)
+      .where(eq(projectFeatureSuggestions.id, suggestionId))
+      .run()
 
-  if (result.changes === 0) return null
-  return getFeatureSuggestion(suggestionId)
+    if (result.changes === 0) return null
+  } else {
+    const result = db
+      .update(featureSuggestions)
+      .set(updateData)
+      .where(
+        and(eq(featureSuggestions.id, suggestionId), eq(featureSuggestions.project_id, projectId))
+      )
+      .run()
+
+    if (result.changes === 0) return null
+  }
+
+  return getFeatureSuggestion(projectId, suggestionId)
 }
 
 /**
  * Update the status of a feature suggestion.
  */
 export function updateFeatureSuggestionStatus(
+  projectId: string,
   suggestionId: string,
   status: FeatureSuggestionStatus
 ): boolean {
-  const db = getDrizzle()
+  const { db, isLocalDb } = resolveProjectDb(projectId)
   const now = new Date().toISOString()
+
+  if (isLocalDb) {
+    const result = db
+      .update(projectFeatureSuggestions)
+      .set({ status, updated_at: now })
+      .where(eq(projectFeatureSuggestions.id, suggestionId))
+      .run()
+    return result.changes > 0
+  }
 
   const result = db
     .update(featureSuggestions)
     .set({ status, updated_at: now })
-    .where(eq(featureSuggestions.id, suggestionId))
+    .where(
+      and(eq(featureSuggestions.id, suggestionId), eq(featureSuggestions.project_id, projectId))
+    )
     .run()
   return result.changes > 0
 }
@@ -289,11 +385,22 @@ export function updateFeatureSuggestionStatus(
 /**
  * Delete a feature suggestion.
  */
-export function deleteFeatureSuggestion(suggestionId: string): boolean {
-  const db = getDrizzle()
+export function deleteFeatureSuggestion(projectId: string, suggestionId: string): boolean {
+  const { db, isLocalDb } = resolveProjectDb(projectId)
+
+  if (isLocalDb) {
+    const result = db
+      .delete(projectFeatureSuggestions)
+      .where(eq(projectFeatureSuggestions.id, suggestionId))
+      .run()
+    return result.changes > 0
+  }
+
   const result = db
     .delete(featureSuggestions)
-    .where(eq(featureSuggestions.id, suggestionId))
+    .where(
+      and(eq(featureSuggestions.id, suggestionId), eq(featureSuggestions.project_id, projectId))
+    )
     .run()
   return result.changes > 0
 }
@@ -302,7 +409,13 @@ export function deleteFeatureSuggestion(suggestionId: string): boolean {
  * Delete all feature suggestions for a project.
  */
 export function deleteFeatureSuggestionsByProject(projectId: string): number {
-  const db = getDrizzle()
+  const { db, isLocalDb } = resolveProjectDb(projectId)
+
+  if (isLocalDb) {
+    const result = db.delete(projectFeatureSuggestions).run()
+    return result.changes
+  }
+
   const result = db
     .delete(featureSuggestions)
     .where(eq(featureSuggestions.project_id, projectId))
@@ -319,72 +432,74 @@ export function deleteFeatureSuggestionsByProject(projectId: string): number {
  * Returns the updated vote count, or null if voting failed.
  */
 export function voteOnSuggestion(
+  projectId: string,
   suggestionId: string,
   voteType: 'up' | 'down',
   voterId?: string
 ): { voteCount: number; userVote: 'up' | 'down' | null } | null {
-  const db = getDrizzle()
+  const { db, isLocalDb } = resolveProjectDb(projectId)
   const now = new Date().toISOString()
 
   // Check if suggestion exists
-  const suggestion = getFeatureSuggestion(suggestionId)
+  const suggestion = getFeatureSuggestion(projectId, suggestionId)
   if (!suggestion) return null
 
   // Check for existing vote by this voter (use 'anonymous' if no voter ID)
   const effectiveVoterId = voterId ?? 'anonymous'
+
+  const suggestionsTable = isLocalDb ? projectFeatureSuggestions : featureSuggestions
+  const votesTable = isLocalDb ? projectFeatureSuggestionVotes : featureSuggestionVotes
+
   const existingVote = db
     .select()
-    .from(featureSuggestionVotes)
+    .from(votesTable)
     .where(
-      and(
-        eq(featureSuggestionVotes.suggestion_id, suggestionId),
-        eq(featureSuggestionVotes.voter_id, effectiveVoterId)
-      )
+      and(eq(votesTable.suggestion_id, suggestionId), eq(votesTable.voter_id, effectiveVoterId))
     )
     .get()
 
   if (existingVote) {
     // If same vote type, remove the vote (toggle off)
     if (existingVote.vote_type === voteType) {
-      db.delete(featureSuggestionVotes).where(eq(featureSuggestionVotes.id, existingVote.id)).run()
+      db.delete(votesTable).where(eq(votesTable.id, existingVote.id)).run()
 
       // Update vote count
       const delta = voteType === 'up' ? -1 : 1
-      db.update(featureSuggestions)
+      db.update(suggestionsTable)
         .set({
           vote_count: suggestion.vote_count + delta,
           updated_at: now
         })
-        .where(eq(featureSuggestions.id, suggestionId))
+        .where(eq(suggestionsTable.id, suggestionId))
         .run()
 
-      const updated = getFeatureSuggestion(suggestionId)
+      const updated = getFeatureSuggestion(projectId, suggestionId)
       return { voteCount: updated?.vote_count ?? 0, userVote: null }
     }
 
     // Different vote type - change the vote
-    db.update(featureSuggestionVotes)
+    db.update(votesTable)
       .set({ vote_type: voteType, created_at: now })
-      .where(eq(featureSuggestionVotes.id, existingVote.id))
+      .where(eq(votesTable.id, existingVote.id))
       .run()
 
     // Update vote count (swing of 2: remove old vote effect, add new)
     const delta = voteType === 'up' ? 2 : -2
-    db.update(featureSuggestions)
+    db.update(suggestionsTable)
       .set({
         vote_count: suggestion.vote_count + delta,
         updated_at: now
       })
-      .where(eq(featureSuggestions.id, suggestionId))
+      .where(eq(suggestionsTable.id, suggestionId))
       .run()
 
-    const updated = getFeatureSuggestion(suggestionId)
+    const updated = getFeatureSuggestion(projectId, suggestionId)
     return { voteCount: updated?.vote_count ?? 0, userVote: voteType }
   }
 
   // No existing vote - create new vote
   const voteId = generateId()
-  db.insert(featureSuggestionVotes)
+  db.insert(votesTable)
     .values({
       id: voteId,
       suggestion_id: suggestionId,
@@ -396,33 +511,36 @@ export function voteOnSuggestion(
 
   // Update vote count
   const delta = voteType === 'up' ? 1 : -1
-  db.update(featureSuggestions)
+  db.update(suggestionsTable)
     .set({
       vote_count: suggestion.vote_count + delta,
       updated_at: now
     })
-    .where(eq(featureSuggestions.id, suggestionId))
+    .where(eq(suggestionsTable.id, suggestionId))
     .run()
 
-  const updated = getFeatureSuggestion(suggestionId)
+  const updated = getFeatureSuggestion(projectId, suggestionId)
   return { voteCount: updated?.vote_count ?? 0, userVote: voteType }
 }
 
 /**
  * Get a user's vote on a suggestion.
  */
-export function getUserVote(suggestionId: string, voterId?: string): FeatureSuggestionVote | null {
-  const db = getDrizzle()
+export function getUserVote(
+  projectId: string,
+  suggestionId: string,
+  voterId?: string
+): FeatureSuggestionVote | null {
+  const { db, isLocalDb } = resolveProjectDb(projectId)
   const effectiveVoterId = voterId ?? 'anonymous'
+
+  const votesTable = isLocalDb ? projectFeatureSuggestionVotes : featureSuggestionVotes
 
   const row = db
     .select()
-    .from(featureSuggestionVotes)
+    .from(votesTable)
     .where(
-      and(
-        eq(featureSuggestionVotes.suggestion_id, suggestionId),
-        eq(featureSuggestionVotes.voter_id, effectiveVoterId)
-      )
+      and(eq(votesTable.suggestion_id, suggestionId), eq(votesTable.voter_id, effectiveVoterId))
     )
     .get()
   return row ? rowToVote(row) : null
@@ -431,13 +549,19 @@ export function getUserVote(suggestionId: string, voterId?: string): FeatureSugg
 /**
  * Get all votes for a suggestion.
  */
-export function getVotesForSuggestion(suggestionId: string): FeatureSuggestionVote[] {
-  const db = getDrizzle()
+export function getVotesForSuggestion(
+  projectId: string,
+  suggestionId: string
+): FeatureSuggestionVote[] {
+  const { db, isLocalDb } = resolveProjectDb(projectId)
+
+  const votesTable = isLocalDb ? projectFeatureSuggestionVotes : featureSuggestionVotes
+
   const rows = db
     .select()
-    .from(featureSuggestionVotes)
-    .where(eq(featureSuggestionVotes.suggestion_id, suggestionId))
-    .orderBy(desc(featureSuggestionVotes.created_at))
+    .from(votesTable)
+    .where(eq(votesTable.suggestion_id, suggestionId))
+    .orderBy(desc(votesTable.created_at))
     .all()
   return rows.map(rowToVote)
 }
@@ -445,37 +569,37 @@ export function getVotesForSuggestion(suggestionId: string): FeatureSuggestionVo
 /**
  * Remove a user's vote from a suggestion.
  */
-export function removeVote(suggestionId: string, voterId?: string): boolean {
-  const db = getDrizzle()
+export function removeVote(projectId: string, suggestionId: string, voterId?: string): boolean {
+  const { db, isLocalDb } = resolveProjectDb(projectId)
   const effectiveVoterId = voterId ?? 'anonymous'
   const now = new Date().toISOString()
 
   // Get the vote to know how to adjust count
-  const vote = getUserVote(suggestionId, voterId)
+  const vote = getUserVote(projectId, suggestionId, voterId)
   if (!vote) return false
+
+  const suggestionsTable = isLocalDb ? projectFeatureSuggestions : featureSuggestions
+  const votesTable = isLocalDb ? projectFeatureSuggestionVotes : featureSuggestionVotes
 
   // Delete the vote
   const result = db
-    .delete(featureSuggestionVotes)
+    .delete(votesTable)
     .where(
-      and(
-        eq(featureSuggestionVotes.suggestion_id, suggestionId),
-        eq(featureSuggestionVotes.voter_id, effectiveVoterId)
-      )
+      and(eq(votesTable.suggestion_id, suggestionId), eq(votesTable.voter_id, effectiveVoterId))
     )
     .run()
 
   if (result.changes > 0) {
     // Adjust vote count
-    const suggestion = getFeatureSuggestion(suggestionId)
+    const suggestion = getFeatureSuggestion(projectId, suggestionId)
     if (suggestion) {
       const delta = vote.vote_type === 'up' ? -1 : 1
-      db.update(featureSuggestions)
+      db.update(suggestionsTable)
         .set({
           vote_count: suggestion.vote_count + delta,
           updated_at: now
         })
-        .where(eq(featureSuggestions.id, suggestionId))
+        .where(eq(suggestionsTable.id, suggestionId))
         .run()
     }
     return true

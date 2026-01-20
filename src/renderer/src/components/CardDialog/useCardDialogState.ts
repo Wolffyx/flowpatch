@@ -57,7 +57,9 @@ export function useCardDialogState(card: Card | null, projectId: string | null) 
         const jobs = (await window.projectAPI.getJobs()) as Job[]
         const cardJobs = jobs.filter((j) => j.card_id === card.id)
         if (cardJobs.length > 0) {
-          cardJobs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+          cardJobs.sort(
+            (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          )
           setLatestJob(cardJobs[0])
         } else {
           setLatestJob(null)

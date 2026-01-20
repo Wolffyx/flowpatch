@@ -135,10 +135,7 @@ export function registerDependencyHandlers(notifyRenderer: () => void): void {
   // Get all cards that depend on a given card
   ipcMain.handle(
     'dependencies:getDependents',
-    async (
-      _e,
-      cardId: string
-    ): Promise<{ dependencies: CardDependency[]; error?: string }> => {
+    async (_e, cardId: string): Promise<{ dependencies: CardDependency[]; error?: string }> => {
       logAction('dependencies:getDependents', { cardId })
 
       try {
@@ -154,10 +151,7 @@ export function registerDependencyHandlers(notifyRenderer: () => void): void {
   // Get all dependencies for a project
   ipcMain.handle(
     'dependencies:getByProject',
-    async (
-      _e,
-      projectId: string
-    ): Promise<{ dependencies: CardDependency[]; error?: string }> => {
+    async (_e, projectId: string): Promise<{ dependencies: CardDependency[]; error?: string }> => {
       logAction('dependencies:getByProject', { projectId })
 
       try {

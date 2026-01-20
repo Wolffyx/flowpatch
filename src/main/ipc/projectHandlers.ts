@@ -9,7 +9,7 @@
  *
  * Each project tab has its own WebContents, so we look up the project ID
  * from the sender's webContents ID.
- * 
+ *
  * Security: All worker-related handlers verify IPC origin to prevent unauthorized access.
  */
 
@@ -276,7 +276,10 @@ export function registerProjectHandlers(): void {
     const project = getProject(projectId)
     if (!project) return null
     const status = await getFlowPatchWorkspaceStatus(project.local_path)
-    return { ...status, autoIndexingEnabled: getResolvedBool(projectId, 'index.autoIndexingEnabled') }
+    return {
+      ...status,
+      autoIndexingEnabled: getResolvedBool(projectId, 'index.autoIndexingEnabled')
+    }
   })
 
   ipcMain.handle('project:getFlowPatchConfig', (event) => {

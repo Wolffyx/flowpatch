@@ -42,6 +42,7 @@ export { CLIProviderRegistry } from './registry'
 // Provider classes (for direct use if needed)
 export { ClaudeProvider } from './claude'
 export { CodexProvider } from './codex'
+export { OpencodeProvider } from './opencode'
 
 // ============================================================================
 // Auto-registration of built-in providers
@@ -50,6 +51,8 @@ export { CodexProvider } from './codex'
 import { CLIProviderRegistry } from './registry'
 import { ClaudeProvider } from './claude'
 import { CodexProvider } from './codex'
+import { OpencodeProvider } from './opencode'
 
 CLIProviderRegistry.register('claude', ClaudeProvider)
 CLIProviderRegistry.register('codex', CodexProvider)
+CLIProviderRegistry.register('opencode', OpencodeProvider)

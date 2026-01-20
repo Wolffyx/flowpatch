@@ -6,25 +6,12 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle
-} from '../../src/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../src/components/ui/dialog'
 import { Button } from '../../src/components/ui/button'
 import { Badge } from '../../src/components/ui/badge'
 import { ScrollArea } from '../../src/components/ui/scroll-area'
 import { Input } from '../../src/components/ui/input'
-import {
-  MessageSquare,
-  Send,
-  Bot,
-  User,
-  AlertCircle,
-  Loader2,
-  ChevronLeft
-} from 'lucide-react'
+import { MessageSquare, Send, Bot, User, AlertCircle, Loader2, ChevronLeft } from 'lucide-react'
 import type { Job } from '@shared/types'
 import { cn } from '../../src/lib/utils'
 
@@ -192,7 +179,9 @@ export function GlobalAgentChatDialog({
             )}
             <MessageSquare className="h-5 w-5" />
             <DialogTitle>
-              {selectedJob ? `Chat • ${projectNameById[selectedJob.project_id] || 'Unknown Project'}` : 'Agent Chats'}
+              {selectedJob
+                ? `Chat • ${projectNameById[selectedJob.project_id] || 'Unknown Project'}`
+                : 'Agent Chats'}
             </DialogTitle>
           </div>
         </DialogHeader>
@@ -248,10 +237,7 @@ export function GlobalAgentChatDialog({
                   messages.map((msg) => (
                     <div
                       key={msg.id}
-                      className={cn(
-                        'flex gap-3',
-                        msg.role === 'user' && 'flex-row-reverse'
-                      )}
+                      className={cn('flex gap-3', msg.role === 'user' && 'flex-row-reverse')}
                     >
                       <div
                         className={cn(
@@ -272,10 +258,7 @@ export function GlobalAgentChatDialog({
                         )}
                       </div>
                       <div
-                        className={cn(
-                          'flex-1 max-w-[80%]',
-                          msg.role === 'user' && 'text-right'
-                        )}
+                        className={cn('flex-1 max-w-[80%]', msg.role === 'user' && 'text-right')}
                       >
                         <div
                           className={cn(
@@ -308,12 +291,19 @@ export function GlobalAgentChatDialog({
                   onChange={(e) => setInputValue(e.target.value)}
                   onKeyDown={handleKeyDown}
                   placeholder="Type a message..."
-                  disabled={sending || selectedJob.state === 'succeeded' || selectedJob.state === 'failed'}
+                  disabled={
+                    sending || selectedJob.state === 'succeeded' || selectedJob.state === 'failed'
+                  }
                   className="flex-1"
                 />
                 <Button
                   onClick={handleSend}
-                  disabled={!inputValue.trim() || sending || selectedJob.state === 'succeeded' || selectedJob.state === 'failed'}
+                  disabled={
+                    !inputValue.trim() ||
+                    sending ||
+                    selectedJob.state === 'succeeded' ||
+                    selectedJob.state === 'failed'
+                  }
                   size="icon"
                 >
                   {sending ? (

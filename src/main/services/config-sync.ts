@@ -63,22 +63,21 @@ function yamlFeaturesToPolicyFeatures(
       mergeStrategy: yamlFeatures.multiAgent.mergeStrategy ?? defaults.multiAgent!.mergeStrategy,
       conflictResolution:
         yamlFeatures.multiAgent.conflictResolution ?? defaults.multiAgent!.conflictResolution,
-      maxAgentsPerCard:
-        yamlFeatures.multiAgent.maxAgents ?? defaults.multiAgent!.maxAgentsPerCard
+      maxAgentsPerCard: yamlFeatures.multiAgent.maxAgents ?? defaults.multiAgent!.maxAgentsPerCard
     }
   }
   if (yamlFeatures.chat) {
     features.chat = {
       enabled: yamlFeatures.chat.enabled ?? defaults.chat!.enabled,
       persistSessions: defaults.chat!.persistSessions,
-      maxHistoryMessages:
-        yamlFeatures.chat.maxHistoryMessages ?? defaults.chat!.maxHistoryMessages
+      maxHistoryMessages: yamlFeatures.chat.maxHistoryMessages ?? defaults.chat!.maxHistoryMessages
     }
   }
   if (yamlFeatures.notifications) {
     features.notifications = {
       audioEnabled: yamlFeatures.notifications.enabled ?? defaults.notifications!.audioEnabled,
-      soundOnComplete: yamlFeatures.notifications.soundEnabled ?? defaults.notifications!.soundOnComplete,
+      soundOnComplete:
+        yamlFeatures.notifications.soundEnabled ?? defaults.notifications!.soundOnComplete,
       soundOnError: defaults.notifications!.soundOnError,
       soundOnApproval: defaults.notifications!.soundOnApproval
     }
@@ -273,7 +272,8 @@ function yamlConfigToPolicyUpdate(yamlConfig: FlowPatchConfig): Partial<PolicyCo
         framework: yamlConfig.e2e.framework ?? defaultE2e.framework,
         maxRetries: yamlConfig.e2e.maxRetries ?? defaultE2e.maxRetries,
         timeoutMinutes: yamlConfig.e2e.timeoutMinutes ?? defaultE2e.timeoutMinutes,
-        createTestsIfMissing: yamlConfig.e2e.createTestsIfMissing ?? defaultE2e.createTestsIfMissing,
+        createTestsIfMissing:
+          yamlConfig.e2e.createTestsIfMissing ?? defaultE2e.createTestsIfMissing,
         testCommand: yamlConfig.e2e.testCommand ?? defaultE2e.testCommand,
         testDirectories: yamlConfig.e2e.testDirectories ?? defaultE2e.testDirectories,
         fixToolPriority: defaultE2e.fixToolPriority
