@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from 'fs'
-import { join } from 'path'
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { join, dirname } from 'path'
 import YAML from 'yaml'
 import type {
   ThinkingMode,
@@ -681,4 +681,99 @@ function parseSettings(raw: any): FlowPatchSettingsConfig {
   }
 
   return settings
+}
+
+/**
+ * Write FlowPatch configuration to .flowpatch/config.yml
+ *
+ * @param repoRoot - The root directory of the repository
+ * @param config - Partial configuration to write (merges with existing)
+ */
+export function writeFlowPatchConfig(
+  repoRoot: string,
+  config: Partial<FlowPatchConfig>
+): void {
+  const configPath = join(repoRoot, '.flowpatch', 'config.yml')
+  const configDir = dirname(configPath)
+
+  // Ensure .flowpatch directory exists
+  if (!existsSync(configDir)) {
+    mkdirSync(configDir, { recursive: true })
+  }
+
+  // Read existing config or use defaults
+  const existing = existsSync(configPath)
+    ? readFlowPatchConfig(repoRoot).config
+    : { schemaVersion: 1, budgets: { ...DEFAULT_BUDGETS } }
+
+  // Deep merge configuration
+  const merged: FlowPatchConfig = {
+    ...existing,
+    ...config,
+    // Deep merge budgets if provided
+    budgets: config.budgets ? { ...existing.budgets, ...config.budgets } : existing.budgets,
+    // Deep merge privacy if provided
+    privacy: config.privacy ? { ...existing.privacy, ...config.privacy } : existing.privacy,
+    // Deep merge approval if provided
+    approval: config.approval ? { ...existing.approval, ...config.approval } : existing.approval,
+    // Deep merge e2e if provided
+    e2e: config.e2e ? { ...existing.e2e, ...config.e2e } : existing.e2e,
+    // Deep merge sync if provided
+    sync: config.sync ? { ...existing.sync, ...config.sync } : existing.sync,
+    // Deep merge features if provided
+    features: config.features ? { ...existing.features, ...config.features } : existing.features,
+    // Deep merge settings if provided
+    settings: config.settings ? { ...existing.settings, ...config.settings } : existing.settings
+  }
+
+  // Write to YAML
+  const yaml = YAML.stringify(merged)
+  writeFileSync(configPath, yaml, 'utf-8')
+}
+
+/**
+ * Update project-specific settings in .flowpatch/config.yml
+ *
+ * This is a convenience function for updating just the settings section
+ * without affecting other parts of the configuration.
+ *
+ * @param repoRoot - The root directory of the repository
+ * @param settings - Partial settings to update
+ */
+export function updateProjectSettings(
+  repoRoot: string,
+  settings: Partial<FlowPatchSettingsConfig>
+): void {
+  const { config } = readFlowPatchConfig(repoRoot)
+
+  writeFlowPatchConfig(repoRoot, {
+    settings: {
+      ...config.settings,
+      ...settings
+    }
+  })
+}
+
+/**
+ * Delete a project setting from .flowpatch/config.yml
+ *
+ * @param repoRoot - The root directory of the repository
+ * @param key - The setting key to delete
+ */
+export function deleteProjectSetting(
+  repoRoot: string,
+  key: keyof FlowPatchSettingsConfig
+): void {
+  const { config } = readFlowPatchConfig(repoRoot)
+
+  if (!config.settings || !(key in config.settings)) {
+    return // Setting doesn't exist, nothing to delete
+  }
+
+  const newSettings = { ...config.settings }
+  delete newSettings[key]
+
+  writeFlowPatchConfig(repoRoot, {
+    settings: newSettings
+  })
 }

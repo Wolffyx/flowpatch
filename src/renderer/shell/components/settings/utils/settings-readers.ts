@@ -201,12 +201,12 @@ export function readWorkerPipelineSettings(project: Project | null): WorkerPipel
   }
 }
 
-export function readToolPreference(project: Project | null): 'auto' | 'claude' | 'codex' {
+export function readToolPreference(project: Project | null): 'auto' | 'claude' | 'codex' | 'opencode' {
   if (!project?.policy_json) return 'auto'
   try {
     const policy = JSON.parse(project.policy_json)
     const pref = policy?.worker?.toolPreference
-    if (pref === 'claude' || pref === 'codex' || pref === 'auto') {
+    if (pref === 'claude' || pref === 'codex' || pref === 'opencode' || pref === 'auto') {
       return pref
     }
     return 'auto'

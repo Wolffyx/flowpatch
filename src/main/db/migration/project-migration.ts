@@ -16,16 +16,40 @@ import { getDrizzle, getSqlite } from '../drizzle'
 import { initProjectDb, getProjectSqlite, hasProjectDb } from '../project-db'
 import { eq } from 'drizzle-orm'
 import * as centralSchema from '../schema'
+import { migrateProjectSettingsToConfig } from './settings-migration'
 
 export interface MigrationResult {
   success: boolean
   tablesMigrated: string[]
   recordsCopied: Record<string, number>
   errors: string[]
+  warnings: string[]
   duration_ms: number
+  verification?: MigrationVerification
+}
+
+export interface MigrationVerification {
+  passed: boolean
+  centralRecords: number
+  projectRecords: number
+  missingTables: string[]
+  recordMismatches: Array<{ table: string; central: number; project: number }>
+}
+
+export interface MigrationProgress {
+  phase: 'validating' | 'migrating' | 'verifying' | 'complete'
+  currentTable?: string
+  tablesCompleted: number
+  totalTables: number
+  recordsProcessed: number
+  totalRecords: number
+  message: string
 }
 
 export type MigrationStatus = 'not_started' | 'migrated' | 'error'
+
+// Progress callback type for streaming updates to UI
+export type ProgressCallback = (progress: MigrationProgress) => void
 
 /**
  * Check if a project has been migrated to local storage.
@@ -50,6 +74,122 @@ export function getMigrationStatus(projectId: string): MigrationStatus {
 }
 
 /**
+ * Validate pre-migration conditions.
+ * Checks disk space, permissions, and project state.
+ */
+function validatePreMigration(projectPath: string): string[] {
+  const warnings: string[] = []
+  const path = require('path')
+  const fs = require('fs')
+
+  // Check if .flowpatch directory exists
+  const flowpatchDir = path.join(projectPath, '.flowpatch')
+  if (!fs.existsSync(flowpatchDir)) {
+    try {
+      fs.mkdirSync(flowpatchDir, { recursive: true })
+    } catch (err) {
+      warnings.push(`Cannot create .flowpatch directory: ${err}`)
+    }
+  }
+
+  // Check write permissions
+  try {
+    const testFile = path.join(flowpatchDir, '.migration-test')
+    fs.writeFileSync(testFile, 'test')
+    fs.unlinkSync(testFile)
+  } catch (err) {
+    warnings.push(`No write permission in .flowpatch directory: ${err}`)
+  }
+
+  // Check if project.db already exists
+  if (hasProjectDb(projectPath)) {
+    warnings.push('Project database already exists - migration may overwrite existing data')
+  }
+
+  return warnings
+}
+
+/**
+ * Verify migration completed successfully by comparing record counts.
+ */
+function verifyMigration(
+  projectPath: string,
+  expectedCounts: Record<string, number>
+): MigrationVerification {
+  const verification: MigrationVerification = {
+    passed: true,
+    centralRecords: 0,
+    projectRecords: 0,
+    missingTables: [],
+    recordMismatches: []
+  }
+
+  try {
+    const projectSqlite = getProjectSqlite(projectPath)
+
+    // Check each table
+    for (const [table, expectedCount] of Object.entries(expectedCounts)) {
+      if (expectedCount === 0) continue
+
+      try {
+        const result = projectSqlite
+          .prepare(`SELECT COUNT(*) as count FROM ${table}`)
+          .get() as { count: number }
+
+        const actualCount = result.count
+
+        verification.projectRecords += actualCount
+        verification.centralRecords += expectedCount
+
+        if (actualCount !== expectedCount) {
+          verification.passed = false
+          verification.recordMismatches.push({
+            table,
+            central: expectedCount,
+            project: actualCount
+          })
+        }
+      } catch {
+        verification.passed = false
+        verification.missingTables.push(table)
+      }
+    }
+  } catch (err) {
+    verification.passed = false
+  }
+
+  return verification
+}
+
+/**
+ * Save migration history to .flowpatch/migration-history.json
+ */
+function saveMigrationHistory(projectPath: string, result: MigrationResult): void {
+  const path = require('path')
+  const fs = require('fs')
+
+  const historyPath = path.join(projectPath, '.flowpatch', 'migration-history.json')
+
+  const history = {
+    migratedAt: new Date().toISOString(),
+    success: result.success,
+    duration_ms: result.duration_ms,
+    recordsMigrated: Object.values(result.recordsCopied).reduce((sum, count) => sum + count, 0),
+    tables: result.tablesMigrated,
+    recordsByTable: result.recordsCopied,
+    errors: result.errors,
+    warnings: result.warnings,
+    verification: result.verification
+  }
+
+  try {
+    fs.writeFileSync(historyPath, JSON.stringify(history, null, 2), 'utf-8')
+  } catch {
+    // Don't fail migration if history save fails
+  }
+}
+
+/**
  * Migrate project data from central DB to project-local DB.
  *
  * Migration order respects foreign key constraints:
@@ -62,19 +202,56 @@ export function getMigrationStatus(projectId: string): MigrationStatus {
  * 7. usage_records, agent_chat_messages (depend on cards, jobs)
  * 8. ai_profiles, feature_suggestions, feature_suggestion_votes
  * 9. sync_state
+ *
+ * @param projectId - The project ID
+ * @param projectPath - The project local path
+ * @param onProgress - Optional callback for progress updates
  */
-export function migrateProjectToLocalDb(projectId: string, projectPath: string): MigrationResult {
+export function migrateProjectToLocalDb(
+  projectId: string,
+  projectPath: string,
+  onProgress?: ProgressCallback
+): MigrationResult {
   const startTime = Date.now()
   const result: MigrationResult = {
     success: false,
     tablesMigrated: [],
     recordsCopied: {},
     errors: [],
+    warnings: [],
     duration_ms: 0
   }
 
   try {
+    // Pre-migration validation
+    onProgress?.({
+      phase: 'validating',
+      tablesCompleted: 0,
+      totalTables: 17,
+      recordsProcessed: 0,
+      totalRecords: 0,
+      message: 'Validating project state...'
+    })
+
+    const validationWarnings = validatePreMigration(projectPath)
+    result.warnings.push(...validationWarnings)
+
+    if (validationWarnings.some((w) => w.includes('Cannot create') || w.includes('No write'))) {
+      result.errors.push('Pre-migration validation failed')
+      result.duration_ms = Date.now() - startTime
+      return result
+    }
+
     // Initialize project DB (creates tables)
+    onProgress?.({
+      phase: 'migrating',
+      tablesCompleted: 0,
+      totalTables: 17,
+      recordsProcessed: 0,
+      totalRecords: 0,
+      message: 'Creating database tables...'
+    })
+
     initProjectDb(projectPath)
 
     const centralSqlite = getSqlite()
@@ -105,12 +282,39 @@ export function migrateProjectToLocalDb(projectId: string, projectPath: string):
     projectSqlite.exec('BEGIN TRANSACTION')
 
     try {
+      let tablesCompleted = 0
+      let recordsProcessed = 0
+      const totalTables = migrations.length
+
       for (const { table, columns } of migrations) {
+        onProgress?.({
+          phase: 'migrating',
+          currentTable: table,
+          tablesCompleted,
+          totalTables,
+          recordsProcessed,
+          totalRecords: 0, // Unknown at this point
+          message: `Migrating ${table}...`
+        })
+
         const count = migrateTable(centralSqlite, projectSqlite, table, columns, projectId)
         result.recordsCopied[table] = count
         if (count > 0) {
           result.tablesMigrated.push(table)
         }
+
+        tablesCompleted++
+        recordsProcessed += count
+
+        onProgress?.({
+          phase: 'migrating',
+          currentTable: table,
+          tablesCompleted,
+          totalTables,
+          recordsProcessed,
+          totalRecords: 0,
+          message: `Migrated ${count} ${table}`
+        })
       }
 
       projectSqlite.exec('COMMIT')
@@ -124,7 +328,70 @@ export function migrateProjectToLocalDb(projectId: string, projectPath: string):
       `UPDATE projects SET local_db_migrated = 1, updated_at = datetime('now') WHERE id = '${projectId}'`
     )
 
+    // Migrate project settings from central DB to config.yml
+    onProgress?.({
+      phase: 'migrating',
+      currentTable: 'settings',
+      tablesCompleted: 17,
+      totalTables: 18,
+      recordsProcessed: Object.values(result.recordsCopied).reduce((sum, c) => sum + c, 0),
+      totalRecords: 0,
+      message: 'Migrating project settings...'
+    })
+
+    try {
+      const settingsResult = migrateProjectSettingsToConfig(projectId, projectPath)
+      if (settingsResult.settingsMigrated > 0) {
+        result.recordsCopied['settings'] = settingsResult.settingsMigrated
+        result.tablesMigrated.push('settings')
+      }
+      if (settingsResult.errors.length > 0) {
+        result.errors.push(...settingsResult.errors)
+      }
+    } catch (err) {
+      // Don't fail the entire migration if settings migration fails
+      result.errors.push(`Settings migration error: ${err}`)
+    }
+
+    // Post-migration verification
+    onProgress?.({
+      phase: 'verifying',
+      tablesCompleted: 18,
+      totalTables: 18,
+      recordsProcessed: Object.values(result.recordsCopied).reduce((sum, c) => sum + c, 0),
+      totalRecords: Object.values(result.recordsCopied).reduce((sum, c) => sum + c, 0),
+      message: 'Verifying migration...'
+    })
+
+    const verification = verifyMigration(projectPath, result.recordsCopied)
+    result.verification = verification
+
+    if (!verification.passed) {
+      result.warnings.push('Migration verification found discrepancies')
+      if (verification.recordMismatches.length > 0) {
+        result.warnings.push(
+          `Record count mismatches: ${verification.recordMismatches.map((m) => `${m.table} (${m.central} → ${m.project})`).join(', ')}`
+        )
+      }
+      if (verification.missingTables.length > 0) {
+        result.warnings.push(`Missing tables: ${verification.missingTables.join(', ')}`)
+      }
+    }
+
     result.success = true
+
+    // Save migration history
+    result.duration_ms = Date.now() - startTime
+    saveMigrationHistory(projectPath, result)
+
+    onProgress?.({
+      phase: 'complete',
+      tablesCompleted: 18,
+      totalTables: 18,
+      recordsProcessed: verification.projectRecords,
+      totalRecords: verification.projectRecords,
+      message: 'Migration complete!'
+    })
   } catch (err) {
     result.errors.push(err instanceof Error ? err.message : String(err))
   }

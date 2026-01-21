@@ -22,7 +22,7 @@ export type SettingsSection =
   | 'about'
 
 export type ThemePreference = 'light' | 'dark' | 'system'
-export type WorkerToolPreference = 'auto' | 'claude' | 'codex'
+export type WorkerToolPreference = 'auto' | 'claude' | 'codex' | 'opencode'
 
 // Settings interfaces
 export interface ThinkingSettings {

@@ -354,6 +354,20 @@ export interface ProjectAPI {
     diagnostics: CardEligibilityDiagnostic[]
     error?: string
   }>
+
+  // Migration methods
+  checkMigrationNeeded: (params: { projectId: string }) => Promise<{
+    needsMigration: boolean
+    reason?: string
+  }>
+  getCentralDataCounts: (params: { projectId: string }) => Promise<{
+    counts: Record<string, number>
+  }>
+  migrateProjectToLocal: (params: { projectId: string }) => Promise<{
+    success: boolean
+    recordsMigrated?: number
+    error?: string
+  }>
 }
 
 export interface CardEligibilityDiagnostic {

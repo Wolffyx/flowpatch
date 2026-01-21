@@ -48,8 +48,9 @@ export function registerMigrationHandlers(notifyRenderer: () => void): void {
 
   /**
    * Migrate project data from central DB to local .flowpatch/project.db.
+   * Supports streaming progress updates via 'migration-progress' events.
    */
-  ipcMain.handle('migrateProjectToLocal', (_e, payload: { projectId: string }) => {
+  ipcMain.handle('migrateProjectToLocal', (event, payload: { projectId: string }) => {
     logAction('migrateProjectToLocal', payload)
 
     if (!payload?.projectId) return { error: 'Project ID required' }
@@ -66,14 +67,25 @@ export function registerMigrationHandlers(notifyRenderer: () => void): void {
       }
     }
 
-    // Perform migration
-    const result: MigrationResult = migrateProjectToLocalDb(payload.projectId, project.local_path)
+    // Perform migration with progress callbacks
+    const result: MigrationResult = migrateProjectToLocalDb(
+      payload.projectId,
+      project.local_path,
+      (progress) => {
+        // Stream progress updates to renderer
+        event.sender.send('migration-progress', {
+          projectId: payload.projectId,
+          progress
+        })
+      }
+    )
 
     logAction('migrateProjectToLocal:result', {
       projectId: payload.projectId,
       success: result.success,
       tablesMigrated: result.tablesMigrated.length,
-      duration: result.duration_ms
+      duration: result.duration_ms,
+      verified: result.verification?.passed
     })
 
     if (result.success) {

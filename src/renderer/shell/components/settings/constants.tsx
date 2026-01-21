@@ -20,7 +20,9 @@ import {
   Zap,
   ClipboardList,
   Users,
-  Info
+  Info,
+  Database,
+  Wrench
 } from 'lucide-react'
 import type { ThemePreference, WorkerToolPreference, SectionConfig } from './types'
 import type { ThinkingMode, PlanningMode, MergeStrategy, ConflictResolution } from '@shared/types'
@@ -32,6 +34,7 @@ export const SETTINGS_SECTIONS: SectionConfig[] = [
   { id: 'shortcuts', label: 'Shortcuts', icon: Key },
   { id: 'ai-agents', label: 'AI Agents', icon: Bot },
   { id: 'usage-limits', label: 'Usage & Limits', icon: Zap },
+  { id: 'storage', label: 'Storage', icon: Database },
   { id: 'danger-zone', label: 'Danger Zone', icon: AlertTriangle },
   { id: 'about', label: 'About', icon: Info }
 ]
@@ -77,7 +80,7 @@ export const TOOL_OPTIONS: ToolOption[] = [
   {
     id: 'auto',
     title: 'Auto',
-    description: 'Use Claude Code if available; otherwise use Codex.',
+    description: 'Try Claude Code, then Codex, then OpenCode and others in order of availability.',
     icon: <Sparkles className="h-4 w-4 text-foreground/70" />
   },
   {
@@ -91,6 +94,12 @@ export const TOOL_OPTIONS: ToolOption[] = [
     title: 'Codex',
     description: 'Prefer the Codex CLI when the worker runs.',
     icon: <Code className="h-4 w-4 text-foreground/70" />
+  },
+  {
+    id: 'opencode',
+    title: 'OpenCode',
+    description: 'Prefer the OpenCode CLI when the worker runs.',
+    icon: <Wrench className="h-4 w-4 text-foreground/70" />
   }
 ]
 

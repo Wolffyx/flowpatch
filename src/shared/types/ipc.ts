@@ -180,7 +180,7 @@ export interface ToggleWorkerResult {
 
 export interface SetWorkerToolPreferencePayload {
   projectId: string
-  toolPreference: 'auto' | 'claude' | 'codex'
+  toolPreference: 'auto' | 'claude' | 'codex' | 'opencode'
 }
 
 export interface SetWorkerToolPreferenceResult {

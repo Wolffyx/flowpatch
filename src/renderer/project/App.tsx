@@ -30,6 +30,7 @@ import { UsageIndicator } from './components/UsageIndicator'
 import { FeatureSuggestionsDialog } from '../src/components/FeatureSuggestionsDialog'
 import { GraphViewDialog } from '../src/components/GraphViewDialog'
 import { SplitCardDialog } from '../src/components/SplitCardDialog'
+import { MigrationPromptDialog } from '../src/components/MigrationPromptDialog'
 import { useAudioNotifications } from '../src/hooks/useAudioNotifications'
 import { useDevServerStatus } from '../src/hooks/useDevServerStatus'
 import { Button } from '../src/components/ui/button'
@@ -46,7 +47,8 @@ import {
   Folder,
   Lightbulb,
   Network,
-  Send
+  Send,
+  Database
 } from 'lucide-react'
 import { cn } from '../src/lib/utils'
 import {
@@ -118,6 +120,12 @@ export default function App(): React.JSX.Element {
   const [approvalCard, setApprovalCard] = useState<Card | null>(null)
   const [splitDialogOpen, setSplitDialogOpen] = useState(false)
   const [splitDialogCard, setSplitDialogCard] = useState<Card | null>(null)
+  const [migrationState, setMigrationState] = useState<{
+    needed: boolean
+    showPrompt: boolean
+    counts: Record<string, number>
+  }>({ needed: false, showPrompt: false, counts: {} })
+  const [isMigrating, setIsMigrating] = useState(false)
 
   // Audio notifications - read config from project policy
   const notificationsConfig = useMemo(() => {
@@ -367,6 +375,37 @@ export default function App(): React.JSX.Element {
     }
 
     loadProjectAndOnboarding()
+  }, [projectInfo])
+
+  // Check if migration is needed when project opens
+  useEffect(() => {
+    if (!projectInfo) return
+
+    const checkMigration = async (): Promise<void> => {
+      try {
+        const result = await window.projectAPI.checkMigrationNeeded({ projectId: projectInfo.projectId })
+        console.log('[Migration Check]', {
+          projectId: projectInfo.projectId,
+          needsMigration: result.needsMigration,
+          reason: result.reason
+        })
+        if (result.needsMigration) {
+          const countsResult = await window.projectAPI.getCentralDataCounts({ projectId: projectInfo.projectId })
+          console.log('[Migration Check] Central data counts:', countsResult.counts)
+          setMigrationState({
+            needed: true,
+            showPrompt: true,
+            counts: countsResult.counts || {}
+          })
+        } else {
+          console.log('[Migration Check] Migration not needed:', result.reason || 'Already migrated or no data')
+        }
+      } catch (error) {
+        console.error('Failed to check migration status:', error)
+      }
+    }
+
+    checkMigration()
   }, [projectInfo])
 
   async function checkOnboardingState(projectId: string): Promise<void> {
@@ -715,6 +754,25 @@ export default function App(): React.JSX.Element {
     setApprovalCard(null)
   }, [])
 
+  const handleMigrate = useCallback(async (): Promise<void> => {
+    if (!projectInfo) return
+    setIsMigrating(true)
+    try {
+      const result = await window.projectAPI.migrateProjectToLocal({ projectId: projectInfo.projectId })
+      if (result.success) {
+        toast.success('Project migrated to local storage')
+        setMigrationState({ needed: false, showPrompt: false, counts: {} })
+      } else {
+        toast.error(`Migration failed: ${result.error}`)
+      }
+    } catch (error) {
+      console.error('Migration failed:', error)
+      toast.error('Migration failed')
+    } finally {
+      setIsMigrating(false)
+    }
+  }, [projectInfo])
+
   if (!projectInfo) {
     return (
       <div className="flex h-screen items-center justify-center text-muted-foreground">
@@ -850,6 +908,35 @@ export default function App(): React.JSX.Element {
             <Folder className="mr-2 h-4 w-4" />
             Workspace
           </Button>
+
+          {/* DEBUG: Show migration state */}
+          {process.env.NODE_ENV === 'development' && (
+            <Badge variant="outline" className="text-xs">
+              Mig: {migrationState.needed ? 'Y' : 'N'}
+            </Badge>
+          )}
+
+          {migrationState.needed && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleMigrate}
+              disabled={isMigrating}
+              title="Migrate project to local storage"
+            >
+              {isMigrating ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Migrating...
+                </>
+              ) : (
+                <>
+                  <Database className="mr-2 h-4 w-4" />
+                  Migrate to Local
+                </>
+              )}
+            </Button>
+          )}
 
           <Button
             variant="outline"
@@ -1065,6 +1152,19 @@ export default function App(): React.JSX.Element {
           setGraphViewOpen(false)
         }}
       />
+
+      {/* Migration Prompt Dialog */}
+      {projectInfo && (
+        <MigrationPromptDialog
+          open={migrationState.showPrompt}
+          projectId={projectInfo.projectId}
+          projectName={project?.name || 'Project'}
+          centralCounts={migrationState.counts}
+          onConfirm={handleMigrate}
+          onDismiss={() => setMigrationState(prev => ({ ...prev, showPrompt: false }))}
+          disabled={isMigrating}
+        />
+      )}
 
       <Toaster />
     </div>

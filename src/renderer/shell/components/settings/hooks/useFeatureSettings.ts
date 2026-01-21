@@ -52,8 +52,14 @@ export function useFeatureSettings(): UseFeatureSettingsReturn {
           projectId: project.id,
           policy: { worker: { toolPreference: newPref } }
         })
+        const toolNames = {
+          auto: 'Auto',
+          claude: 'Claude Code',
+          codex: 'Codex',
+          opencode: 'OpenCode'
+        } as const
         toast.success('AI tool preference updated', {
-          description: `Worker will use ${newPref === 'auto' ? 'Auto' : newPref === 'claude' ? 'Claude Code' : 'Codex'}`
+          description: `Worker will use ${toolNames[newPref]}`
         })
       } catch (err) {
         setToolPreference(previousValue)

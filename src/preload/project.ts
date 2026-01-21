@@ -345,7 +345,14 @@ const projectAPI: ProjectAPI = {
     const projectId = lastProjectInfo?.projectId
     if (!projectId) return Promise.resolve({ diagnostics: [], error: 'No active project' })
     return ipcRenderer.invoke('getReadyCardsNotProcessing', { projectId })
-  }
+  },
+
+  // Migration methods
+  checkMigrationNeeded: (params) => ipcRenderer.invoke('checkMigrationNeeded', params),
+
+  getCentralDataCounts: (params) => ipcRenderer.invoke('getCentralDataCounts', params),
+
+  migrateProjectToLocal: (params) => ipcRenderer.invoke('migrateProjectToLocal', params)
 }
 
 const allowedInvokeChannels = [
@@ -384,7 +391,8 @@ const allowedOnChannels = [
   'themeChanged',
   'dev-server:output',
   'dev-server:status',
-  'dev-server:port'
+  'dev-server:port',
+  'migration-progress'
 ]
 
 const electronAPI = {
