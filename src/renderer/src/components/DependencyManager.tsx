@@ -91,17 +91,24 @@ export function DependencyManager({ card }: DependencyManagerProps): React.JSX.E
       }
 
       // Get dependents (what depends on this card)
-      const dependentsResult = await window.projectAPI.getDependentsOfCard(card.id)
+      const dependentsResult = await window.projectAPI.getDependentsOfCardWithCards(card.id)
       if (dependentsResult.error) {
         toast.error('Failed to load dependents', { description: dependentsResult.error })
       } else {
-        // For dependents, we need to enrich with card info
-        setDependents(dependentsResult.dependencies as CardDependencyWithCard[])
+        setDependents(dependentsResult.dependencies)
       }
+      console.log('DependencyManager:loadDependencies', {
+        cardId: card.id,
+        cardTitle: card.title,
+        dependencies: depsResult.dependencies,
+        dependents: dependentsResult.dependencies
+      })
+
     } catch (err) {
       toast.error('Failed to load dependencies', {
         description: err instanceof Error ? err.message : 'Unknown error'
       })
+
     } finally {
       setLoading(false)
     }
@@ -110,8 +117,10 @@ export function DependencyManager({ card }: DependencyManagerProps): React.JSX.E
   const loadAvailableCards = useCallback(async () => {
     try {
       const cards = await window.projectAPI.getCards()
+      console.log(cards);
       // Filter out current card and cards that are already dependencies
       const existingDepIds = dependencies.map((d) => d.depends_on_card_id)
+      console.log(existingDepIds);
       const filtered = cards.filter((c: Card) => c.id !== card.id && !existingDepIds.includes(c.id))
       setAvailableCards(filtered)
     } catch (err) {

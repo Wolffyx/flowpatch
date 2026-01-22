@@ -13,10 +13,12 @@
 
 import { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { getDrizzle } from './drizzle'
-import { getProjectDrizzle, hasProjectDb } from './project-db'
+import { getProjectDrizzle, hasProjectDb, getProjectDbPath } from './project-db'
 import { eq } from 'drizzle-orm'
 import * as schema from './schema'
 import * as projectSchema from './schema/project'
+import { logAction } from '@shared/utils'
+import { existsSync } from 'fs'
 
 // Cache for project paths to avoid repeated lookups
 const projectPathCache = new Map<string, string>()
@@ -89,9 +91,47 @@ export interface ResolvedDb {
  */
 export function resolveProjectDb(projectId: string): ResolvedDb {
   const projectPath = getProjectPath(projectId)
+  
+  logAction('resolveProjectDb:start', {
+    projectId,
+    projectPath: projectPath || 'null',
+    cached: projectPathCache.has(projectId)
+  })
 
   // If project not found or not migrated, use central DB
-  if (!projectPath || !hasProjectDb(projectPath)) {
+  if (!projectPath) {
+    logAction('resolveProjectDb:no_path', {
+      projectId,
+      reason: 'Project path not found in central DB'
+    })
+    return {
+      db: getDrizzle(),
+      isLocalDb: false,
+      projectPath: null
+    }
+  }
+
+  const dbPath = getProjectDbPath(projectPath)
+  const dbExists = hasProjectDb(projectPath)
+  const fileSystemExists = existsSync(dbPath)
+  
+  logAction('resolveProjectDb:check', {
+    projectId,
+    projectPath,
+    dbPath,
+    dbExists,
+    fileSystemExists,
+    mismatch: dbExists !== fileSystemExists
+  })
+
+  if (!dbExists) {
+    logAction('resolveProjectDb:no_db', {
+      projectId,
+      projectPath,
+      dbPath,
+      reason: 'Project DB file does not exist',
+      fileSystemExists
+    })
     return {
       db: getDrizzle(),
       isLocalDb: false,
@@ -100,6 +140,11 @@ export function resolveProjectDb(projectId: string): ResolvedDb {
   }
 
   // Use project-local DB
+  logAction('resolveProjectDb:using_project_db', {
+    projectId,
+    projectPath,
+    dbPath
+  })
   return {
     db: getProjectDrizzle(projectPath),
     isLocalDb: true,
