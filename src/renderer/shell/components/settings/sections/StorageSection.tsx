@@ -35,14 +35,34 @@ export function StorageSection(): React.JSX.Element {
       const result = await window.electron.ipcRenderer.invoke('getMigrationStatus', {
         projectId: project.id
       })
-      setStatus(result)
+      // Map the response to match the expected interface
+      const mappedStatus = {
+        isMigrated: result.status === 'migrated' || result.hasLocalDb || false,
+        projectDbExists: result.hasLocalDb || result.projectDbExists || false,
+        hasCentralData: result.hasCentralData || false
+      }
+      setStatus(mappedStatus)
 
-      // If not migrated, get counts
-      if (!result.isMigrated && result.hasCentralData) {
+      // Always get counts if there's central data (allows re-migration)
+      // Also try to get counts even if hasCentralData is false, in case the check missed something
+      try {
         const countsResult = await window.electron.ipcRenderer.invoke('getCentralDataCounts', {
           projectId: project.id
         })
-        setCentralCounts(countsResult.counts || {})
+        const counts = countsResult.counts || {}
+        setCentralCounts(counts)
+        
+        // If we got counts but hasCentralData was false, update the status
+        const totalCounts = Object.values(counts).reduce((sum, count) => sum + count, 0)
+        if (totalCounts > 0 && !mappedStatus.hasCentralData) {
+          setStatus({
+            ...mappedStatus,
+            hasCentralData: true
+          })
+        }
+      } catch (error) {
+        console.error('Failed to get central data counts:', error)
+        setCentralCounts({})
       }
     } catch (error) {
       console.error('Failed to load storage status:', error)
@@ -121,7 +141,7 @@ export function StorageSection(): React.JSX.Element {
             )}
           </SettingRow>
 
-          {status?.isMigrated && (
+          {status?.isMigrated && !status?.hasCentralData && (
             <div className="rounded-lg border border-green-200 dark:border-green-900 bg-green-50 dark:bg-green-950/20 p-3">
               <div className="flex items-center gap-2 text-sm text-green-700 dark:text-green-300">
                 <CheckCircle2 className="h-4 w-4" />
@@ -134,13 +154,18 @@ export function StorageSection(): React.JSX.Element {
             </div>
           )}
 
-          {!status?.isMigrated && status?.hasCentralData && (
+          {/* Show migration section if there's central data OR if we have counts (fallback) */}
+          {(status?.hasCentralData || totalRecords > 0) && (
             <>
               <div className="rounded-lg border p-4 bg-muted/30">
-                <h4 className="font-medium text-sm mb-2">Migration Available</h4>
+                <h4 className="font-medium text-sm mb-2">
+                  {status?.isMigrated ? 'Re-migration Available' : 'Migration Available'}
+                </h4>
                 <p className="text-sm text-muted-foreground mb-3">
                   This project has <strong>{totalRecords} records</strong> in the central database.
-                  Migrate to local storage to make your project portable.
+                  {status?.isMigrated
+                    ? ' Re-migrate to refresh data from central database or recover from issues.'
+                    : ' Migrate to local storage to make your project portable.'}
                 </p>
 
                 {totalRecords > 0 && (
@@ -158,7 +183,12 @@ export function StorageSection(): React.JSX.Element {
                   </div>
                 )}
 
-                <Button onClick={handleMigrate} disabled={migrating || totalRecords === 0} size="sm">
+                <Button 
+                  onClick={handleMigrate} 
+                  disabled={migrating || totalRecords === 0} 
+                  size="sm"
+                  title={totalRecords === 0 ? 'No data to migrate' : 'Migrate project data to local storage'}
+                >
                   {migrating ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -167,12 +197,22 @@ export function StorageSection(): React.JSX.Element {
                   ) : (
                     <>
                       <Database className="mr-2 h-4 w-4" />
-                      Migrate to Local Storage
+                      {status?.isMigrated ? 'Re-migrate to Local Storage' : 'Migrate to Local Storage'}
                     </>
                   )}
                 </Button>
               </div>
             </>
+          )}
+          
+          {/* Debug info in development */}
+          {process.env.NODE_ENV === 'development' && status && (
+            <div className="text-xs text-muted-foreground p-2 bg-muted/50 rounded border">
+              <div>isMigrated: {String(status.isMigrated)}</div>
+              <div>hasCentralData: {String(status.hasCentralData)}</div>
+              <div>totalRecords: {totalRecords}</div>
+              <div>projectDbExists: {String(status.projectDbExists)}</div>
+            </div>
           )}
         </div>
       </SettingsCard>

@@ -14,8 +14,9 @@ import { ScrollArea } from './ui/scroll-area'
 import { Loader2, Sparkles, ArrowUp, ArrowDown, Trash2, Check } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { AIDescriptionDialog } from './AIDescriptionDialog'
+import { useProviderAvailability } from '../../shell/components/settings/hooks/useProviderAvailability'
 
-type ToolPreference = 'auto' | 'claude' | 'codex'
+type ToolPreference = 'auto' | 'claude' | 'codex' | 'opencode'
 
 export type StarterCardsWizardMode = 'onboarding' | 'manual'
 
@@ -48,6 +49,7 @@ export function StarterCardsWizardDialog({
   repoIssueProvider,
   onCreateCards
 }: StarterCardsWizardDialogProps): React.JSX.Element {
+  const { isAvailable } = useProviderAvailability()
   const [step, setStep] = useState<Step>('describe')
   const [toolPreference, setToolPreference] = useState<ToolPreference>('auto')
   const [count, setCount] = useState<number>(8)
@@ -201,19 +203,32 @@ export function StarterCardsWizardDialog({
               <div className="grid gap-4 py-2">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-sm text-muted-foreground">Tool:</span>
-                  <div className="flex gap-2">
-                    {(['auto', 'claude', 'codex'] as const).map((t) => (
-                      <Button
-                        key={t}
-                        type="button"
-                        size="sm"
-                        variant={toolPreference === t ? 'default' : 'outline'}
-                        onClick={() => setToolPreference(t)}
-                        disabled={isGenerating || isCreating}
-                      >
-                        {t === 'auto' ? 'Auto' : t === 'claude' ? 'Claude' : 'Codex'}
-                      </Button>
-                    ))}
+                  <div className="flex gap-2 flex-wrap">
+                    {(['auto', 'claude', 'codex', 'opencode'] as const).map((t) => {
+                      const isToolDisabled = t !== 'auto' && !isAvailable(t)
+                      const toolLabel =
+                        t === 'auto'
+                          ? 'Auto'
+                          : t === 'claude'
+                            ? 'Claude'
+                            : t === 'codex'
+                              ? 'Codex'
+                              : 'OpenCode'
+
+                      return (
+                        <Button
+                          key={t}
+                          type="button"
+                          size="sm"
+                          variant={toolPreference === t ? 'default' : 'outline'}
+                          onClick={() => setToolPreference(t)}
+                          disabled={isToolDisabled || isGenerating || isCreating}
+                          title={isToolDisabled ? `${toolLabel} CLI not installed` : undefined}
+                        >
+                          {toolLabel}
+                        </Button>
+                      )
+                    })}
                   </div>
                   <div className="flex-1" />
                   <div className="flex items-center gap-2">

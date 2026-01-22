@@ -531,6 +531,45 @@ export function cancelJob(jobId: string, error?: string, projectId?: string): bo
 }
 
 /**
+ * Delete failed and canceled worker_run jobs for a card.
+ * This allows the card to be immediately retried without waiting for cooldown.
+ * @param cardId - The card ID
+ * @param projectId - Optional project ID for direct DB resolution
+ */
+export function deleteFailedWorkerRunJobsForCard(
+  cardId: string,
+  projectId?: string
+): void {
+  if (projectId) {
+    const { db, isLocalDb } = resolveProjectDb(projectId)
+    if (isLocalDb) {
+      db.delete(projectJobs)
+        .where(
+          and(
+            eq(projectJobs.card_id, cardId),
+            eq(projectJobs.type, 'worker_run'),
+            inArray(projectJobs.state, ['failed', 'canceled'])
+          )
+        )
+        .run()
+      return
+    }
+  }
+
+  // Central DB fallback
+  const db = getDrizzle()
+  db.delete(jobs)
+    .where(
+      and(
+        eq(jobs.card_id, cardId),
+        eq(jobs.type, 'worker_run'),
+        inArray(jobs.state, ['failed', 'canceled'])
+      )
+    )
+    .run()
+}
+
+/**
  * Get count of active worker jobs for a project.
  */
 export function getActiveWorkerJobCount(projectId: string): number {

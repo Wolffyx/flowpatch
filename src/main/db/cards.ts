@@ -9,11 +9,13 @@ import { getDrizzle } from './drizzle'
 import { cards, jobs } from './schema'
 import { cards as projectCards } from './schema/project'
 import { jobs as projectJobs } from './schema/project'
-import { generateId } from '@shared/utils'
+import { generateId, logAction } from '@shared/utils'
 import { getPriorityFromLabels } from '@shared/utils/priority'
 import type { Card, CardStatus, PolicyConfig } from '@shared/types'
 import { getDependenciesForCard } from './card-dependencies'
-import { resolveProjectDb } from './db-resolver'
+import { resolveProjectDb, getProjectPath } from './db-resolver'
+import { listProjects } from './projects'
+import { getProjectDrizzle, hasProjectDb } from './project-db'
 
 export type { Card, CardStatus }
 
@@ -53,9 +55,51 @@ export function getCard(id: string, projectId?: string): Card | null {
     }
   }
 
-  // Central DB fallback
+  // If no projectId provided, prioritize project DBs for migrated projects
+  // This ensures migrated cards are found in project DB, not central DB
+  if (!projectId) {
+    const projects = listProjects()
+    for (const project of projects) {
+      const projectPath = getProjectPath(project.id)
+      if (projectPath && hasProjectDb(projectPath)) {
+        try {
+          const projectDb = getProjectDrizzle(projectPath)
+          const row = projectDb.select().from(projectCards).where(eq(projectCards.id, id)).get()
+          if (row) {
+            logAction('getCard:found_in_project_db', {
+              cardId: id,
+              projectId: project.id,
+              searchedAllProjects: true,
+              priority: 'project_db_first'
+            })
+            return { ...row, project_id: project.id } as Card
+          }
+        } catch (err) {
+          // Skip projects with DB access errors
+          logAction('getCard:project_db_error', {
+            cardId: id,
+            projectId: project.id,
+            error: err instanceof Error ? err.message : String(err)
+          })
+        }
+      }
+    }
+  }
+
+  // Fallback to central DB if not found in project DBs
+  // This handles non-migrated projects or cards that haven't been migrated yet
   const db = getDrizzle()
-  return (db.select().from(cards).where(eq(cards.id, id)).get() as Card) ?? null
+  const centralCard = db.select().from(cards).where(eq(cards.id, id)).get() as Card | undefined
+  if (centralCard) {
+    logAction('getCard:found_in_central_db', {
+      cardId: id,
+      projectId: centralCard.project_id,
+      note: projectId ? 'projectId provided but not migrated' : 'searched project DBs first, not found'
+    })
+    return centralCard
+  }
+
+  return null
 }
 
 /**
@@ -243,6 +287,7 @@ export function updateCardStatus(
   if (projectId) {
     const { db, isLocalDb } = resolveProjectDb(projectId)
     if (isLocalDb) {
+      logAction('updateCardStatus:using_project_db', { cardId, projectId, status })
       db.update(projectCards)
         .set({
           status,
@@ -252,11 +297,33 @@ export function updateCardStatus(
         })
         .where(eq(projectCards.id, cardId))
         .run()
-      return getCard(cardId, projectId)
+      const updated = getCard(cardId, projectId)
+      if (!updated) {
+        logAction('updateCardStatus:card_not_found_after_update', {
+          cardId,
+          projectId,
+          dbType: 'project',
+          status
+        })
+      } else {
+        logAction('updateCardStatus:success', {
+          cardId,
+          projectId,
+          dbType: 'project',
+          status,
+          newStatus: updated.status
+        })
+      }
+      return updated
     }
   }
 
   // Central DB fallback
+  logAction('updateCardStatus:using_central_db', {
+    cardId,
+    projectId: projectId || 'none',
+    status
+  })
   const db = getDrizzle()
   db.update(cards)
     .set({
@@ -267,7 +334,25 @@ export function updateCardStatus(
     })
     .where(eq(cards.id, cardId))
     .run()
-  return getCard(cardId)
+  // Always pass projectId if available to ensure consistent DB resolution
+  const updated = getCard(cardId, projectId)
+  if (!updated && projectId) {
+    logAction('updateCardStatus:card_not_found_after_update', {
+      cardId,
+      projectId,
+      dbType: 'central',
+      status
+    })
+  } else if (updated) {
+    logAction('updateCardStatus:success', {
+      cardId,
+      projectId: projectId || 'none',
+      dbType: 'central',
+      status,
+      newStatus: updated.status
+    })
+  }
+  return updated
 }
 
 /**

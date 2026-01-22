@@ -546,6 +546,12 @@ export class WorkerPipeline {
             logs: this.logManager.getLogs()
           }
         }
+
+        // Move card back to In Progress after E2E completes successfully
+        this.log('E2E tests passed, moving card back to In Progress')
+        await this.cardStatusManager!.moveToInProgress()
+        this.lifecycleManager.ensureNotCanceled()
+        this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
       }
 
       // Phase 8: Commit and push

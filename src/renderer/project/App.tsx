@@ -37,6 +37,14 @@ import { Button } from '../src/components/ui/button'
 import { Switch } from '../src/components/ui/switch'
 import { Badge } from '../src/components/ui/badge'
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '../src/components/ui/dialog'
+import {
   RefreshCw,
   Bot,
   Loader2,
@@ -48,7 +56,8 @@ import {
   Lightbulb,
   Network,
   Send,
-  Database
+  Database,
+  RotateCcw
 } from 'lucide-react'
 import { cn } from '../src/lib/utils'
 import {
@@ -63,6 +72,7 @@ import type {
   Card,
   CardLink,
   CardStatus,
+  Event,
   Job,
   Project,
   Provider,
@@ -387,6 +397,8 @@ export default function App(): React.JSX.Element {
         console.log('[Migration Check]', {
           projectId: projectInfo.projectId,
           needsMigration: result.needsMigration,
+          hasCentralData: result.hasCentralData,
+          hasLocalDb: result.hasLocalDb,
           reason: result.reason
         })
         if (result.needsMigration) {
@@ -394,11 +406,12 @@ export default function App(): React.JSX.Element {
           console.log('[Migration Check] Central data counts:', countsResult.counts)
           setMigrationState({
             needed: true,
-            showPrompt: true,
+            showPrompt: !result.hasLocalDb, // Only auto-show prompt if not already migrated
             counts: countsResult.counts || {}
           })
         } else {
           console.log('[Migration Check] Migration not needed:', result.reason || 'Already migrated or no data')
+          setMigrationState({ needed: false, showPrompt: false, counts: {} })
         }
       } catch (error) {
         console.error('Failed to check migration status:', error)
@@ -548,6 +561,47 @@ export default function App(): React.JSX.Element {
     }
   }, [])
 
+  const [resetWorkerStateConfirmOpen, setResetWorkerStateConfirmOpen] = useState(false)
+  const [isResettingWorkerState, setIsResettingWorkerState] = useState(false)
+
+  const handleResetWorkerState = useCallback(async (): Promise<void> => {
+    setIsResettingWorkerState(true)
+    try {
+      const result = await window.projectAPI.resetWorkerState()
+      if (result.success) {
+        const parts: string[] = []
+        if (result.canceledJobs > 0) parts.push(`${result.canceledJobs} job(s) canceled`)
+        if (result.releasedSlots > 0) parts.push(`${result.releasedSlots} slot(s) released`)
+        if (result.deletedFailedJobs && result.deletedFailedJobs > 0)
+          parts.push(`${result.deletedFailedJobs} failed job(s) deleted`)
+        const message =
+          parts.length > 0
+            ? `Reset worker state: ${parts.join(', ')}`
+            : 'Worker state reset (no active jobs or slots found)'
+        toast.success(message)
+        setResetWorkerStateConfirmOpen(false)
+        // Wait a bit for the state to propagate, then refresh data
+        await new Promise((resolve) => setTimeout(resolve, 100))
+        // Force refresh of all data - refresh multiple times to ensure UI updates
+        await Promise.all([refreshData(), loadWorkerEnabled()])
+        // Refresh again after a short delay to ensure UI updates
+        await new Promise((resolve) => setTimeout(resolve, 200))
+        await refreshData()
+      } else {
+        toast.error('Failed to reset worker state', {
+          description: result.error ?? 'Unknown error'
+        })
+      }
+    } catch (error) {
+      console.error('Failed to reset worker state:', error)
+      toast.error('Failed to reset worker state', {
+        description: error instanceof Error ? error.message : 'Unknown error'
+      })
+    } finally {
+      setIsResettingWorkerState(false)
+    }
+  }, [refreshData])
+
   const handleMoveCard = useCallback(async (cardId: string, status: CardStatus): Promise<void> => {
     // Optimistic update
     setCards((prev) => prev.map((card) => (card.id === cardId ? { ...card, status } : card)))
@@ -559,7 +613,7 @@ export default function App(): React.JSX.Element {
       // Reload to get correct state (use refreshData to avoid flash)
       refreshData()
     }
-  }, [])
+  }, [refreshData])
 
   const remoteProvider: Provider | null = project?.remote_repo_key
     ? project.remote_repo_key.startsWith('github:')
@@ -760,8 +814,20 @@ export default function App(): React.JSX.Element {
     try {
       const result = await window.projectAPI.migrateProjectToLocal({ projectId: projectInfo.projectId })
       if (result.success) {
-        toast.success('Project migrated to local storage')
-        setMigrationState({ needed: false, showPrompt: false, counts: {} })
+        toast.success(result.isReMigration ? 'Project re-migrated to local storage' : 'Project migrated to local storage')
+        // Re-check migration status after migration to see if there's still central data
+        // (for re-migration support, data might still exist in central DB)
+        const checkResult = await window.projectAPI.checkMigrationNeeded({ projectId: projectInfo.projectId })
+        if (checkResult.needsMigration) {
+          const countsResult = await window.projectAPI.getCentralDataCounts({ projectId: projectInfo.projectId })
+          setMigrationState({
+            needed: true,
+            showPrompt: false, // Don't auto-show prompt after manual migration
+            counts: countsResult.counts || {}
+          })
+        } else {
+          setMigrationState({ needed: false, showPrompt: false, counts: {} })
+        }
       } else {
         toast.error(`Migration failed: ${result.error}`)
       }
@@ -804,32 +870,45 @@ export default function App(): React.JSX.Element {
             <span className="text-sm text-muted-foreground">Worker</span>
             <Switch checked={workerEnabled} onCheckedChange={handleToggleWorker} />
             {workerEnabled && (
-              <Badge
-                variant={activeWorkerJob ? 'secondary' : hasWorkerError ? 'destructive' : 'default'}
-                className="ml-1"
-              >
-                {activeWorkerJob ? (
-                  <>
-                    <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                    Processing...
-                  </>
-                ) : hasWorkerError ? (
-                  <>
-                    <AlertCircle className="h-3 w-3 mr-1" />
-                    Error
-                  </>
-                ) : readyCards.length > 0 ? (
-                  <>
-                    <Play className="h-3 w-3 mr-1" />
-                    {readyCards.length} ready
-                  </>
-                ) : (
-                  <>
-                    <Pause className="h-3 w-3 mr-1" />
-                    Idle
-                  </>
+              <>
+                <Badge
+                  variant={activeWorkerJob ? 'secondary' : hasWorkerError ? 'destructive' : 'default'}
+                  className="ml-1"
+                >
+                  {activeWorkerJob ? (
+                    <>
+                      <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                      Processing...
+                    </>
+                  ) : hasWorkerError ? (
+                    <>
+                      <AlertCircle className="h-3 w-3 mr-1" />
+                      Error
+                    </>
+                  ) : readyCards.length > 0 ? (
+                    <>
+                      <Play className="h-3 w-3 mr-1" />
+                      {readyCards.length} ready
+                    </>
+                  ) : (
+                    <>
+                      <Pause className="h-3 w-3 mr-1" />
+                      Idle
+                    </>
+                  )}
+                </Badge>
+                {(activeWorkerJob || workerJobs.some((j) => j.state === 'running' || j.state === 'queued')) && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 ml-1"
+                    onClick={() => setResetWorkerStateConfirmOpen(true)}
+                    title="Reset worker state (cancel running jobs and release slots)"
+                  >
+                    <RotateCcw className="h-3 w-3" />
+                  </Button>
                 )}
-              </Badge>
+              </>
             )}
           </div>
 
@@ -922,7 +1001,9 @@ export default function App(): React.JSX.Element {
               size="sm"
               onClick={handleMigrate}
               disabled={isMigrating}
-              title="Migrate project to local storage"
+              title={migrationState.counts && Object.values(migrationState.counts).some(c => c > 0) 
+                ? `Migrate ${Object.values(migrationState.counts).reduce((sum, c) => sum + c, 0)} records to local storage`
+                : 'Migrate project to local storage'}
             >
               {isMigrating ? (
                 <>
@@ -932,7 +1013,9 @@ export default function App(): React.JSX.Element {
               ) : (
                 <>
                   <Database className="mr-2 h-4 w-4" />
-                  Migrate to Local
+                  {Object.values(migrationState.counts || {}).reduce((sum, c) => sum + c, 0) > 0
+                    ? 'Migrate to Local'
+                    : 'Migrate'}
                 </>
               )}
             </Button>
@@ -1116,6 +1199,55 @@ export default function App(): React.JSX.Element {
         jobs={jobs}
         onRefreshStatus={loadWorkspaceStatus}
       />
+
+      {/* Reset Worker State Confirmation Dialog */}
+      <Dialog open={resetWorkerStateConfirmOpen} onOpenChange={setResetWorkerStateConfirmOpen}>
+        <DialogContent className="sm:max-w-[450px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <RotateCcw className="h-5 w-5 text-destructive" />
+              Reset Worker State
+            </DialogTitle>
+            <DialogDescription className="space-y-2">
+              <p>
+                This will cancel all running/queued worker jobs and release all running worker slots
+                back to idle.
+              </p>
+              <p className="text-sm font-medium text-foreground">
+                Worker progress history will be preserved (iterations, checkpoints, etc.).
+              </p>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setResetWorkerStateConfirmOpen(false)}
+              disabled={isResettingWorkerState}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={handleResetWorkerState}
+              disabled={isResettingWorkerState}
+            >
+              {isResettingWorkerState ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Resetting...
+                </>
+              ) : (
+                <>
+                  <RotateCcw className="mr-2 h-4 w-4" />
+                  Reset Worker State
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Onboarding Dialogs */}
       {project && (

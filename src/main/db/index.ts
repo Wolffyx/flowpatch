@@ -58,7 +58,8 @@ export {
   getActiveWorkerJob,
   getActiveWorkerJobForCard,
   cancelJob,
-  getActiveWorkerJobCount
+  getActiveWorkerJobCount,
+  deleteFailedWorkerRunJobsForCard
 } from './jobs'
 export type { Job, JobState, JobType } from './jobs'
 
@@ -119,7 +120,8 @@ export {
   updateWorkerSlot,
   releaseWorkerSlot,
   getIdleSlotCount,
-  getRunningSlotCount
+  getRunningSlotCount,
+  resetWorkerState
 } from './worker-slots'
 export type { WorkerSlot, WorkerSlotStatus } from './worker-slots'
 

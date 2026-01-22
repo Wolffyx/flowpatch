@@ -91,11 +91,11 @@ export async function moveToInReview(
   prUrl: string,
   isNewPR: boolean = true
 ): Promise<void> {
-  updateCardStatus(ctx.cardId, 'in_review')
+  updateCardStatus(ctx.cardId, 'in_review', ctx.projectId)
 
   // Create card link - use providerKey instead of instanceof
   const linkedType = ctx.adapter?.providerKey === 'github' ? 'pr' : 'mr'
-  createCardLink(ctx.cardId, linkedType, prUrl)
+  createCardLink(ctx.cardId, linkedType, prUrl, undefined, undefined, ctx.projectId)
 
   createEvent(ctx.projectId, 'pr_created', ctx.cardId, {
     prUrl,

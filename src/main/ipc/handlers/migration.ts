@@ -40,6 +40,8 @@ export function registerMigrationHandlers(notifyRenderer: () => void): void {
       projectId: payload.projectId,
       projectPath: project.local_path,
       status,
+      isMigrated: status === 'migrated' || hasLocalDb, // Map to boolean for UI
+      projectDbExists: hasLocalDb, // Map to expected property name
       hasLocalDb,
       hasCentralData,
       centralCounts
@@ -58,14 +60,9 @@ export function registerMigrationHandlers(notifyRenderer: () => void): void {
     const project = getProject(payload.projectId)
     if (!project) return { error: 'Project not found' }
 
-    // Check if already migrated
-    if (isProjectMigrated(project.local_path)) {
-      return {
-        success: true,
-        alreadyMigrated: true,
-        message: 'Project already migrated to local storage'
-      }
-    }
+    // Allow re-migration even if project DB exists (for recovery or data refresh)
+    // The migration uses INSERT OR REPLACE, so existing data will be updated correctly
+    const isReMigration = isProjectMigrated(project.local_path)
 
     // Perform migration with progress callbacks
     const result: MigrationResult = migrateProjectToLocalDb(
@@ -95,8 +92,11 @@ export function registerMigrationHandlers(notifyRenderer: () => void): void {
     return {
       success: result.success,
       result,
+      isReMigration,
       message: result.success
-        ? `Successfully migrated ${result.tablesMigrated.length} tables in ${result.duration_ms}ms`
+        ? isReMigration
+          ? `Successfully re-migrated ${result.tablesMigrated.length} tables in ${result.duration_ms}ms`
+          : `Successfully migrated ${result.tablesMigrated.length} tables in ${result.duration_ms}ms`
         : `Migration failed: ${result.errors.join(', ')}`
     }
   })
@@ -136,7 +136,9 @@ export function registerMigrationHandlers(notifyRenderer: () => void): void {
   })
 
   /**
-   * Check if a project needs migration (has data in central but not in local).
+   * Check if a project needs migration (has data in central DB).
+   * With re-migration support, this returns true if there's any central data,
+   * regardless of whether a local DB exists.
    */
   ipcMain.handle('checkMigrationNeeded', (_e, payload: { projectId: string }) => {
     if (!payload?.projectId) return { error: 'Project ID required' }
@@ -149,9 +151,14 @@ export function registerMigrationHandlers(notifyRenderer: () => void): void {
 
     return {
       projectId: payload.projectId,
-      needsMigration: hasCentralData && !hasLocalDb,
+      needsMigration: hasCentralData, // Allow migration/re-migration if there's central data
       hasLocalDb,
-      hasCentralData
+      hasCentralData,
+      reason: hasCentralData
+        ? hasLocalDb
+          ? 'Re-migration available (data exists in both central and local DB)'
+          : 'Migration needed (data exists only in central DB)'
+        : 'No data in central database'
     }
   })
 

@@ -600,6 +600,8 @@ const allowedInvokeChannels = [
   'runWorker',
   'setProjectRemote',
   'checkCliAgents',
+  // Provider availability
+  'providers:getAvailability',
   // Project identity (for remote selection)
   'shell:getProjectIdentity'
 ]

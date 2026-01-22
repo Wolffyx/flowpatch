@@ -34,6 +34,7 @@ import { usePlanningSettings } from '../hooks/usePlanningSettings'
 import { useMultiAgentSettings } from '../hooks/useMultiAgentSettings'
 import { useAPIKeys } from '../hooks/useAPIKeys'
 import { useAIProfiles } from '../hooks/useAIProfiles'
+import { useProviderAvailability } from '../hooks/useProviderAvailability'
 import {
   TOOL_OPTIONS,
   THINKING_MODE_OPTIONS,
@@ -46,6 +47,7 @@ import type { ThinkingMode, PlanningMode, AIModelProvider } from '@shared/types'
 export function AIAgentsSection(): React.JSX.Element {
   const { project } = useSettingsContext()
 
+  const { providers, loading: availabilityLoading, isAvailable } = useProviderAvailability()
   const { toolPreference, loadFeatureSettings, handleToolPreferenceChange } = useFeatureSettings()
 
   const {
@@ -484,15 +486,61 @@ export function AIAgentsSection(): React.JSX.Element {
           title="Tool Preference"
           description="Select which AI tool the worker should use."
         >
-          <RadioOptionGroup
-            options={TOOL_OPTIONS}
-            value={toolPreference}
-            onChange={(pref) => handleToolPreferenceChange(project, pref)}
-          />
-          <p className="text-xs text-muted-foreground mt-3">
-            Stored in this project&apos;s policy (database). The worker still falls back if the
-            selected CLI isn&apos;t installed.
-          </p>
+          {availabilityLoading ? (
+            <div className="flex items-center justify-center py-4 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              Checking CLI availability...
+            </div>
+          ) : (
+            <>
+              <RadioOptionGroup
+                options={TOOL_OPTIONS.map((opt) => ({
+                  ...opt,
+                  disabled: opt.providerKey ? !isAvailable(opt.providerKey) : false,
+                  badge:
+                    opt.providerKey && !isAvailable(opt.providerKey) ? 'Not Installed' : undefined
+                }))}
+                value={toolPreference}
+                onChange={(pref) => handleToolPreferenceChange(project, pref)}
+              />
+              <p className="text-xs text-muted-foreground mt-3">
+                Stored in this project&apos;s policy (database). The worker still falls back if the
+                selected CLI isn&apos;t installed.
+              </p>
+
+              {providers.some((p) => !p.available) && (
+                <div className="mt-3 p-3 border rounded-lg bg-muted/30">
+                  <p className="text-xs font-medium mb-2">Missing AI Tools:</p>
+                  <div className="space-y-1">
+                    {providers
+                      .filter((p) => !p.available)
+                      .map((p) => (
+                        <div key={p.key} className="text-xs text-muted-foreground flex items-baseline gap-1.5">
+                          <span>•</span>
+                          <span className="flex-1">
+                            {p.displayName} - Install:{' '}
+                            <code className="px-1 bg-muted rounded font-mono">{p.command}</code>
+                            {p.documentationUrl && (
+                              <>
+                                {' '}
+                                <a
+                                  href={p.documentationUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-primary hover:underline"
+                                >
+                                  Docs ↗
+                                </a>
+                              </>
+                            )}
+                          </span>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
         </SettingsCard>
       )}
 

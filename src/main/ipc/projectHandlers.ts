@@ -26,7 +26,14 @@ import {
   createEvent,
   updateJobState,
   updateProjectWorkerEnabled,
-  getUsageRecordsByCard
+  getUsageRecordsByCard,
+  getCard,
+  updateCardStatus,
+  updateCardLabels,
+  checkCanMoveToStatus,
+  getActiveWorkerJobForCard,
+  cancelJob,
+  resetWorkerState
 } from '../db'
 import { runWorker as executeWorkerPipeline } from '../worker/pipeline'
 import { startWorkerLoop, stopWorkerLoop } from '../worker/loop'
@@ -36,9 +43,11 @@ import {
   sendToAllTabs,
   sendToTab
 } from '../tabManager'
-import { logAction } from '@shared/utils'
+import { logAction, parsePolicyJson, getStatusLabelFromPolicy, getAllStatusLabelsFromPolicy } from '@shared/utils'
 import { verifySecureRequest } from '../security'
-import { runSync } from '../sync/engine'
+import { runSync, SyncEngine } from '../sync/engine'
+import { triggerProjectSync } from '../sync/scheduler'
+import type { CardStatus } from '@shared/types'
 import {
   ensureFlowPatchWorkspace,
   getFlowPatchWorkspaceStatus,
@@ -125,6 +134,143 @@ export function registerProjectHandlers(): void {
     logAction('project:createCard', { projectId, title })
     return createLocalTestCard(projectId, title)
   })
+
+  ipcMain.handle(
+    'project:moveCard',
+    async (
+      event,
+      payload: {
+        cardId: string
+        status: CardStatus
+        skipDependencyCheck?: boolean
+      }
+    ) => {
+      const projectId = getProjectIdFromEvent(event)
+      if (!projectId) {
+        throw new Error('No project selected')
+      }
+
+      // Check dependencies unless explicitly skipped
+      if (!payload.skipDependencyCheck) {
+        const dependencyCheck = checkCanMoveToStatus(payload.cardId, payload.status, projectId)
+        if (!dependencyCheck.canMove) {
+          logAction('project:moveCard:blocked_by_dependencies', {
+            cardId: payload.cardId,
+            projectId,
+            targetStatus: payload.status,
+            blockedBy: dependencyCheck.blockedBy.map((b) => b.depends_on_card_id)
+          })
+          return {
+            card: null,
+            error: dependencyCheck.reason ?? 'Blocked by dependencies',
+            blockedByDependencies: dependencyCheck.blockedBy
+          }
+        }
+      }
+
+      // Get card with projectId to ensure we check the right DB
+      const before = getCard(payload.cardId, projectId)
+      if (!before) {
+        logAction('project:moveCard:card_not_found', {
+          cardId: payload.cardId,
+          projectId
+        })
+        return {
+          card: null,
+          error: 'Card not found'
+        }
+      }
+
+      logAction('project:moveCard:before_update', {
+        cardId: payload.cardId,
+        projectId,
+        fromStatus: before.status,
+        toStatus: payload.status
+      })
+
+      const card = updateCardStatus(payload.cardId, payload.status, projectId)
+      if (card) {
+        logAction('project:moveCard', { cardId: payload.cardId, projectId, status: payload.status })
+        createEvent(projectId, 'status_changed', card.id, {
+          from: before?.status,
+          to: payload.status
+        })
+
+        // Update local labels to reflect new status
+        const project = getProject(projectId)
+        if (project) {
+          const policy = parsePolicyJson(project.policy_json)
+
+          // Get current labels
+          const currentLabels: string[] = card.labels_json ? JSON.parse(card.labels_json) : []
+
+          // Get status label configuration
+          const newStatusLabel = getStatusLabelFromPolicy(payload.status, policy)
+          const allStatusLabels = getAllStatusLabelsFromPolicy(policy)
+
+          // Replace old status labels with new one
+          const filteredLabels = currentLabels.filter((l) => !allStatusLabels.includes(l))
+          const updatedLabels = [...filteredLabels, newStatusLabel]
+
+          // Update in database
+          updateCardLabels(card.id, JSON.stringify(updatedLabels), projectId)
+        }
+
+        // If the user moves a card out of Ready/In Progress, cancel any active worker job for it.
+        if (
+          payload.status === 'draft' ||
+          payload.status === 'in_review' ||
+          payload.status === 'testing' ||
+          payload.status === 'done'
+        ) {
+          const activeJob = getActiveWorkerJobForCard(payload.cardId, projectId)
+          if (activeJob) {
+            cancelJob(activeJob.id, `Canceled: moved to ${payload.status}`)
+            createEvent(projectId, 'worker_run', card.id, {
+              jobId: activeJob.id,
+              action: 'canceled',
+              reason: `moved_to_${payload.status}`
+            })
+          }
+        }
+
+        // Queue async remote sync in background (fire-and-forget for fast UI response)
+        if (card.remote_repo_key) {
+          const cardId = payload.cardId
+          const status = payload.status
+
+          setImmediate(async () => {
+            const job = createJob(projectId, 'sync_push', cardId, { status })
+            try {
+              const engine = new SyncEngine(projectId)
+              const initialized = await engine.initialize()
+              if (initialized) {
+                const success = await engine.pushStatusChange(cardId, status)
+                updateJobState(job.id, success ? 'succeeded' : 'failed')
+                logAction('project:moveCard:pushStatus', { cardId, projectId, success })
+              } else {
+                updateJobState(job.id, 'failed', undefined, 'Failed to initialize sync engine')
+                logAction('project:moveCard:pushStatus:init_failed', { cardId, projectId })
+              }
+            } catch (error) {
+              updateJobState(job.id, 'failed', undefined, String(error))
+              logAction('project:moveCard:pushStatus:error', {
+                cardId,
+                projectId,
+                error: String(error)
+              })
+            }
+            notifyRendererStateUpdated() // Notify when sync completes
+
+            // Trigger a full poll sync to catch any remote changes (debounced)
+            triggerProjectSync(projectId)
+          })
+        }
+      }
+      notifyRendererStateUpdated()
+      return { card }
+    }
+  )
 
   // -------------------------------------------------------------------------
   // Sync
@@ -256,6 +402,54 @@ export function registerProjectHandlers(): void {
     logAction('project:cancelWorker', { jobId })
     // The actual cancel is handled by the existing cancelJob handler
     return { success: true }
+  })
+
+  ipcMain.handle('project:resetWorkerState', (event) => {
+    // Security check
+    const securityError = verifyProjectRequest(event, 'project:resetWorkerState')
+    if (securityError) {
+      return {
+        success: false,
+        canceledJobs: 0,
+        releasedSlots: 0,
+        deletedFailedJobs: 0,
+        error: `Security: ${securityError}`
+      }
+    }
+
+    const projectId = getProjectIdFromEvent(event)
+    if (!projectId) {
+      return {
+        success: false,
+        canceledJobs: 0,
+        releasedSlots: 0,
+        deletedFailedJobs: 0,
+        error: 'No project selected'
+      }
+    }
+
+    logAction('project:resetWorkerState', { projectId })
+
+    try {
+      const result = resetWorkerState(projectId)
+      notifyRendererStateUpdated()
+      return {
+        success: true,
+        canceledJobs: result.canceledJobs,
+        releasedSlots: result.releasedSlots,
+        deletedFailedJobs: result.deletedFailedJobs
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      logAction('project:resetWorkerState:error', { projectId, error: errorMessage })
+      return {
+        success: false,
+        canceledJobs: 0,
+        releasedSlots: 0,
+        deletedFailedJobs: 0,
+        error: errorMessage
+      }
+    }
   })
 
   // -------------------------------------------------------------------------

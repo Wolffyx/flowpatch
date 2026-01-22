@@ -47,7 +47,7 @@ const projectAPI: ProjectAPI = {
 
   getCardLinks: () => ipcRenderer.invoke('project:getCardLinks'),
 
-  moveCard: (id, status) => ipcRenderer.invoke('moveCard', { cardId: id, status }),
+  moveCard: (id, status) => ipcRenderer.invoke('project:moveCard', { cardId: id, status }),
 
   ensureProjectRemote: (id) => ipcRenderer.invoke('ensureProjectRemote', { projectId: id }),
 
@@ -85,6 +85,8 @@ const projectAPI: ProjectAPI = {
   runWorker: (id) => ipcRenderer.invoke('project:runWorker', { cardId: id }),
 
   cancelWorker: (id) => ipcRenderer.invoke('project:cancelWorker', { jobId: id }),
+
+  resetWorkerState: () => ipcRenderer.invoke('project:resetWorkerState'),
 
   getCardTestInfo: (projectId, id) =>
     ipcRenderer.invoke('getCardTestInfo', { projectId, cardId: id }),
@@ -239,6 +241,7 @@ const projectAPI: ProjectAPI = {
     ipcRenderer.invoke('dependencies:getForCardWithCards', id),
 
   getDependentsOfCard: (id) => ipcRenderer.invoke('dependencies:getDependents', id),
+  getDependentsOfCardWithCards: (id) => ipcRenderer.invoke('dependencies:getDependentsOfCardWithCards', id),
 
   getDependenciesByProject: () => {
     const projectId = lastProjectInfo?.projectId
@@ -382,7 +385,8 @@ const allowedInvokeChannels = [
   'linkGithubProjectV2',
   'getSyncSchedulerStatus',
   'getCardEligibilityDiagnostic',
-  'getReadyCardsNotProcessing'
+  'getReadyCardsNotProcessing',
+  'providers:getAvailability'
 ]
 
 const allowedSendChannels = ['openExternal']

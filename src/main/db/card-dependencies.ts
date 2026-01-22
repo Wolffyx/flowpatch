@@ -12,7 +12,7 @@ import {
   cardDependencies as projectCardDependencies,
   cards as projectCards
 } from './schema/project'
-import { generateId } from '@shared/utils'
+import { generateId, logAction } from '@shared/utils'
 import type {
   CardDependency,
   CardDependencyWithCard,
@@ -150,6 +150,7 @@ export function getCardDependency(dependencyId: string, projectId?: string): Car
  * @param projectId - Optional project ID for direct DB resolution
  */
 export function getDependenciesForCard(cardId: string, projectId?: string): CardDependency[] {
+  // If projectId is provided, try project DB first (for migrated projects)
   if (projectId) {
     const { db, isLocalDb } = resolveProjectDb(projectId)
     if (isLocalDb) {
@@ -159,11 +160,43 @@ export function getDependenciesForCard(cardId: string, projectId?: string): Card
         .where(eq(projectCardDependencies.card_id, cardId))
         .orderBy(asc(projectCardDependencies.created_at))
         .all()
-      return rows.map((r) => rowToDependency(r, projectId))
+      // If we found dependencies in project DB, return them
+      if (rows.length > 0) {
+        return rows.map((r) => rowToDependency(r, projectId))
+      }
+      
+      // If project DB exists but no dependencies found, check central DB as fallback
+      logAction('getDependenciesForCard:noDependenciesInProjectDb', {
+        cardId,
+        projectId,
+        note: 'Project DB exists but no dependencies found - checking central DB as fallback'
+      })
+      
+      // Check central DB to see if dependencies exist there (migration issue)
+      const centralDb = getDrizzle()
+      const centralRows = centralDb
+        .select()
+        .from(cardDependencies)
+        .where(eq(cardDependencies.card_id, cardId))
+        .orderBy(asc(cardDependencies.created_at))
+        .all()
+      
+      if (centralRows.length > 0) {
+        logAction('getDependenciesForCard:foundInCentralDbFallback', {
+          cardId,
+          projectId,
+          count: centralRows.length,
+          warning: 'Dependencies exist in central DB but not in project DB - migration may have failed'
+        })
+        return centralRows.map((r) => rowToDependency(r))
+      }
+      
+      // No dependencies found in either DB
+      return []
     }
   }
 
-  // Central DB fallback
+  // Central DB fallback (for non-migrated projects or when projectId not provided)
   const db = getDrizzle()
   const rows = db
     .select()
@@ -183,9 +216,14 @@ export function getDependenciesForCardWithCards(
   cardId: string,
   projectId?: string
 ): CardDependencyWithCard[] {
+  // If projectId is provided, try project DB first (for migrated projects)
   if (projectId) {
     const { db, isLocalDb } = resolveProjectDb(projectId)
     if (isLocalDb) {
+      logAction('getDependenciesForCardWithCards:queryingProjectDb', {
+        cardId,
+        projectId
+      })
       const rows = db
         .select({
           id: projectCardDependencies.id,
@@ -206,25 +244,37 @@ export function getDependenciesForCardWithCards(
         .orderBy(asc(projectCardDependencies.created_at))
         .all()
 
-      return rows.map((row) => {
-        const dep = rowToDependency(row, projectId)
-        if (row.dep_card_id) {
-          return {
-            ...dep,
-            depends_on_card: {
-              id: row.dep_card_id,
-              project_id: projectId,
-              title: row.dep_card_title!,
-              status: row.dep_card_status as CardStatus
-            }
-          } as CardDependencyWithCard
-        }
-        return dep as CardDependencyWithCard
-      })
+      // If we found dependencies in project DB, return them
+      if (rows.length > 0) {
+        logAction('getDependenciesForCardWithCards:foundInProjectDb', {
+          cardId,
+          projectId,
+          count: rows.length,
+          sampleIds: rows.slice(0, 3).map((r) => r.id)
+        })
+        return rows.map((row) => {
+          const dep = rowToDependency(row, projectId)
+          if (row.dep_card_id) {
+            return {
+              ...dep,
+              depends_on_card: {
+                id: row.dep_card_id,
+                project_id: projectId,
+                title: row.dep_card_title!,
+                status: row.dep_card_status as CardStatus
+              }
+            } as CardDependencyWithCard
+          }
+          return dep as CardDependencyWithCard
+        })
+      }
+      // If project DB exists but no dependencies found, don't fall back to central
+      // (dependencies should be in project DB if project is migrated)
+      return []
     }
   }
 
-  // Central DB fallback
+  // Central DB fallback (for non-migrated projects or when projectId not provided)
   const db = getDrizzle()
   const rows = db
     .select({
@@ -271,6 +321,7 @@ export function getDependenciesForCardWithCards(
  * @param projectId - Optional project ID for direct DB resolution
  */
 export function getDependentsOfCard(cardId: string, projectId?: string): CardDependency[] {
+  // If projectId is provided, try project DB first (for migrated projects)
   if (projectId) {
     const { db, isLocalDb } = resolveProjectDb(projectId)
     if (isLocalDb) {
@@ -280,11 +331,43 @@ export function getDependentsOfCard(cardId: string, projectId?: string): CardDep
         .where(eq(projectCardDependencies.depends_on_card_id, cardId))
         .orderBy(asc(projectCardDependencies.created_at))
         .all()
-      return rows.map((r) => rowToDependency(r, projectId))
+      // If we found dependents in project DB, return them
+      if (rows.length > 0) {
+        return rows.map((r) => rowToDependency(r, projectId))
+      }
+      
+      // If project DB exists but no dependents found, check central DB as fallback
+      logAction('getDependentsOfCard:noDependentsInProjectDb', {
+        cardId,
+        projectId,
+        note: 'Project DB exists but no dependents found - checking central DB as fallback'
+      })
+      
+      // Check central DB to see if dependents exist there (migration issue)
+      const centralDb = getDrizzle()
+      const centralRows = centralDb
+        .select()
+        .from(cardDependencies)
+        .where(eq(cardDependencies.depends_on_card_id, cardId))
+        .orderBy(asc(cardDependencies.created_at))
+        .all()
+      
+      if (centralRows.length > 0) {
+        logAction('getDependentsOfCard:foundInCentralDbFallback', {
+          cardId,
+          projectId,
+          count: centralRows.length,
+          warning: 'Dependents exist in central DB but not in project DB - migration may have failed'
+        })
+        return centralRows.map((r) => rowToDependency(r))
+      }
+      
+      // No dependents found in either DB
+      return []
     }
   }
 
-  // Central DB fallback
+  // Central DB fallback (for non-migrated projects or when projectId not provided)
   const db = getDrizzle()
   const rows = db
     .select()
@@ -304,6 +387,7 @@ export function getDependentsOfCardWithCards(
   cardId: string,
   projectId?: string
 ): CardDependencyWithCard[] {
+  // If projectId is provided, try project DB first (for migrated projects)
   if (projectId) {
     const { db, isLocalDb } = resolveProjectDb(projectId)
     if (isLocalDb) {
@@ -327,25 +411,89 @@ export function getDependentsOfCardWithCards(
         .orderBy(asc(projectCardDependencies.created_at))
         .all()
 
-      return rows.map((row) => {
-        const dep = rowToDependency(row, projectId)
-        if (row.dep_card_id) {
-          return {
-            ...dep,
-            card: {
-              id: row.dep_card_id,
-              project_id: projectId,
-              title: row.dep_card_title!,
-              status: row.dep_card_status as CardStatus
-            }
-          } as CardDependencyWithCard
-        }
-        return dep as CardDependencyWithCard
+      // If we found dependents in project DB, return them
+      if (rows.length > 0) {
+        return rows.map((row) => {
+          const dep = rowToDependency(row, projectId)
+          if (row.dep_card_id) {
+            return {
+              ...dep,
+              card: {
+                id: row.dep_card_id,
+                project_id: projectId,
+                title: row.dep_card_title!,
+                status: row.dep_card_status as CardStatus
+              }
+            } as CardDependencyWithCard
+          }
+          return dep as CardDependencyWithCard
+        })
+      }
+      
+      // If project DB exists but no dependents found, check central DB as fallback
+      logAction('getDependentsOfCardWithCards:noDependentsInProjectDb', {
+        cardId,
+        projectId,
+        note: 'Project DB exists but no dependents found - checking central DB as fallback'
       })
+      
+      // Check central DB to see if dependents exist there (migration issue)
+      const centralDb = getDrizzle()
+      const centralRows = centralDb
+        .select({
+          id: cardDependencies.id,
+          project_id: cardDependencies.project_id,
+          card_id: cardDependencies.card_id,
+          depends_on_card_id: cardDependencies.depends_on_card_id,
+          blocking_statuses_json: cardDependencies.blocking_statuses_json,
+          required_status: cardDependencies.required_status,
+          is_active: cardDependencies.is_active,
+          created_at: cardDependencies.created_at,
+          updated_at: cardDependencies.updated_at,
+          dep_card_id: cards.id,
+          dep_card_project_id: cards.project_id,
+          dep_card_title: cards.title,
+          dep_card_status: cards.status
+        })
+        .from(cardDependencies)
+        .leftJoin(cards, eq(cardDependencies.card_id, cards.id))
+        .where(eq(cardDependencies.depends_on_card_id, cardId))
+        .orderBy(asc(cardDependencies.created_at))
+        .all()
+      
+      if (centralRows.length > 0) {
+        logAction('getDependentsOfCardWithCards:foundInCentralDbFallback', {
+          cardId,
+          projectId,
+          count: centralRows.length,
+          warning: 'Dependents exist in central DB but not in project DB - migration may have failed',
+          sampleIds: centralRows.slice(0, 3).map((r) => r.id)
+        })
+        
+        // Return dependents from central DB as fallback
+        return centralRows.map((row) => {
+          const dep = rowToDependency(row)
+          if (row.dep_card_id) {
+            return {
+              ...dep,
+              card: {
+                id: row.dep_card_id,
+                project_id: row.dep_card_project_id!,
+                title: row.dep_card_title!,
+                status: row.dep_card_status as CardStatus
+              }
+            } as CardDependencyWithCard
+          }
+          return dep as CardDependencyWithCard
+        })
+      }
+      
+      // No dependents found in either DB
+      return []
     }
   }
 
-  // Central DB fallback
+  // Central DB fallback (for non-migrated projects or when projectId not provided)
   const db = getDrizzle()
   const rows = db
     .select({

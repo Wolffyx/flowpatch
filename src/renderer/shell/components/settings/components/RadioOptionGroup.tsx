@@ -14,6 +14,8 @@ interface RadioOption<T extends string> {
   description: string
   icon?: ReactNode
   tokens?: string // Optional token count for thinking modes
+  disabled?: boolean // Whether this option is disabled
+  badge?: string // Optional badge text (e.g., "Not Installed")
 }
 
 interface RadioOptionGroupProps<T extends string> {
@@ -35,15 +37,18 @@ export function RadioOptionGroup<T extends string>({
         <button
           key={opt.id}
           type="button"
-          onClick={() => onChange(opt.id)}
+          onClick={() => !opt.disabled && onChange(opt.id)}
+          disabled={opt.disabled}
+          title={opt.disabled ? `${opt.title} is not installed` : undefined}
           className={cn(
             'flex items-center gap-3 rounded-lg border p-3 text-left transition-colors',
-            value === opt.id ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'
+            value === opt.id ? 'border-primary bg-primary/5' : 'hover:bg-muted/50',
+            opt.disabled && 'opacity-50 cursor-not-allowed hover:bg-transparent'
           )}
         >
           <div
             className={cn(
-              'flex h-4 w-4 items-center justify-center rounded-full border',
+              'flex h-4 w-4 items-center justify-center rounded-full border shrink-0',
               value === opt.id
                 ? 'border-primary bg-primary text-primary-foreground'
                 : 'border-muted-foreground'
@@ -52,11 +57,16 @@ export function RadioOptionGroup<T extends string>({
             {value === opt.id && <Check className="h-3 w-3" />}
           </div>
           {opt.icon}
-          <div className="flex-1">
-            <div className="font-medium">
-              {opt.title}
+          <div className="flex-1 min-w-0">
+            <div className="font-medium flex items-center gap-2 flex-wrap">
+              <span>{opt.title}</span>
               {opt.tokens && (
-                <span className="text-xs text-muted-foreground ml-1">({opt.tokens} tokens)</span>
+                <span className="text-xs text-muted-foreground">({opt.tokens} tokens)</span>
+              )}
+              {opt.badge && (
+                <span className="text-xs bg-destructive/10 text-destructive px-1.5 py-0.5 rounded">
+                  {opt.badge}
+                </span>
               )}
             </div>
             <div className="text-xs text-muted-foreground">{opt.description}</div>

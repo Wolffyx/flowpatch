@@ -74,6 +74,7 @@ interface ToolOption {
   title: string
   description: string
   icon: ReactNode
+  providerKey: string | null // Maps to CLI provider key, null for 'auto'
 }
 
 export const TOOL_OPTIONS: ToolOption[] = [
@@ -81,25 +82,29 @@ export const TOOL_OPTIONS: ToolOption[] = [
     id: 'auto',
     title: 'Auto',
     description: 'Try Claude Code, then Codex, then OpenCode and others in order of availability.',
-    icon: <Sparkles className="h-4 w-4 text-foreground/70" />
+    icon: <Sparkles className="h-4 w-4 text-foreground/70" />,
+    providerKey: null
   },
   {
     id: 'claude',
     title: 'Claude Code',
     description: 'Prefer the Claude Code CLI when the worker runs.',
-    icon: <Bot className="h-4 w-4 text-foreground/70" />
+    icon: <Bot className="h-4 w-4 text-foreground/70" />,
+    providerKey: 'claude'
   },
   {
     id: 'codex',
     title: 'Codex',
     description: 'Prefer the Codex CLI when the worker runs.',
-    icon: <Code className="h-4 w-4 text-foreground/70" />
+    icon: <Code className="h-4 w-4 text-foreground/70" />,
+    providerKey: 'codex'
   },
   {
     id: 'opencode',
     title: 'OpenCode',
     description: 'Prefer the OpenCode CLI when the worker runs.',
-    icon: <Wrench className="h-4 w-4 text-foreground/70" />
+    icon: <Wrench className="h-4 w-4 text-foreground/70" />,
+    providerKey: 'opencode'
   }
 ]
 

@@ -371,7 +371,20 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
       }
 
       const before = getCard(payload.cardId)
-      const card = updateCardStatus(payload.cardId, payload.status)
+      if (!before) {
+        logAction('moveCard:card_not_found', { cardId: payload.cardId })
+        return {
+          card: null,
+          error: 'Card not found'
+        }
+      }
+      logAction('moveCard:before_update', {
+        cardId: payload.cardId,
+        projectId: before.project_id,
+        fromStatus: before.status,
+        toStatus: payload.status
+      })
+      const card = updateCardStatus(payload.cardId, payload.status, before.project_id)
       if (card) {
         logAction('moveCard', payload)
         createEvent(card.project_id, 'status_changed', card.id, {

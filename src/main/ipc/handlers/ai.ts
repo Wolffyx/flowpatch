@@ -13,6 +13,7 @@ import { join } from 'path'
 import { getCard, getProject } from '../../db'
 import { verifySecureRequest } from '../../security'
 import { logAction } from '@shared/utils'
+import { CLIProviderRegistry } from '../../cli-providers/registry'
 
 type DraftToolPreference = 'auto' | 'claude' | 'codex'
 
@@ -364,6 +365,32 @@ function verifyAIRequest(event: IpcMainInvokeEvent, channel: string): string | n
 // ============================================================================
 
 export function registerAIHandlers(): void {
+  // Get provider availability status
+  ipcMain.handle('providers:getAvailability', async () => {
+    logAction('providers:getAvailability')
+
+    try {
+      const availability = await CLIProviderRegistry.getAvailabilityStatus()
+      const providers = CLIProviderRegistry.getAll()
+
+      return {
+        providers: providers.map((p) => ({
+          key: p.metadata.key,
+          displayName: p.metadata.displayName,
+          command: p.metadata.command,
+          documentationUrl: p.metadata.documentationUrl,
+          available: availability[p.metadata.key] || false
+        }))
+      }
+    } catch (error) {
+      logAction('providers:getAvailability:error', { error })
+      return {
+        providers: [],
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
   ipcMain.handle(
     'generateCardDescription',
     async (

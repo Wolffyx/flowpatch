@@ -267,7 +267,8 @@ export class SyncEngine {
             'pr',
             link.prUrl,
             this.project.remote_repo_key,
-            String(link.prNumber)
+            String(link.prNumber),
+            this.projectId
           )
         }
       }

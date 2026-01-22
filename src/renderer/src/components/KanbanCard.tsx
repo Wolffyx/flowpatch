@@ -132,6 +132,10 @@ function KanbanCardBase({
         card.sync_state === 'pending' && 'border-chart-4/50'
       )}
       onClick={(e) => {
+        // Don't handle click if card is being dragged
+        if (isDragging) {
+          return
+        }
         e.stopPropagation()
         onClick()
       }}

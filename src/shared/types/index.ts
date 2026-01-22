@@ -1,5 +1,3 @@
-export * from './ipc'
-
 export * from '../constants'
 export * from './utils'
 
@@ -30,3 +28,18 @@ export * from './interfaces/policy-config'
 export * from './interfaces/remote-info'
 export * from './interfaces/sync'
 export * from './interfaces/security'
+export * from './interfaces/provider-availability'
+
+// IPC types (refactored from ipc.ts into modular interface files)
+export * from './interfaces/ipc-common'
+export * from './interfaces/ipc-repository'
+export * from './interfaces/ipc-project'
+export * from './interfaces/ipc-card'
+export * from './interfaces/ipc-worker'
+export * from './interfaces/ipc-sync'
+export * from './interfaces/ipc-settings'
+export * from './interfaces/ipc-ai'
+export * from './interfaces/ipc-ui'
+export * from './interfaces/ipc-onboarding'
+export * from './interfaces/ipc-worktree'
+export * from './interfaces/ipc-channels'

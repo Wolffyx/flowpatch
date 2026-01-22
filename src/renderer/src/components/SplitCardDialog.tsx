@@ -13,8 +13,9 @@ import { Textarea } from './ui/textarea'
 import { Loader2, ArrowUp, ArrowDown, Trash2, Minus, Plus, RefreshCw } from 'lucide-react'
 import { cn } from '../lib/utils'
 import type { Card } from '../../../shared/types'
+import { useProviderAvailability } from '../../shell/components/settings/hooks/useProviderAvailability'
 
-type ToolPreference = 'auto' | 'claude' | 'codex'
+type ToolPreference = 'auto' | 'claude' | 'codex' | 'opencode'
 type CountMode = 'auto' | 'manual'
 type Step = 'configure' | 'review'
 
@@ -36,6 +37,7 @@ export function SplitCardDialog({
   projectId,
   card
 }: SplitCardDialogProps): React.JSX.Element {
+  const { isAvailable } = useProviderAvailability()
   const [step, setStep] = useState<Step>('configure')
   const [toolPreference, setToolPreference] = useState<ToolPreference>('auto')
   const [countMode, setCountMode] = useState<CountMode>('auto')
@@ -175,19 +177,32 @@ export function SplitCardDialog({
             <div className="grid gap-4 py-2">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-sm text-muted-foreground">Tool:</span>
-                <div className="flex gap-2">
-                  {(['auto', 'claude', 'codex'] as const).map((t) => (
-                    <Button
-                      key={t}
-                      type="button"
-                      size="sm"
-                      variant={toolPreference === t ? 'default' : 'outline'}
-                      onClick={() => setToolPreference(t)}
-                      disabled={isGenerating || isCreating}
-                    >
-                      {t === 'auto' ? 'Auto' : t === 'claude' ? 'Claude' : 'Codex'}
-                    </Button>
-                  ))}
+                <div className="flex gap-2 flex-wrap">
+                  {(['auto', 'claude', 'codex', 'opencode'] as const).map((t) => {
+                    const isToolDisabled = t !== 'auto' && !isAvailable(t)
+                    const toolLabel =
+                      t === 'auto'
+                        ? 'Auto'
+                        : t === 'claude'
+                          ? 'Claude'
+                          : t === 'codex'
+                            ? 'Codex'
+                            : 'OpenCode'
+
+                    return (
+                      <Button
+                        key={t}
+                        type="button"
+                        size="sm"
+                        variant={toolPreference === t ? 'default' : 'outline'}
+                        onClick={() => setToolPreference(t)}
+                        disabled={isToolDisabled || isGenerating || isCreating}
+                        title={isToolDisabled ? `${toolLabel} CLI not installed` : undefined}
+                      >
+                        {toolLabel}
+                      </Button>
+                    )
+                  })}
                 </div>
               </div>
 

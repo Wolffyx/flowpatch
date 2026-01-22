@@ -57,6 +57,13 @@ export interface ProjectAPI {
   toggleWorker: (enabled: boolean) => Promise<void>
   runWorker: (cardId?: string) => Promise<void>
   cancelWorker: (jobId: string) => Promise<void>
+  resetWorkerState: () => Promise<{
+    success: boolean
+    canceledJobs: number
+    releasedSlots: number
+    deletedFailedJobs?: number
+    error?: string
+  }>
 
   getCardTestInfo: (
     projectId: string,
@@ -254,6 +261,9 @@ export interface ProjectAPI {
     cardId: string
   ) => Promise<{ dependencies: CardDependency[]; error?: string }>
   getDependenciesForCardWithCards: (
+    cardId: string
+  ) => Promise<{ dependencies: CardDependencyWithCard[]; error?: string }>
+  getDependentsOfCardWithCards: (
     cardId: string
   ) => Promise<{ dependencies: CardDependencyWithCard[]; error?: string }>
   getDependentsOfCard: (

@@ -4,13 +4,16 @@
  * Supports both central database (legacy) and project-local database.
  */
 
-import { and, asc, count, eq } from 'drizzle-orm'
+import { and, asc, count, eq, inArray } from 'drizzle-orm'
 import { getDrizzle } from './drizzle'
 import { workerSlots } from './schema'
 import { workerSlots as projectWorkerSlots } from './schema/project'
 import { generateId } from '@shared/utils'
 import type { WorkerSlot, WorkerSlotStatus } from '@shared/types'
 import { resolveProjectDb } from './db-resolver'
+import { getRunningJobs, cancelJob } from './jobs'
+import { jobs } from './schema'
+import { jobs as projectJobs } from './schema/project'
 
 export type { WorkerSlot, WorkerSlotStatus }
 
@@ -296,4 +299,91 @@ export function getRunningSlotCount(projectId: string): number {
     .where(and(eq(workerSlots.project_id, projectId), eq(workerSlots.status, 'running')))
     .get()
   return result?.count ?? 0
+}
+
+/**
+ * Reset worker state for a project.
+ * Cancels all running/queued worker jobs and releases all running slots.
+ * @param projectId - The project ID
+ * @returns Summary of canceled jobs and released slots
+ */
+export function resetWorkerState(projectId: string): { canceledJobs: number; releasedSlots: number } {
+  let canceledJobs = 0
+  let releasedSlots = 0
+
+  // Get all running jobs and filter for worker_run type
+  const runningJobs = getRunningJobs(projectId)
+  const workerJobs = runningJobs.filter((job) => job.type === 'worker_run')
+
+  // Also get queued worker jobs
+  const { db, isLocalDb } = resolveProjectDb(projectId)
+
+  let queuedWorkerJobs: typeof runningJobs = []
+  if (isLocalDb) {
+    queuedWorkerJobs = db
+      .select()
+      .from(projectJobs)
+      .where(and(eq(projectJobs.type, 'worker_run'), eq(projectJobs.state, 'queued')))
+      .all()
+  } else {
+    queuedWorkerJobs = db
+      .select()
+      .from(jobs)
+      .where(
+        and(
+          eq(jobs.project_id, projectId),
+          eq(jobs.type, 'worker_run'),
+          eq(jobs.state, 'queued')
+        )
+      )
+      .all()
+  }
+
+  // Cancel all worker jobs (running and queued)
+  const allWorkerJobs = [...workerJobs, ...queuedWorkerJobs]
+  for (const job of allWorkerJobs) {
+    if (cancelJob(job.id, 'Worker state reset', projectId)) {
+      canceledJobs++
+    }
+  }
+
+  // Get all running slots and release them
+  const allSlots = listWorkerSlots(projectId)
+  const runningSlots = allSlots.filter((slot) => slot.status === 'running')
+  for (const slot of runningSlots) {
+    const released = releaseWorkerSlot(slot.id, projectId)
+    if (released) {
+      releasedSlots++
+    }
+  }
+
+  // Delete all failed and canceled worker_run jobs to clear cooldowns
+  // This allows cards to be immediately retried after reset
+  let deletedFailedJobs = 0
+  if (isLocalDb) {
+    const result = db
+      .delete(projectJobs)
+      .where(
+        and(
+          eq(projectJobs.type, 'worker_run'),
+          inArray(projectJobs.state, ['failed', 'canceled'])
+        )
+      )
+      .run()
+    deletedFailedJobs = result.changes
+  } else {
+    const result = db
+      .delete(jobs)
+      .where(
+        and(
+          eq(jobs.project_id, projectId),
+          eq(jobs.type, 'worker_run'),
+          inArray(jobs.state, ['failed', 'canceled'])
+        )
+      )
+      .run()
+    deletedFailedJobs = result.changes
+  }
+
+  return { canceledJobs, releasedSlots, deletedFailedJobs }
 }

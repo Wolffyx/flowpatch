@@ -4,7 +4,13 @@
  * Handles card status transitions with remote synchronization.
  */
 
-import { getCard, updateCardStatus, createEvent, ensureCardLink } from '../../db'
+import {
+  getCard,
+  updateCardStatus,
+  createEvent,
+  ensureCardLink,
+  deleteFailedWorkerRunJobsForCard
+} from '../../db'
 import { broadcastToRenderers } from '../../ipc/broadcast'
 import { WorkerCanceledError } from '../errors'
 import type { IRepoAdapter } from '../../adapters'
@@ -65,7 +71,7 @@ export class CardStatusManager {
    * Move card to In Progress status.
    */
   async moveToInProgress(): Promise<void> {
-    updateCardStatus(this.ctx.cardId, 'in_progress')
+    updateCardStatus(this.ctx.cardId, 'in_progress', this.ctx.projectId)
     createEvent(this.ctx.projectId, 'status_changed', this.ctx.cardId, {
       from: this.ctx.card?.status,
       to: 'in_progress',
@@ -94,7 +100,7 @@ export class CardStatusManager {
     if (!current) return
     if (current.status === 'testing') return
 
-    updateCardStatus(this.ctx.cardId, 'testing')
+    updateCardStatus(this.ctx.cardId, 'testing', this.ctx.projectId)
     createEvent(this.ctx.projectId, 'status_changed', this.ctx.cardId, {
       from: current.status,
       to: 'testing',
@@ -120,11 +126,14 @@ export class CardStatusManager {
    * Move card to Ready status.
    */
   async moveToReady(reason: string): Promise<void> {
+    // Delete failed and canceled worker_run jobs to allow immediate retry
+    deleteFailedWorkerRunJobsForCard(this.ctx.cardId, this.ctx.projectId)
+
     const current = getCard(this.ctx.cardId)
     if (!current) return
     if (current.status === 'ready') return
 
-    updateCardStatus(this.ctx.cardId, 'ready')
+    updateCardStatus(this.ctx.cardId, 'ready', this.ctx.projectId)
     createEvent(this.ctx.projectId, 'status_changed', this.ctx.cardId, {
       from: current.status,
       to: 'ready',
@@ -143,17 +152,19 @@ export class CardStatusManager {
         allLabels.filter((l) => l !== newLabel)
       )
     }
+
+    broadcastToRenderers('card-updated', { cardId: this.ctx.cardId })
   }
 
   /**
    * Move card to In Review status and link PR.
    */
   async moveToInReview(prUrl: string, created = true): Promise<void> {
-    updateCardStatus(this.ctx.cardId, 'in_review')
+    updateCardStatus(this.ctx.cardId, 'in_review', this.ctx.projectId)
 
     // Create card link
     const linkedType = this.ctx.adapter?.providerKey === 'github' ? 'pr' : 'mr'
-    ensureCardLink(this.ctx.cardId, linkedType, prUrl)
+    ensureCardLink(this.ctx.cardId, linkedType, prUrl, undefined, undefined, this.ctx.projectId)
 
     createEvent(this.ctx.projectId, 'pr_created', this.ctx.cardId, {
       prUrl,
