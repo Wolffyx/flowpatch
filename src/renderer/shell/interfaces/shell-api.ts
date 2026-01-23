@@ -4,7 +4,7 @@
  * Global type definitions for the shell renderer's IPC API
  */
 
-import type { Project, Job } from '@shared/types'
+import type { Project, Job, ProjectWorkerStatus, WorkerStatus, WorkerError } from '@shared/types'
 import type { TabState, TabManagerState } from './tab'
 import type { LogEntry } from './log'
 
@@ -53,6 +53,18 @@ declare global {
           lastUpdated: string
         }) => void
       ) => () => void
+
+      // Worker Status (unified)
+      getWorkerStatus: (projectId: string) => Promise<ProjectWorkerStatus | null>
+      onWorkerStatusChanged: (
+        callback: (data: { projectId: string; status: WorkerStatus }) => void
+      ) => () => void
+      clearWorkerErrorStatus: (projectId: string) => Promise<boolean>
+      getWorkerErrorHistory: (projectId: string) => Promise<WorkerError[]>
+      clearWorkerErrorHistory: (projectId: string) => Promise<boolean>
+      retryLastFailedCard: (
+        projectId: string
+      ) => Promise<{ success: boolean; cardId?: string; error?: string }>
 
       // Jobs (Activity feed)
       getRecentJobs: (limit?: number) => Promise<Job[]>

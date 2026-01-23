@@ -69,11 +69,10 @@ export default function App(): React.JSX.Element {
   } = useShellProjects(setShowHome, loadTabs)
 
   // Activity
-  const { activity, recentJobs, projectWorkerStatus, loadActivity, loadRecentJobs } =
-    useShellActivity(loadProjects)
+  const { activity, recentJobs, loadActivity, loadRecentJobs } = useShellActivity(loadProjects)
 
-  // Worker status
-  const { tabsWithStatus } = useWorkerStatus(projects, recentJobs, projectWorkerStatus, tabs)
+  // Worker status (uses unified status from main process)
+  const { tabsWithStatus } = useWorkerStatus(projects, tabs)
 
   // Auto-updater (initializes toast notifications for updates)
   useAutoUpdater()

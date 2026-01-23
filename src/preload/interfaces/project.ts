@@ -10,7 +10,10 @@ import type {
   PlanningMode,
   PolicyConfig,
   Project,
-  WorkerLogMessage
+  ProjectWorkerStatus,
+  WorkerError,
+  WorkerLogMessage,
+  WorkerStatus
 } from '../../shared/types'
 import type { Card } from '../../shared/types'
 
@@ -64,6 +67,18 @@ export interface ProjectAPI {
     deletedFailedJobs?: number
     error?: string
   }>
+
+  // Unified worker status
+  getWorkerStatus: (projectId: string) => Promise<ProjectWorkerStatus | null>
+  onWorkerStatusChanged: (
+    callback: (data: { projectId: string; status: WorkerStatus }) => void
+  ) => () => void
+  clearWorkerErrorStatus: (projectId: string) => Promise<boolean>
+  getWorkerErrorHistory: (projectId: string) => Promise<WorkerError[]>
+  clearWorkerErrorHistory: (projectId: string) => Promise<boolean>
+  retryLastFailedCard: (
+    projectId: string
+  ) => Promise<{ success: boolean; cardId?: string; error?: string }>
 
   getCardTestInfo: (
     projectId: string,

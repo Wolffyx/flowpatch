@@ -88,6 +88,43 @@ const projectAPI: ProjectAPI = {
 
   resetWorkerState: () => ipcRenderer.invoke('project:resetWorkerState'),
 
+  // Unified worker status
+  getWorkerStatus: () => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) return Promise.resolve(null)
+    return ipcRenderer.invoke('worker:getStatus', projectId)
+  },
+
+  onWorkerStatusChanged: (callback) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      data: { projectId: string; status: unknown }
+    ) => {
+      // Only forward events for the current project
+      if (lastProjectInfo?.projectId === data.projectId) {
+        callback(data as { projectId: string; status: import('../shared/types').WorkerStatus })
+      }
+    }
+    ipcRenderer.on('worker:statusChanged', handler)
+    return () => ipcRenderer.removeListener('worker:statusChanged', handler)
+  },
+
+  clearWorkerErrorStatus: (projectId) => {
+    return ipcRenderer.invoke('worker:clearErrorStatus', projectId)
+  },
+
+  getWorkerErrorHistory: (projectId) => {
+    return ipcRenderer.invoke('worker:getErrorHistory', projectId)
+  },
+
+  clearWorkerErrorHistory: (projectId) => {
+    return ipcRenderer.invoke('worker:clearErrorHistory', projectId)
+  },
+
+  retryLastFailedCard: (projectId) => {
+    return ipcRenderer.invoke('worker:retryLastFailed', projectId)
+  },
+
   getCardTestInfo: (projectId, id) =>
     ipcRenderer.invoke('getCardTestInfo', { projectId, cardId: id }),
 

@@ -125,15 +125,18 @@ export class CardStatusManager {
 
   /**
    * Move card to Ready status.
+   * Critical local operations are done first (must succeed).
+   * Remote label sync is fire-and-forget (can fail without blocking).
    */
   async moveToReady(reason: string): Promise<void> {
-    // Delete failed and canceled worker_run jobs to allow immediate retry
+    // CRITICAL: Delete failed jobs first to allow immediate retry
     deleteFailedWorkerRunJobsForCard(this.ctx.cardId, this.ctx.projectId)
 
     const current = getCard(this.ctx.cardId)
     if (!current) return
     if (current.status === 'ready') return
 
+    // CRITICAL: Update local DB (must succeed)
     updateCardStatus(this.ctx.cardId, 'ready', this.ctx.projectId)
     createEvent(this.ctx.projectId, 'status_changed', this.ctx.cardId, {
       from: current.status,
@@ -142,22 +145,33 @@ export class CardStatusManager {
       reason
     })
 
-    // Update remote if adapter available
-    if (this.ctx.adapter && this.ctx.card?.remote_number_or_iid) {
-      const issueNumber = parseInt(this.ctx.card.remote_number_or_iid, 10)
-      const newLabel = this.ctx.adapter.getStatusLabel('ready')
-      const allLabels = this.ctx.adapter.getAllStatusLabels()
-      await this.ctx.adapter.updateLabels(
-        issueNumber,
-        [newLabel],
-        allLabels.filter((l) => l !== newLabel)
-      )
-    }
-
+    // CRITICAL: Notify UI immediately
     broadcastToRenderers('card-updated', { cardId: this.ctx.cardId })
 
     // Wake up worker pool for immediate pickup (within ~500ms)
     wakeUpWorkerLoop(this.ctx.projectId)
+
+    // NON-CRITICAL: Update remote labels asynchronously (fire-and-forget)
+    this.updateRemoteLabelsAsync('ready')
+  }
+
+  /**
+   * Update remote labels asynchronously. Fire-and-forget - failures are logged but don't block.
+   */
+  private updateRemoteLabelsAsync(status: CardStatus): void {
+    if (!this.ctx.adapter || !this.ctx.card?.remote_number_or_iid) return
+
+    const issueNumber = parseInt(this.ctx.card.remote_number_or_iid, 10)
+    const newLabel = this.ctx.adapter.getStatusLabel(status)
+    const allLabels = this.ctx.adapter.getAllStatusLabels()
+
+    this.ctx.adapter
+      .updateLabels(issueNumber, [newLabel], allLabels.filter((l) => l !== newLabel))
+      .catch((err) => {
+        console.warn(
+          `[CardStatusManager] Remote label update to '${status}' failed (non-critical): ${err}`
+        )
+      })
   }
 
   /**

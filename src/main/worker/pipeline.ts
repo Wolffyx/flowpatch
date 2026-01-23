@@ -10,6 +10,7 @@ import type { IRepoAdapter } from '../adapters'
 import {
   getProject,
   getCard,
+  updateCardStatus,
   updateCardConflictStatus,
   createEvent,
   updateJobState,
@@ -57,6 +58,9 @@ import { WorkerCanceledError, WorkerPendingApprovalError, PipelineTimeoutError }
 // Sync scheduler and locks
 import { triggerProjectSync } from '../sync/scheduler'
 import { acquireWorkerLock, releaseWorkerLock } from '../sync/sync-lock'
+
+// Unified status store
+import { setWorkerStatus } from './worker-status-store'
 
 /**
  * Main worker pipeline class.
@@ -122,6 +126,59 @@ export class WorkerPipeline {
   private setPhase(phase: string): void {
     this.logManager.setPhase(phase)
     this.persistRunCheckpoint()
+    this.updateUnifiedStatus(phase)
+  }
+
+  /**
+   * Update the unified worker status store based on the current phase.
+   */
+  private updateUnifiedStatus(phase: string): void {
+    // Map pipeline phases to unified worker states
+    let state: 'idle' | 'queued' | 'processing' | 'testing' | 'pushing' | 'paused' | 'failed' | 'succeeded'
+
+    switch (phase) {
+      case 'init':
+      case 'working_tree':
+      case 'fetch':
+      case 'branch':
+      case 'branch_sync':
+      case 'decomposition':
+      case 'plan':
+      case 'install':
+      case 'ai':
+      case 'checks':
+      case 'in_progress':
+        state = 'processing'
+        break
+      case 'e2e':
+        state = 'testing'
+        break
+      case 'push':
+      case 'pr':
+        state = 'pushing'
+        break
+      case 'pending_approval':
+        state = 'paused'
+        break
+      case 'done':
+      case 'in_review':
+        state = 'succeeded'
+        break
+      case 'canceled':
+      case 'timeout':
+        state = 'failed'
+        break
+      default:
+        state = 'processing'
+    }
+
+    setWorkerStatus(this.projectId, {
+      state,
+      activeCardId: this.cardId,
+      activeCardTitle: this.card?.title,
+      activeJobId: this.jobId ?? undefined,
+      currentPhase: phase
+    })
   }
 
   private persistRunCheckpoint(iteration?: number): void {
@@ -657,18 +714,31 @@ export class WorkerPipeline {
       }
 
       if (outcome === 'failed') {
-        try {
-          const current = getCard(this.cardId)
-          if (current?.status === 'in_progress') {
-            this.log('Worker failed; moving card back to Ready so it can be retried.')
-            await this.cardStatusManager?.moveToReady('worker_failed')
-          }
-        } catch (error) {
-          this.log(
-            `Failed to move card back to Ready after error: ${error instanceof Error ? error.message : String(error)}`
-          )
-        }
+        await this.recoverCardStatus()
       }
+
+      // Update unified status based on final outcome
+      if (outcome === 'succeeded') {
+        setWorkerStatus(this.projectId, {
+          state: 'succeeded',
+          lastRunAt: new Date().toISOString(),
+          activeCardId: undefined,
+          activeCardTitle: undefined,
+          activeJobId: undefined,
+          currentPhase: undefined
+        })
+      } else if (outcome === 'failed' || outcome === 'canceled') {
+        setWorkerStatus(this.projectId, {
+          state: 'failed',
+          lastRunAt: new Date().toISOString(),
+          lastError: outcome === 'canceled' ? 'Canceled' : 'Worker failed',
+          activeCardId: undefined,
+          activeCardTitle: undefined,
+          activeJobId: undefined,
+          currentPhase: undefined
+        })
+      }
+      // pending_approval keeps the paused state set by setPhase
 
       // Release worker lock to allow sync operations
       releaseWorkerLock(this.projectId)
@@ -765,6 +835,50 @@ export class WorkerPipeline {
       () => this.lifecycleManager!.ensureNotCanceled(),
       (iteration) => this.persistRunCheckpoint(iteration)
     )
+  }
+
+  // ==================== Recovery ====================
+
+  /**
+   * Recover card status after a failed worker run.
+   * Uses retry logic with exponential backoff, then falls back to local-only update.
+   */
+  private async recoverCardStatus(): Promise<void> {
+    let recovered = false
+
+    // Try up to 3 times with exponential backoff
+    for (let attempt = 1; attempt <= 3 && !recovered; attempt++) {
+      try {
+        const current = getCard(this.cardId)
+        if (current?.status === 'in_progress' || current?.status === 'testing') {
+          this.log(`Worker failed; moving card back to Ready (attempt ${attempt}/3)`)
+          await this.cardStatusManager?.moveToReady('worker_failed')
+          recovered = true
+        } else {
+          // Card is already in a safe state (e.g., user moved it)
+          recovered = true
+        }
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error)
+        this.log(`Recovery attempt ${attempt}/3 failed: ${errorMsg}`)
+        if (attempt < 3) {
+          // Exponential backoff: 1s, 2s
+          await new Promise((r) => setTimeout(r, 1000 * attempt))
+        }
+      }
+    }
+
+    // Final fallback: update local DB directly (skip remote sync)
+    if (!recovered) {
+      try {
+        updateCardStatus(this.cardId, 'ready', this.projectId)
+        broadcastToRenderers('card-updated', { cardId: this.cardId })
+        this.log('Fallback: Updated local card status to ready (skipped remote sync)')
+      } catch (dbError) {
+        const errorMsg = dbError instanceof Error ? dbError.message : String(dbError)
+        this.log(`CRITICAL: Card ${this.cardId} may be stuck in processing state: ${errorMsg}`)
+      }
+    }
   }
 
   // ==================== Context Builder ====================

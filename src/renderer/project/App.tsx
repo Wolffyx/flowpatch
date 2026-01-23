@@ -31,6 +31,7 @@ import { FeatureSuggestionsDialog } from '../src/components/FeatureSuggestionsDi
 import { GraphViewDialog } from '../src/components/GraphViewDialog'
 import { SplitCardDialog } from '../src/components/SplitCardDialog'
 import { MigrationPromptDialog } from '../src/components/MigrationPromptDialog'
+import { WorkerErrorHistoryDialog } from '../src/components/WorkerErrorHistoryDialog'
 import { useAudioNotifications } from '../src/hooks/useAudioNotifications'
 import { useDevServerStatus } from '../src/hooks/useDevServerStatus'
 import { Button } from '../src/components/ui/button'
@@ -56,8 +57,9 @@ import {
   Lightbulb,
   Network,
   Send,
-  Database,
-  RotateCcw
+  RotateCcw,
+  X,
+  History
 } from 'lucide-react'
 import { cn } from '../src/lib/utils'
 import {
@@ -78,8 +80,16 @@ import type {
   Provider,
   FlowPatchWorkspaceStatus,
   FollowUpInstructionType,
-  PlanApproval
+  PlanApproval,
+  WorkerError,
+  WorkerStatus
 } from '@shared/types'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger
+} from '../src/components/ui/tooltip'
 
 // All projectAPI types are now imported from preload/index.d.ts
 // This avoids duplicate type declarations
@@ -136,6 +146,13 @@ export default function App(): React.JSX.Element {
     counts: Record<string, number>
   }>({ needed: false, showPrompt: false, counts: {} })
   const [isMigrating, setIsMigrating] = useState(false)
+
+  // Unified worker status from main process
+  const [unifiedWorkerStatus, setUnifiedWorkerStatus] = useState<WorkerStatus | null>(null)
+
+  // Error history dialog state
+  const [errorHistoryOpen, setErrorHistoryOpen] = useState(false)
+  const [errorHistory, setErrorHistory] = useState<WorkerError[]>([])
 
   // Audio notifications - read config from project policy
   const notificationsConfig = useMemo(() => {
@@ -269,7 +286,14 @@ export default function App(): React.JSX.Element {
     [cards, linkedPrIndex, showPullRequestsSection]
   )
 
-  // Worker status calculations
+  // Worker status from unified status store
+  const isWorkerProcessing = unifiedWorkerStatus
+    ? ['processing', 'testing', 'pushing', 'queued', 'paused'].includes(unifiedWorkerStatus.state)
+    : false
+  const hasWorkerError = unifiedWorkerStatus?.state === 'failed'
+  const readyCards = cards.filter((c) => c.status === 'ready')
+
+  // For logs dialog and follow-up instructions, we still need the job reference
   const workerJobs = jobs.filter((j) => j.type === 'worker_run')
   const activeWorkerJob = workerJobs.find((j) => j.state === 'running' || j.state === 'queued')
   const latestWorkerJob =
@@ -280,8 +304,6 @@ export default function App(): React.JSX.Element {
           const jobTime = job.updated_at || job.created_at
           return jobTime > latestTime ? job : latest
         })
-  const hasWorkerError = latestWorkerJob?.state === 'failed'
-  const readyCards = cards.filter((c) => c.status === 'ready')
   // Prefer override job if set, otherwise use active/latest
   const overrideJob = logsJobOverrideId ? jobs.find((j) => j.id === logsJobOverrideId) : null
   const jobForLogs = overrideJob || activeWorkerJob || latestWorkerJob
@@ -328,6 +350,34 @@ export default function App(): React.JSX.Element {
 
     void loadCardEvents()
   }, [selectedCardId])
+
+  // Listen for unified worker status changes
+  useEffect(() => {
+    if (!projectInfo) return
+
+    // Load initial status
+    window.projectAPI.getWorkerStatus(projectInfo.projectId).then((status) => {
+      if (status) {
+        setUnifiedWorkerStatus(status.status)
+      }
+    })
+
+    // Subscribe to changes
+    const unsubscribe = window.projectAPI.onWorkerStatusChanged((data) => {
+      if (data.projectId === projectInfo.projectId) {
+        setUnifiedWorkerStatus(data.status)
+      }
+    })
+
+    return unsubscribe
+  }, [projectInfo])
+
+  // Load error history when dialog opens
+  useEffect(() => {
+    if (errorHistoryOpen && projectInfo) {
+      window.projectAPI.getWorkerErrorHistory(projectInfo.projectId).then(setErrorHistory)
+    }
+  }, [errorHistoryOpen, projectInfo])
 
   // Listen for project opened event
   useEffect(() => {
@@ -608,12 +658,17 @@ export default function App(): React.JSX.Element {
 
     try {
       await window.projectAPI.moveCard(cardId, status)
+
+      // Auto-clear error status when any card is moved to Ready
+      if (status === 'ready' && hasWorkerError && projectInfo) {
+        await window.projectAPI.clearWorkerErrorStatus(projectInfo.projectId)
+      }
     } catch (error) {
       console.error('Failed to move card:', error)
       // Reload to get correct state (use refreshData to avoid flash)
       refreshData()
     }
-  }, [refreshData])
+  }, [refreshData, hasWorkerError, projectInfo])
 
   const remoteProvider: Provider | null = project?.remote_repo_key
     ? project.remote_repo_key.startsWith('github:')
@@ -871,33 +926,84 @@ export default function App(): React.JSX.Element {
             <Switch checked={workerEnabled} onCheckedChange={handleToggleWorker} />
             {workerEnabled && (
               <>
-                <Badge
-                  variant={activeWorkerJob ? 'secondary' : hasWorkerError ? 'destructive' : 'default'}
-                  className="ml-1"
-                >
-                  {activeWorkerJob ? (
-                    <>
-                      <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                      Processing...
-                    </>
-                  ) : hasWorkerError ? (
-                    <>
-                      <AlertCircle className="h-3 w-3 mr-1" />
-                      Error
-                    </>
-                  ) : readyCards.length > 0 ? (
-                    <>
-                      <Play className="h-3 w-3 mr-1" />
-                      {readyCards.length} ready
-                    </>
-                  ) : (
-                    <>
-                      <Pause className="h-3 w-3 mr-1" />
-                      Idle
-                    </>
-                  )}
-                </Badge>
-                {(activeWorkerJob || workerJobs.some((j) => j.state === 'running' || j.state === 'queued')) && (
+                {hasWorkerError ? (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Badge variant="destructive" className="ml-1 cursor-help">
+                          <AlertCircle className="h-3 w-3 mr-1" />
+                          Error
+                        </Badge>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom" className="max-w-xs">
+                        <p className="font-medium">Worker Error</p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {unifiedWorkerStatus?.lastError || 'Unknown error'}
+                        </p>
+                        {unifiedWorkerStatus?.activeCardTitle && (
+                          <p className="text-xs mt-1">Card: {unifiedWorkerStatus.activeCardTitle}</p>
+                        )}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                ) : (
+                  <Badge
+                    variant={isWorkerProcessing ? 'secondary' : 'default'}
+                    className="ml-1"
+                  >
+                    {isWorkerProcessing ? (
+                      <>
+                        <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                        {unifiedWorkerStatus?.state === 'paused' ? 'Paused' : 'Processing...'}
+                      </>
+                    ) : readyCards.length > 0 ? (
+                      <>
+                        <Play className="h-3 w-3 mr-1" />
+                        {readyCards.length} ready
+                      </>
+                    ) : (
+                      <>
+                        <Pause className="h-3 w-3 mr-1" />
+                        Idle
+                      </>
+                    )}
+                  </Badge>
+                )}
+                {hasWorkerError && (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2 ml-1"
+                      onClick={async () => {
+                        if (!projectInfo) return
+                        const result = await window.projectAPI.retryLastFailedCard(projectInfo.projectId)
+                        if (result.success) {
+                          toast.success('Retrying card...')
+                        } else {
+                          toast.error(result.error || 'Failed to retry')
+                        }
+                      }}
+                      title="Retry last failed card"
+                    >
+                      <RotateCcw className="h-3 w-3" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2"
+                      onClick={() => {
+                        if (projectInfo) {
+                          window.projectAPI.clearWorkerErrorStatus(projectInfo.projectId)
+                        }
+                      }}
+                      title="Clear error status"
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </>
+                )}
+                {isWorkerProcessing && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -998,6 +1104,21 @@ export default function App(): React.JSX.Element {
           >
             <Terminal className="mr-2 h-4 w-4" />
             Logs
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setErrorHistoryOpen(true)}
+            title="View error history"
+          >
+            <History className="mr-2 h-4 w-4" />
+            Errors
+            {(unifiedWorkerStatus?.errorHistory?.length ?? 0) > 0 && (
+              <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-xs">
+                {unifiedWorkerStatus?.errorHistory?.length}
+              </Badge>
+            )}
           </Button>
 
           <Button
@@ -1120,6 +1241,18 @@ export default function App(): React.JSX.Element {
         card={cardForLogs}
         liveLogs={jobForLogs ? (workerLogsByJobId[jobForLogs.id] ?? []) : []}
         onClearLogs={clearWorkerLogs}
+      />
+
+      <WorkerErrorHistoryDialog
+        open={errorHistoryOpen}
+        onOpenChange={setErrorHistoryOpen}
+        errors={errorHistory}
+        onClearHistory={async () => {
+          if (projectInfo) {
+            await window.projectAPI.clearWorkerErrorHistory(projectInfo.projectId)
+            setErrorHistory([])
+          }
+        }}
       />
 
       <FollowUpInstructionDialog

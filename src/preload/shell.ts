@@ -60,6 +60,18 @@ export interface ShellAPI {
   getRecentJobs: (limit?: number) => Promise<import('../shared/types').Job[]>
   onStateUpdated: (callback: () => void) => () => void
 
+  // Unified Worker Status
+  getWorkerStatus: (projectId: string) => Promise<ProjectWorkerStatus | null>
+  onWorkerStatusChanged: (
+    callback: (data: { projectId: string; status: WorkerStatus }) => void
+  ) => () => void
+  clearWorkerErrorStatus: (projectId: string) => Promise<boolean>
+  getWorkerErrorHistory: (projectId: string) => Promise<WorkerError[]>
+  clearWorkerErrorHistory: (projectId: string) => Promise<boolean>
+  retryLastFailedCard: (
+    projectId: string
+  ) => Promise<{ success: boolean; cardId?: string; error?: string }>
+
   // Logs
   getLogs: (projectKey?: string) => Promise<LogEntry[]>
   getRecentLogs: (count: number) => Promise<LogEntry[]>
@@ -227,6 +239,45 @@ interface UpdateStatus {
   error?: string
 }
 
+// Worker Status types (unified)
+type WorkerState =
+  | 'idle'
+  | 'queued'
+  | 'processing'
+  | 'testing'
+  | 'pushing'
+  | 'paused'
+  | 'failed'
+  | 'succeeded'
+
+interface WorkerError {
+  error: string
+  cardId?: string
+  cardTitle?: string
+  jobId?: string
+  phase?: string
+  timestamp: string
+}
+
+interface WorkerStatus {
+  state: WorkerState
+  activeCardId?: string
+  activeCardTitle?: string
+  activeJobId?: string
+  currentPhase?: string
+  lastError?: string
+  lastFailedCardId?: string
+  lastRunAt?: string
+  updatedAt: string
+  errorHistory?: WorkerError[]
+}
+
+interface ProjectWorkerStatus {
+  projectId: string
+  workerEnabled: boolean
+  status: WorkerStatus
+}
+
 // ============================================================================
 // Shell API Implementation
 // ============================================================================
@@ -390,6 +441,45 @@ const shellAPI: ShellAPI = {
     return () => {
       ipcRenderer.removeListener('stateUpdated', handler)
     }
+  },
+
+  // -------------------------------------------------------------------------
+  // Unified Worker Status
+  // -------------------------------------------------------------------------
+
+  getWorkerStatus: (projectId: string) => {
+    return ipcRenderer.invoke('worker:getStatus', projectId)
+  },
+
+  onWorkerStatusChanged: (
+    callback: (data: { projectId: string; status: WorkerStatus }) => void
+  ) => {
+    const handler = (
+      _event: IpcRendererEvent,
+      data: { projectId: string; status: WorkerStatus }
+    ) => {
+      callback(data)
+    }
+    ipcRenderer.on('worker:statusChanged', handler)
+    return () => {
+      ipcRenderer.removeListener('worker:statusChanged', handler)
+    }
+  },
+
+  clearWorkerErrorStatus: (projectId: string) => {
+    return ipcRenderer.invoke('worker:clearErrorStatus', projectId)
+  },
+
+  getWorkerErrorHistory: (projectId: string) => {
+    return ipcRenderer.invoke('worker:getErrorHistory', projectId)
+  },
+
+  clearWorkerErrorHistory: (projectId: string) => {
+    return ipcRenderer.invoke('worker:clearErrorHistory', projectId)
+  },
+
+  retryLastFailedCard: (projectId: string) => {
+    return ipcRenderer.invoke('worker:retryLastFailed', projectId)
   },
 
   // -------------------------------------------------------------------------

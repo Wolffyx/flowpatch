@@ -17,9 +17,18 @@ import {
 import { getWorktreeByCard } from '../../db/worktrees'
 import { runWorker as executeWorkerPipeline } from '../../worker/pipeline'
 import { startWorkerLoop, stopWorkerLoop } from '../../worker/loop'
+import {
+  getWorkerStatus,
+  clearErrorStatus,
+  getErrorHistory,
+  clearErrorHistory
+} from '../../worker/worker-status-store'
+import { wakeUpWorkerLoop } from '../../worker/loop'
+import { updateCardStatus } from '../../db'
 import { parsePolicyJson, logAction } from '@shared/utils'
 import { verifySecureRequest } from '../../security'
 import { generateWorktreeBranchName } from '@shared/types'
+import type { ProjectWorkerStatus, WorkerError } from '@shared/types'
 import { checkBranchExists } from '../../worker/git-operations'
 import { detectProjectType } from '../../services/project-type-detector'
 import { devServerManager } from '../../services/dev-server-manager'
@@ -367,4 +376,85 @@ export function registerWorkerHandlers(notifyRenderer: () => void): void {
       output: status.output.slice(-100) // Last 100 lines
     }
   })
+
+  // Get unified worker status for a project
+  ipcMain.handle(
+    'worker:getStatus',
+    (event, projectId: string): ProjectWorkerStatus | null => {
+      const securityError = verifyWorkerRequest(event, 'worker:getStatus')
+      if (securityError) {
+        return null
+      }
+
+      const project = getProject(projectId)
+      if (!project) return null
+
+      return {
+        projectId,
+        workerEnabled: project.worker_enabled === 1,
+        status: getWorkerStatus(projectId)
+      }
+    }
+  )
+
+  // Clear error status back to idle
+  ipcMain.handle('worker:clearErrorStatus', (event, projectId: string): boolean => {
+    const securityError = verifyWorkerRequest(event, 'worker:clearErrorStatus')
+    if (securityError) return false
+
+    clearErrorStatus(projectId)
+    return true
+  })
+
+  // Get error history for a project
+  ipcMain.handle('worker:getErrorHistory', (event, projectId: string): WorkerError[] => {
+    const securityError = verifyWorkerRequest(event, 'worker:getErrorHistory')
+    if (securityError) return []
+
+    return getErrorHistory(projectId)
+  })
+
+  // Clear error history for a project
+  ipcMain.handle('worker:clearErrorHistory', (event, projectId: string): boolean => {
+    const securityError = verifyWorkerRequest(event, 'worker:clearErrorHistory')
+    if (securityError) return false
+
+    clearErrorHistory(projectId)
+    return true
+  })
+
+  // Retry last failed card
+  ipcMain.handle(
+    'worker:retryLastFailed',
+    async (
+      event,
+      projectId: string
+    ): Promise<{ success: boolean; cardId?: string; error?: string }> => {
+      const securityError = verifyWorkerRequest(event, 'worker:retryLastFailed')
+      if (securityError) return { success: false, error: 'Security error' }
+
+      const status = getWorkerStatus(projectId)
+      if (!status.lastFailedCardId) {
+        return { success: false, error: 'No failed card to retry' }
+      }
+
+      const card = getCard(status.lastFailedCardId)
+      if (!card) {
+        return { success: false, error: 'Card not found' }
+      }
+
+      // Clear error status first
+      clearErrorStatus(projectId)
+
+      // Move card to ready if not already
+      if (card.status !== 'ready') {
+        updateCardStatus(card.id, 'ready', projectId)
+      }
+
+      // Wake up worker to process
+      wakeUpWorkerLoop(projectId)
+
+      return { success: true, cardId: card.id }
+    }
+  )
 }
