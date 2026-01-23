@@ -13,6 +13,7 @@ import {
 } from '../../db'
 import { broadcastToRenderers } from '../../ipc/broadcast'
 import { WorkerCanceledError } from '../errors'
+import { wakeUpWorkerLoop } from '../loop'
 import type { IRepoAdapter } from '../../adapters'
 import type { Card, CardStatus } from '../../../shared/types'
 
@@ -154,6 +155,9 @@ export class CardStatusManager {
     }
 
     broadcastToRenderers('card-updated', { cardId: this.ctx.cardId })
+
+    // Wake up worker pool for immediate pickup (within ~500ms)
+    wakeUpWorkerLoop(this.ctx.projectId)
   }
 
   /**

@@ -116,7 +116,7 @@ export class ApprovalManager {
       phase: 'pending_approval',
       plan,
       logs: this.ctx.logs.slice(-500)
-    })
+    }, undefined, this.ctx.projectId)
 
     // Broadcast the update
     broadcastToRenderers('stateUpdated')

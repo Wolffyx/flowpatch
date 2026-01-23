@@ -63,7 +63,7 @@ export class LifecycleManager {
     
     // Start lease renewal
     this.leaseInterval = setInterval(() => {
-      renewJobLease(this.jobId)
+      renewJobLease(this.jobId, 300, this.projectId)
     }, this.leaseRenewalMs)
     
     // Set up pipeline timeout
@@ -92,7 +92,7 @@ export class LifecycleManager {
    * Get current job state.
    */
   private getJobState(): string | null {
-    const job = getJob(this.jobId)
+    const job = getJob(this.jobId, this.projectId)
     return job?.state ?? null
   }
   
@@ -115,7 +115,7 @@ export class LifecycleManager {
     }
     
     // Check if card was moved away from 'ready' status
-    const currentCard = getCard(this.cardId)
+    const currentCard = getCard(this.cardId, this.projectId)
     if (currentCard && currentCard.status !== 'ready' && currentCard.status !== 'in_progress' && currentCard.status !== 'testing') {
       // Cancel job if card is no longer in an active worker state
       this.cancelJobInternal(`Card status changed to ${currentCard.status}`)
@@ -130,7 +130,7 @@ export class LifecycleManager {
    */
   private cancelJobInternal(reason?: string): void {
     if (this.isCanceled()) return
-    cancelJob(this.jobId, reason ?? 'Canceled')
+    cancelJob(this.jobId, reason ?? 'Canceled', this.projectId)
   }
   
   /**

@@ -48,6 +48,8 @@ export interface ShellAPI {
   getProjectSettings: (projectKey: string) => Promise<Record<string, string | null>>
   setProjectOverride: (projectKey: string, patch: Record<string, string | null>) => Promise<void>
   clearProjectOverrides: (projectKey: string, keys?: string[]) => Promise<void>
+  getStoragePreference: (projectId: string) => Promise<{ useLocalDb: boolean }>
+  setStoragePreference: (projectId: string, useLocalDb: boolean) => Promise<{ success: boolean }>
 
   // Activity
   getActivity: () => Promise<GlobalActivity>
@@ -344,6 +346,14 @@ const shellAPI: ShellAPI = {
     return ipcRenderer.invoke('settings:clearProjectOverride', { projectKey, keys })
   },
 
+  getStoragePreference: (projectId: string) => {
+    return ipcRenderer.invoke('settings:getStoragePreference', projectId)
+  },
+
+  setStoragePreference: (projectId: string, useLocalDb: boolean) => {
+    return ipcRenderer.invoke('settings:setStoragePreference', projectId, useLocalDb)
+  },
+
   // -------------------------------------------------------------------------
   // Activity
   // -------------------------------------------------------------------------
@@ -603,7 +613,11 @@ const allowedInvokeChannels = [
   // Provider availability
   'providers:getAvailability',
   // Project identity (for remote selection)
-  'shell:getProjectIdentity'
+  'shell:getProjectIdentity',
+  // Migration
+  'getMigrationStatus',
+  'getCentralDataCounts',
+  'migrateProjectToLocal'
 ]
 
 const electronAPI = {

@@ -794,26 +794,29 @@ export class WorkerPipeline {
 // ==================== Public API ====================
 
 export async function runWorker(jobId: string): Promise<WorkerResult> {
+  // First getJob call without projectId - searches all DBs
   const job = getJob(jobId)
   if (!job) {
     return { success: false, phase: 'init', error: 'Job not found' }
   }
 
+  const projectId = job.project_id
+
   if (!job.card_id) {
     return { success: false, phase: 'init', error: 'No card specified' }
   }
 
-  if (!acquireJobLease(jobId)) {
+  if (!acquireJobLease(jobId, 300, projectId)) {
     return { success: false, phase: 'init', error: 'Failed to acquire job lease' }
   }
   broadcastToRenderers('stateUpdated')
 
-  const pipeline = new WorkerPipeline(job.project_id, job.card_id)
+  const pipeline = new WorkerPipeline(projectId, job.card_id)
   let result: WorkerResult
   try {
     result = await pipeline.run(jobId)
   } catch (error) {
-    const finalState = getJob(jobId)?.state
+    const finalState = getJob(jobId, projectId)?.state
     const message = error instanceof Error ? error.message : String(error)
     const canceled = error instanceof WorkerCanceledError || finalState === 'canceled'
 
@@ -823,25 +826,25 @@ export async function runWorker(jobId: string): Promise<WorkerResult> {
       error: message
     }
 
-    updateJobState(jobId, canceled ? 'canceled' : 'failed', result, message)
+    updateJobState(jobId, canceled ? 'canceled' : 'failed', result, message, projectId)
     broadcastToRenderers('stateUpdated')
     return result
   }
 
   // Update job state
-  const finalState = getJob(jobId)?.state
+  const finalState = getJob(jobId, projectId)?.state
   if (result.phase === 'canceled' || finalState === 'canceled') {
-    updateJobState(jobId, 'canceled', result, result.error)
+    updateJobState(jobId, 'canceled', result, result.error, projectId)
     deletePlanApprovalsByJob(jobId)
     deleteFollowUpInstructionsByJob(jobId)
   } else if (result.phase === 'pending_approval' || finalState === 'pending_approval') {
     // Job is waiting for plan approval - don't update state
   } else if (result.success) {
-    updateJobState(jobId, 'succeeded', result)
+    updateJobState(jobId, 'succeeded', result, undefined, projectId)
     deletePlanApprovalsByJob(jobId)
     deleteFollowUpInstructionsByJob(jobId)
   } else {
-    updateJobState(jobId, 'failed', result, result.error)
+    updateJobState(jobId, 'failed', result, result.error, projectId)
     deletePlanApprovalsByJob(jobId)
     deleteFollowUpInstructionsByJob(jobId)
   }
@@ -849,7 +852,7 @@ export async function runWorker(jobId: string): Promise<WorkerResult> {
 
   // Trigger sync after job completion (success or failure)
   // This will be debounced by the scheduler
-  const completedJob = getJob(jobId)
+  const completedJob = getJob(jobId, projectId)
   if (completedJob?.project_id) {
     triggerProjectSync(completedJob.project_id)
   }
@@ -861,10 +864,13 @@ export async function runWorker(jobId: string): Promise<WorkerResult> {
  * Resume a worker job after plan approval.
  */
 export async function resumeWorkerAfterApproval(jobId: string): Promise<WorkerResult> {
+  // First getJob call without projectId - searches all DBs
   const job = getJob(jobId)
   if (!job) {
     return { success: false, phase: 'init', error: 'Job not found' }
   }
+
+  const projectId = job.project_id
 
   if (job.state !== 'pending_approval') {
     return { success: false, phase: 'init', error: 'Job is not pending approval' }
@@ -884,7 +890,8 @@ export async function resumeWorkerAfterApproval(jobId: string): Promise<WorkerRe
       jobId,
       'canceled',
       { success: false, phase: 'canceled', error: 'Plan rejected' },
-      'Plan rejected by reviewer'
+      'Plan rejected by reviewer',
+      projectId
     )
     deletePlanApprovalsByJob(jobId)
     deleteFollowUpInstructionsByJob(jobId)
@@ -893,7 +900,7 @@ export async function resumeWorkerAfterApproval(jobId: string): Promise<WorkerRe
   }
 
   // Plan is approved or skipped - resume
-  updateJobState(jobId, 'running', { success: false, phase: 'ai', plan: approval.plan })
+  updateJobState(jobId, 'running', { success: false, phase: 'ai', plan: approval.plan }, undefined, projectId)
   broadcastToRenderers('stateUpdated')
 
   return runWorker(jobId)

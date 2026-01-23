@@ -988,38 +988,6 @@ export default function App(): React.JSX.Element {
             Workspace
           </Button>
 
-          {/* DEBUG: Show migration state */}
-          {process.env.NODE_ENV === 'development' && (
-            <Badge variant="outline" className="text-xs">
-              Mig: {migrationState.needed ? 'Y' : 'N'}
-            </Badge>
-          )}
-
-          {migrationState.needed && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleMigrate}
-              disabled={isMigrating}
-              title={migrationState.counts && Object.values(migrationState.counts).some(c => c > 0) 
-                ? `Migrate ${Object.values(migrationState.counts).reduce((sum, c) => sum + c, 0)} records to local storage`
-                : 'Migrate project to local storage'}
-            >
-              {isMigrating ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Migrating...
-                </>
-              ) : (
-                <>
-                  <Database className="mr-2 h-4 w-4" />
-                  {Object.values(migrationState.counts || {}).reduce((sum, c) => sum + c, 0) > 0
-                    ? 'Migrate to Local'
-                    : 'Migrate'}
-                </>
-              )}
-            </Button>
-          )}
 
           <Button
             variant="outline"

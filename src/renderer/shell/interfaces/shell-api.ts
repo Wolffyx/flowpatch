@@ -71,6 +71,9 @@ declare global {
         projectKey: string,
         patch: Record<string, string | null>
       ) => Promise<void>
+      clearProjectOverrides: (projectKey: string, keys?: string[]) => Promise<void>
+      getStoragePreference: (projectId: string) => Promise<{ useLocalDb: boolean }>
+      setStoragePreference: (projectId: string, useLocalDb: boolean) => Promise<{ success: boolean }>
 
       // Shortcuts
       getShortcuts: () => Promise<import('@shared/shortcuts').ShortcutBinding[]>

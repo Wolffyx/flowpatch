@@ -13,12 +13,14 @@
 
 import { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { getDrizzle } from './drizzle'
-import { getProjectDrizzle, hasProjectDb, getProjectDbPath } from './project-db'
+import { getProjectDrizzle, hasProjectDb, getProjectDbPath, initProjectDb } from './project-db'
 import { eq } from 'drizzle-orm'
 import * as schema from './schema'
 import * as projectSchema from './schema/project'
 import { logAction } from '@shared/utils'
 import { existsSync } from 'fs'
+import { getResolvedBool } from '../settingsStore'
+import { hasDataInCentralDb, migrateProjectToLocalDb } from './migration/project-migration'
 
 // Cache for project paths to avoid repeated lookups
 const projectPathCache = new Map<string, string>()
@@ -86,8 +88,12 @@ export interface ResolvedDb {
 /**
  * Resolve which database to use for a project.
  *
- * Returns the project-local database if the project is migrated,
- * otherwise returns the central database.
+ * Checks the storage.useLocalDb setting first:
+ * - If true: Uses project-local DB (creates it if needed)
+ * - If false: Always uses central DB
+ *
+ * For backward compatibility, if no setting is found and project DB exists,
+ * uses project-local DB (migrated projects).
  */
 export function resolveProjectDb(projectId: string): ResolvedDb {
   const projectPath = getProjectPath(projectId)
@@ -98,7 +104,7 @@ export function resolveProjectDb(projectId: string): ResolvedDb {
     cached: projectPathCache.has(projectId)
   })
 
-  // If project not found or not migrated, use central DB
+  // If project not found, use central DB
   if (!projectPath) {
     logAction('resolveProjectDb:no_path', {
       projectId,
@@ -111,6 +117,29 @@ export function resolveProjectDb(projectId: string): ResolvedDb {
     }
   }
 
+  // Check storage preference setting
+  const useLocalDb = getResolvedBool(projectId, 'storage.useLocalDb')
+  
+  logAction('resolveProjectDb:setting_check', {
+    projectId,
+    useLocalDb,
+    projectPath
+  })
+
+  // If setting says to use central DB, always use central DB
+  if (!useLocalDb) {
+    logAction('resolveProjectDb:using_central_by_setting', {
+      projectId,
+      reason: 'storage.useLocalDb setting is false'
+    })
+    return {
+      db: getDrizzle(),
+      isLocalDb: false,
+      projectPath: null
+    }
+  }
+
+  // Setting says to use local DB - check if it exists
   const dbPath = getProjectDbPath(projectPath)
   const dbExists = hasProjectDb(projectPath)
   const fileSystemExists = existsSync(dbPath)
@@ -124,18 +153,65 @@ export function resolveProjectDb(projectId: string): ResolvedDb {
     mismatch: dbExists !== fileSystemExists
   })
 
+  // If project DB doesn't exist but setting says to use local DB, create it automatically
   if (!dbExists) {
-    logAction('resolveProjectDb:no_db', {
+    // Check if central DB has data for this project that needs to be migrated
+    const hasCentralData = hasDataInCentralDb(projectId)
+
+    logAction('resolveProjectDb:auto_creating_db', {
       projectId,
       projectPath,
       dbPath,
-      reason: 'Project DB file does not exist',
-      fileSystemExists
+      hasCentralData,
+      reason: 'storage.useLocalDb is true but project DB does not exist - creating automatically'
     })
-    return {
-      db: getDrizzle(),
-      isLocalDb: false,
-      projectPath: null
+
+    if (hasCentralData) {
+      // Auto-migrate data from central DB to project DB
+      // This ensures cards are NEVER lost during storage transition
+      logAction('resolveProjectDb:auto_migrating', {
+        projectId,
+        projectPath,
+        reason: 'Central DB has data for this project - auto-migrating to preserve data'
+      })
+
+      const migrationResult = migrateProjectToLocalDb(projectId, projectPath)
+
+      logAction('resolveProjectDb:migration_complete', {
+        projectId,
+        projectPath,
+        success: migrationResult.success,
+        tablesMigrated: migrationResult.tablesMigrated,
+        recordsCopied: migrationResult.recordsCopied,
+        errors: migrationResult.errors,
+        warnings: migrationResult.warnings
+      })
+
+      if (!migrationResult.success) {
+        // Migration failed - fall back to central DB to preserve data
+        logAction('resolveProjectDb:migration_failed_fallback', {
+          projectId,
+          projectPath,
+          errors: migrationResult.errors,
+          reason: 'Migration failed - falling back to central DB to preserve data access'
+        })
+        return {
+          db: getDrizzle(),
+          isLocalDb: false,
+          projectPath: null
+        }
+      }
+    } else {
+      // No existing data - safe to create empty project DB
+      // Cards will be synced from remote
+      initProjectDb(projectPath)
+
+      logAction('resolveProjectDb:db_created', {
+        projectId,
+        projectPath,
+        dbPath,
+        note: 'No central data - created empty project DB'
+      })
     }
   }
 

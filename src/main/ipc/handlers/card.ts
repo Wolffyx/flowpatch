@@ -23,6 +23,7 @@ import {
 } from '../../db'
 import { SyncEngine } from '../../sync/engine'
 import { triggerProjectSync } from '../../sync/scheduler'
+import { wakeUpWorkerLoop } from '../../worker/loop'
 import { AdapterRegistry, isGithubAdapter } from '../../adapters'
 import type { IGithubAdapter } from '../../adapters'
 import {
@@ -428,6 +429,11 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
               reason: `moved_to_${payload.status}`
             })
           }
+        }
+
+        // Wake up worker pool for instant pickup when card moves to Ready
+        if (payload.status === 'ready') {
+          wakeUpWorkerLoop(card.project_id)
         }
 
         // Queue async remote sync in background (fire-and-forget for fast UI response)

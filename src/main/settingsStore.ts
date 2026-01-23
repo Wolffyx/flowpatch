@@ -45,6 +45,9 @@ export const APP_DEFAULTS: Record<string, string> = {
   'worker.planFirst': 'true',
   'worker.enableTestMode': 'false',
 
+  // Storage settings
+  'storage.useLocalDb': 'true',
+
   // UI settings
   'ui.showPullRequestsSection': 'false',
   'ui.logsMaxLines': '500',

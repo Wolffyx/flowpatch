@@ -327,20 +327,30 @@ export class WorkerPool {
   /**
    * Wake up the pool immediately for fast polling.
    * Call this when external events indicate new cards may be available.
+   * Includes a small delay (500ms) to allow DB writes to settle before polling.
    */
   wakeUp(): void {
-    if (this.isShuttingDown || !this.pollTimeout) return
+    if (this.isShuttingDown) return
 
     // Reset to fast polling
     this.consecutiveEmptyPolls = 0
     this.currentPollInterval = this.minPollInterval
 
-    // Clear existing timeout and poll immediately
-    clearTimeout(this.pollTimeout)
-    this.pollTimeout = null
+    // Clear existing timeout
+    if (this.pollTimeout) {
+      clearTimeout(this.pollTimeout)
+      this.pollTimeout = null
+    }
 
     logAction('workerPool:wakeUp', { projectId: this.projectId })
-    this.poll()
+
+    // Poll after a small delay to let DB writes settle
+    // This ensures the card status change is committed before we query
+    setTimeout(() => {
+      if (!this.isShuttingDown) {
+        this.poll()
+      }
+    }, 500)
   }
 
   /**
@@ -530,7 +540,7 @@ export class WorkerPool {
         jobId: job.id,
         status: 'running',
         startedAt: new Date().toISOString()
-      })
+      }, this.projectId)
 
       createEvent(this.projectId, 'worker_run', cardId, {
         jobId: job.id,
@@ -568,7 +578,7 @@ export class WorkerPool {
       })
     } finally {
       // Release slot
-      releaseWorkerSlot(slotId)
+      releaseWorkerSlot(slotId, this.projectId)
       broadcastToRenderers('stateUpdated')
     }
   }
