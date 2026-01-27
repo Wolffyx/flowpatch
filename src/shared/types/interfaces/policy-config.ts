@@ -91,6 +91,14 @@ export interface PolicyConfig {
     e2e?: E2ETestConfig
     unitTest?: UnitTestConfig
     preCommit?: PreCommitConfig
+    manualTest?: {
+      /** Show notification prompting user to test after AI phase completes */
+      autoPromptAfterAI?: boolean
+      /** Keep worktree alive for manual testing (overrides cleanup policy) */
+      keepWorktreeForManualTest?: boolean
+      /** Default location for testing: worktree (isolated) or mainRepo */
+      defaultTestLocation?: 'worktree' | 'mainRepo'
+    }
   }
 }
 

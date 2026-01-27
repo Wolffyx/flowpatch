@@ -12,6 +12,7 @@
  */
 
 import { spawn, execFile, execFileSync } from 'child_process'
+import { existsSync } from 'fs'
 
 // Cancellation polling configuration
 const DEFAULT_CANCEL_POLL_INTERVAL_MS = 500
@@ -68,16 +69,20 @@ function detectNodeJsWrapper(cmdPath: string): ResolvedCommand | null {
       return null
     }
 
+    // Validate that the script path exists before proceeding
+    if (!existsSync(scriptPath)) {
+      return null // Fall back to cmd.exe wrapper execution
+    }
+
     const localNodePath = `${cmdDir}node.exe`
     let nodeExePath: string
 
-    try {
-      execFileSync('cmd.exe', ['/c', 'if', 'exist', localNodePath, 'echo', 'exists'], {
-        windowsHide: true
-      })
+    // Use synchronous file check instead of cmd.exe (more reliable on Windows)
+    if (existsSync(localNodePath)) {
       nodeExePath = localNodePath
-    } catch {
-      nodeExePath = 'node'
+    } else {
+      // Use the running Node.js executable
+      nodeExePath = process.execPath
     }
 
     return {

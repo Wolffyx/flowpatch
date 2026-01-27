@@ -8,7 +8,9 @@ import type {
   PlanningMode,
   MergeStrategy,
   ConflictResolution,
-  AIModelProvider
+  AIModelProvider,
+  AppType,
+  TestPersistence
 } from '@shared/types'
 
 // Section types
@@ -50,6 +52,11 @@ export interface E2ESettings {
   timeoutMinutes: number
   createTestsIfMissing: boolean
   testCommand: string
+  appType: AppType
+  testPersistence: TestPersistence
+  devServerCommand: string
+  devServerPort: number | null
+  baseUrl: string
 }
 
 export interface UnitTestSettings {
@@ -82,6 +89,23 @@ export interface WorkerPipelineSettings {
   pipelineTimeoutMs: number
   maxRetries: number
   retryDelayMs: number
+}
+
+export interface ManualTestSettings {
+  autoPromptAfterAI: boolean
+  keepWorktreeForManualTest: boolean
+  defaultTestLocation: 'worktree' | 'mainRepo'
+}
+
+export type ProviderSwitchMode = 'automatic' | 'approval' | 'disabled'
+export type ExhaustedBehavior = 'pause_and_wait' | 'fail_immediately' | 'queue_for_later'
+
+export interface ProviderSwitchSettings {
+  mode: ProviderSwitchMode
+  exhaustedBehavior: ExhaustedBehavior
+  retryIntervalMinutes: number
+  maxWaitMinutes: number
+  notifyOnSwitch: boolean
 }
 
 export interface ToolLimitsState {

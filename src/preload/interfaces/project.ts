@@ -13,7 +13,11 @@ import type {
   ProjectWorkerStatus,
   WorkerError,
   WorkerLogMessage,
-  WorkerStatus
+  WorkerStatus,
+  ManualTestInfo,
+  TestLocation,
+  PrepareTestEnvironmentResult,
+  ManualTestPromptData
 } from '../../shared/types'
 import type { Card } from '../../shared/types'
 
@@ -80,19 +84,13 @@ export interface ProjectAPI {
     projectId: string
   ) => Promise<{ success: boolean; cardId?: string; error?: string }>
 
-  getCardTestInfo: (
-    projectId: string,
+  getCardTestInfo: (projectId: string, cardId: string) => Promise<ManualTestInfo | { error: string }>
+  prepareTestEnvironment: (params: {
+    projectId: string
     cardId: string
-  ) => Promise<{
-    success: boolean
-    hasWorktree?: boolean
-    worktreePath?: string
-    branchName?: string | null
-    repoPath?: string
-    projectType?: { type: string; hasPackageJson: boolean; port?: number }
-    commands?: { install?: string; dev?: string; build?: string }
-    error?: string
-  }>
+    location: TestLocation
+  }) => Promise<PrepareTestEnvironmentResult>
+  onManualTestPrompt: (callback: (data: ManualTestPromptData) => void) => () => void
   startDevServer: (params: {
     projectId: string
     cardId: string

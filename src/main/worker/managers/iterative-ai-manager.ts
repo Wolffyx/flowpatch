@@ -33,6 +33,7 @@ export type LogFn = (message: string) => void
 export type AIRunnerFn = (prompt: string) => Promise<boolean>
 export type CancelCheckFn = () => void
 export type CheckpointFn = (iteration?: number) => void
+type IterationMode = 'implement' | 'verify_and_continue'
 
 /**
  * Manages iterative AI execution with progress tracking and checkpointing.
@@ -149,11 +150,6 @@ export class IterativeAIManager {
           )
         }
         
-        if (await this.isIterationComplete()) {
-          log(`Task completed after iteration ${i}`)
-          break
-        }
-        
         if (contextCarryover !== 'none') {
           contextSummary = await this.generateContextSummary(
             contextCarryover,
@@ -199,6 +195,13 @@ export class IterativeAIManager {
   // ==================== Private Methods ====================
   
   /**
+   * Get iteration mode based on iteration number.
+   */
+  private getIterationMode(iteration: number): IterationMode {
+    return iteration <= 1 ? 'implement' : 'verify_and_continue'
+  }
+  
+  /**
    * Build prompt for a specific iteration.
    */
   private async buildIterationPrompt(
@@ -211,17 +214,52 @@ export class IterativeAIManager {
   ): Promise<string> {
     const ctx = contextBuilder()
     const basePrompt = await buildAIPrompt(ctx, plan)
+    const iterationMode = this.getIterationMode(iteration)
     
     let iterationContext = `\n\n## Iteration Context
 This is iteration ${iteration} of ${maxIterations}.
 `
     
+    if (iterationMode === 'implement') {
+      iterationContext += `\n### Implementation Phase
+Focus on implementing the card requirements:
+- Work through the implementation plan
+- Make meaningful progress on the feature
+- Commit working chunks of code
+`
+    } else {
+      const cardTitle = this.card?.title ?? 'Unknown'
+      const cardBody = this.card?.body ?? 'No description provided.'
+      const lintCommand = this.policy.worker?.lintCommand ?? 'Not configured'
+      const testCommand = this.policy.worker?.testCommand ?? 'Not configured'
+      const buildCommand = this.policy.worker?.buildCommand ?? 'Not configured'
+      
+      iterationContext += `\n### Verification Phase
+Before continuing, evaluate if the card requirements are fully implemented:
+
+**Step 1: Check Card Requirements**
+Review the original card and verify all requirements are addressed:
+- Title: ${cardTitle}
+- Description: ${cardBody}
+
+**Step 2: Run Verification Commands**
+Execute these commands to ensure code quality:
+- Lint: ${lintCommand}
+- Test: ${testCommand}
+- Build: ${buildCommand}
+`
+    }
+    
     if (contextSummary) {
       iterationContext += `\n### Previous Progress
 ${contextSummary}
-
+`
+      
+      if (iterationMode === 'implement') {
+        iterationContext += `
 Continue from where you left off. Focus on the next logical step.
 `
+      }
     }
     
     if (this.subtasks.length > 0) {
@@ -238,12 +276,29 @@ Remaining subtasks: ${pendingSubtasks.length}
       }
     }
     
-    iterationContext += `\n### Iteration Guidelines
+    if (iterationMode === 'verify_and_continue') {
+      iterationContext += `\n### Next Steps
+- If requirements are NOT fully met: Continue implementing the remaining features
+- If requirements ARE met but verification fails: Fix the issues
+- If everything passes: Focus on code quality, edge cases, and cleanup
+`
+    }
+    
+    if (iterationMode === 'implement') {
+      iterationContext += `\n### Iteration Guidelines
 - Focus on making incremental progress
 - Commit meaningful chunks of work
 - Leave the codebase in a working state
 - If you complete the current subtask, move to the next one
 `
+    } else {
+      iterationContext += `\n### Iteration Guidelines
+- Prioritize completing unfinished requirements
+- Ensure all verification commands pass
+- Leave the codebase in a stable state
+- Continue implementation if gaps remain
+`
+    }
     
     // Add follow-up context
     const followUpContext = approvalManager?.buildFollowUpContext() ?? ''
@@ -297,16 +352,6 @@ Card: #${this.card?.remote_number_or_iid} ${this.card?.title}`
     } catch (error) {
       log(`Checkpoint warning: ${error instanceof Error ? error.message : String(error)}`)
     }
-  }
-  
-  /**
-   * Check if all iterations are complete.
-   */
-  private async isIterationComplete(): Promise<boolean> {
-    if (this.subtasks.length > 0) {
-      return this.subtasks.every((s) => s.status === 'completed')
-    }
-    return false
   }
   
   /**

@@ -9,7 +9,9 @@ import {
   ChevronUp,
   Loader2,
   AlertCircle,
-  XCircle
+  XCircle,
+  GitBranch,
+  FolderGit2
 } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { ScrollArea } from './ui/scroll-area'
@@ -17,17 +19,9 @@ import { Button } from './ui/button'
 import { Badge } from './ui/badge'
 import { cn } from '../lib/utils'
 import { toast } from 'sonner'
+import type { ManualTestInfo, TestLocation } from '@shared/types'
 
-interface TestInfo {
-  success: boolean
-  hasWorktree?: boolean
-  worktreePath?: string
-  branchName?: string | null
-  repoPath?: string
-  projectType?: { type: string; hasPackageJson: boolean; port?: number }
-  commands?: { install?: string; dev?: string; build?: string }
-  error?: string
-}
+interface TestInfo extends ManualTestInfo {}
 
 interface TestModificationsDialogProps {
   open: boolean
@@ -54,6 +48,16 @@ export function TestModificationsDialog({
   const [showCommands, setShowCommands] = useState(true)
   const [showLogs, setShowLogs] = useState(false)
   const [followLogs, setFollowLogs] = useState(true)
+
+  // Test environment state
+  const [testLocation, setTestLocation] = useState<TestLocation>('worktree')
+  const [isPreparing, setIsPreparing] = useState(false)
+  const [localTestInfo, setLocalTestInfo] = useState<TestInfo | null>(testInfo)
+
+  // Sync localTestInfo with testInfo prop
+  useEffect(() => {
+    setLocalTestInfo(testInfo)
+  }, [testInfo])
 
   const endRef = useRef<HTMLDivElement | null>(null)
 
@@ -144,26 +148,69 @@ export function TestModificationsDialog({
   }, [open, serverStatus, port])
 
   const handleStart = async (): Promise<void> => {
-    if (!testInfo || !testInfo.commands?.dev) {
+    const info = localTestInfo
+    if (!info || !info.commands?.dev) {
       toast.error('No dev command available')
       return
     }
 
     setError(null)
-    setServerStatus('starting')
     setOutput([])
 
     try {
-      // Parse command - handle cases like "npm run dev" or "yarn dev"
-      const devCommand = testInfo.commands.dev || ''
-      const parts = devCommand.trim().split(/\s+/)
-      const command = parts[0] || 'npm'
-      const args = parts.slice(1)
-      const workingDir = testInfo.worktreePath || testInfo.repoPath || ''
+      let workingDir = info.worktreePath || info.repoPath || ''
+
+      // If no worktree but can recreate or checkout, prepare the environment first
+      if (!info.hasWorktree && (info.canRecreateWorktree || info.canCheckoutInMainRepo)) {
+        setIsPreparing(true)
+        toast.info(`Preparing test environment (${testLocation === 'worktree' ? 'creating worktree' : 'checking out branch'})...`)
+
+        const prepareResult = await window.projectAPI.prepareTestEnvironment({
+          projectId,
+          cardId,
+          location: testLocation
+        })
+
+        setIsPreparing(false)
+
+        if (!prepareResult.success) {
+          setError(prepareResult.error || 'Failed to prepare test environment')
+          toast.error(`Failed to prepare: ${prepareResult.error}`)
+          return
+        }
+
+        // Update local test info with new working directory
+        workingDir = prepareResult.workingDir || workingDir
+        setLocalTestInfo((prev) =>
+          prev
+            ? {
+                ...prev,
+                hasWorktree: prepareResult.location === 'worktree',
+                worktreePath: prepareResult.location === 'worktree' ? workingDir : prev.worktreePath
+              }
+            : null
+        )
+
+        toast.success(
+          prepareResult.wasRecreated
+            ? 'Worktree created successfully'
+            : testLocation === 'worktree'
+              ? 'Worktree ready'
+              : 'Branch checked out'
+        )
+      }
 
       if (!workingDir) {
         throw new Error('No working directory available')
       }
+
+      setServerStatus('starting')
+
+      // Parse command - handle cases like "npm run dev" or "yarn dev"
+      const devCommand = info.commands.dev || ''
+      const parts = devCommand.trim().split(/\s+/)
+      const command = parts[0] || 'npm'
+      const args = parts.slice(1)
 
       const result = await window.projectAPI.startDevServer({
         projectId,
@@ -187,6 +234,7 @@ export function TestModificationsDialog({
       const errorMsg = err instanceof Error ? err.message : 'Unknown error'
       setError(errorMsg)
       setServerStatus('error')
+      setIsPreparing(false)
       toast.error(`Failed to start dev server: ${errorMsg}`)
     }
   }
@@ -358,6 +406,72 @@ export function TestModificationsDialog({
             )}
           </div>
 
+          {/* Test Location Selection - show when worktree is not available but can be prepared */}
+          {!localTestInfo?.hasWorktree &&
+            (localTestInfo?.canRecreateWorktree || localTestInfo?.canCheckoutInMainRepo) && (
+              <div className="border rounded-lg p-3 space-y-3 bg-muted/30">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="h-4 w-4 text-amber-500" />
+                  <span className="text-sm font-medium">No worktree available</span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  The worktree for this branch has been cleaned up. Choose where to test:
+                </p>
+                <div className="space-y-2">
+                  {localTestInfo.canRecreateWorktree && (
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="testLocation"
+                        value="worktree"
+                        checked={testLocation === 'worktree'}
+                        onChange={() => setTestLocation('worktree')}
+                        className="h-4 w-4"
+                      />
+                      <div className="flex items-center gap-2">
+                        <FolderGit2 className="h-4 w-4" />
+                        <div>
+                          <div className="text-sm font-medium">Recreate worktree</div>
+                          <div className="text-xs text-muted-foreground">
+                            Isolated environment - keeps main repo clean
+                          </div>
+                        </div>
+                      </div>
+                    </label>
+                  )}
+                  {localTestInfo.canCheckoutInMainRepo && (
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="testLocation"
+                        value="mainRepo"
+                        checked={testLocation === 'mainRepo'}
+                        onChange={() => setTestLocation('mainRepo')}
+                        className="h-4 w-4"
+                      />
+                      <div className="flex items-center gap-2">
+                        <GitBranch className="h-4 w-4" />
+                        <div>
+                          <div className="text-sm font-medium">Checkout in main repo</div>
+                          <div className="text-xs text-muted-foreground">
+                            Switches the main repo to this branch
+                          </div>
+                        </div>
+                      </div>
+                    </label>
+                  )}
+                </div>
+                {localTestInfo.branchName && (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground pt-1">
+                    <GitBranch className="h-3 w-3" />
+                    <span>Branch: {localTestInfo.branchName}</span>
+                    {localTestInfo.branchExistsLocal && <Badge variant="outline">local</Badge>}
+                    {localTestInfo.branchExistsRemote && <Badge variant="outline">remote</Badge>}
+                  </div>
+                )}
+              </div>
+            )}
+
           {/* Commands Section */}
           {testInfo.commands && (
             <div className="border rounded-lg">
@@ -423,10 +537,23 @@ export function TestModificationsDialog({
                 <Square className="h-4 w-4 mr-2" />
                 Stop Server
               </Button>
+            ) : isPreparing ? (
+              <Button disabled>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Preparing Environment...
+              </Button>
             ) : (
-              <Button onClick={handleStart} disabled={!testInfo.commands?.dev}>
+              <Button
+                onClick={handleStart}
+                disabled={!testInfo.commands?.dev && !localTestInfo?.canRecreateWorktree}
+              >
                 <Play className="h-4 w-4 mr-2" />
-                Start Server
+                {!localTestInfo?.hasWorktree &&
+                (localTestInfo?.canRecreateWorktree || localTestInfo?.canCheckoutInMainRepo)
+                  ? testLocation === 'worktree'
+                    ? 'Create Worktree & Start'
+                    : 'Checkout & Start'
+                  : 'Start Server'}
               </Button>
             )}
             {port && (

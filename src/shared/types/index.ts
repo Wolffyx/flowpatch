@@ -25,10 +25,12 @@ export * from './interfaces/e2e-test'
 export * from './interfaces/unit-test'
 export * from './interfaces/pre-commit'
 export * from './interfaces/policy-config'
+export * from './interfaces/manual-test'
 export * from './interfaces/remote-info'
 export * from './interfaces/sync'
 export * from './interfaces/security'
 export * from './interfaces/provider-availability'
+export * from './interfaces/provider-switch'
 
 // IPC types (refactored from ipc.ts into modular interface files)
 export * from './interfaces/ipc-common'

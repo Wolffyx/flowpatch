@@ -128,6 +128,22 @@ const projectAPI: ProjectAPI = {
   getCardTestInfo: (projectId, id) =>
     ipcRenderer.invoke('getCardTestInfo', { projectId, cardId: id }),
 
+  prepareTestEnvironment: (params) => ipcRenderer.invoke('prepareTestEnvironment', params),
+
+  onManualTestPrompt: (callback) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      data: import('../shared/types').ManualTestPromptData
+    ) => {
+      // Only forward events for the current project
+      if (lastProjectInfo?.projectId === data.projectId) {
+        callback(data)
+      }
+    }
+    ipcRenderer.on('worker:manualTestPrompt', handler)
+    return () => ipcRenderer.removeListener('worker:manualTestPrompt', handler)
+  },
+
   startDevServer: (params) => ipcRenderer.invoke('startDevServer', params),
 
   stopDevServer: (id) => ipcRenderer.invoke('stopDevServer', { cardId: id }),
@@ -407,6 +423,7 @@ const allowedInvokeChannels = [
   'removeWorktree',
   'recreateWorktree',
   'getCardTestInfo',
+  'prepareTestEnvironment',
   'startDevServer',
   'stopDevServer',
   'getDevServerStatus',
@@ -433,7 +450,8 @@ const allowedOnChannels = [
   'dev-server:output',
   'dev-server:status',
   'dev-server:port',
-  'migration-progress'
+  'migration-progress',
+  'worker:manualTestPrompt'
 ]
 
 const electronAPI = {

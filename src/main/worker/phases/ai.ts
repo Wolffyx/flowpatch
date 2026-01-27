@@ -2,6 +2,7 @@
  * AI Phase
  *
  * Handles AI tool execution using the CLIProviderRegistry.
+ * Supports automatic provider switching with handoff when limits are hit mid-execution.
  */
 
 import { writeFileSync } from 'fs'
@@ -10,11 +11,19 @@ import {
   CLIProviderRegistry,
   type ICLIProvider,
   type CLIExecutionResult,
-  type LogFn as CLILogFn
+  type LogFn as CLILogFn,
+  sessions,
+  type HandoffContext
 } from '../../cli-providers'
 import { getWorkingDir, type PipelineContext, type LogFn } from './types'
 import { buildContextBundle, buildPromptContext } from '../../services/flowpatch-context'
 import { ensureRunDir } from '../../services/flowpatch-runs'
+import {
+  saveHandoffContext,
+  loadHandoffContext,
+  clearHandoffContext
+} from '../../services/provider-handoff'
+import { getModifiedFiles, getDiffStat } from '../git-operations'
 import {
   updateWorkerProgress,
   createUsageRecord,
@@ -23,7 +32,12 @@ import {
   getMonthlyUsage,
   getToolLimits
 } from '../../db'
-import type { ThinkingMode, AIToolType } from '../../../shared/types'
+import type {
+  ThinkingMode,
+  AIToolType,
+  ProviderSwitchConfig
+} from '../../../shared/types'
+import { DEFAULT_PROVIDER_SWITCH_CONFIG } from '../../../shared/types/interfaces/provider-switch'
 import { WorkerCanceledError } from '../process-runner'
 
 // ============================================================================
@@ -360,6 +374,183 @@ function recordAIUsage(
 }
 
 // ============================================================================
+// Provider Switching with Handoff
+// ============================================================================
+
+/**
+ * Get provider switch configuration from policy with defaults.
+ */
+function getProviderSwitchConfig(ctx: PipelineContext): ProviderSwitchConfig {
+  const config = ctx.policy.features?.providerSwitch
+  return {
+    ...DEFAULT_PROVIDER_SWITCH_CONFIG,
+    ...config
+  }
+}
+
+/**
+ * Enrich handoff context with git state (modified files and diff).
+ */
+async function enrichHandoffWithGitState(
+  handoff: HandoffContext,
+  workingDir: string,
+  baseRef: string
+): Promise<HandoffContext> {
+  try {
+    const filesModified = await getModifiedFiles(workingDir, baseRef)
+    const diffSummary = await getDiffStat(workingDir, baseRef)
+    return {
+      ...handoff,
+      filesModified,
+      diffSummary
+    }
+  } catch {
+    // If git operations fail, return handoff as-is
+    return handoff
+  }
+}
+
+/**
+ * Sleep for specified milliseconds.
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Handle the case when all providers are exhausted.
+ * Implements pause-and-wait, fail-immediately, or queue-for-later based on config.
+ */
+async function handleExhaustedProviders(
+  ctx: PipelineContext,
+  config: ProviderSwitchConfig,
+  originalPrompt: string,
+  log: LogFn,
+  isCanceled: () => boolean
+): Promise<boolean> {
+  if (config.exhaustedBehavior === 'fail_immediately') {
+    log('❌ All providers exhausted, failing immediately (configured behavior)')
+    return false
+  }
+
+  if (config.exhaustedBehavior === 'queue_for_later') {
+    log('📋 All providers exhausted, job will be retried later')
+    // Note: The job system will handle requeuing based on the return value
+    return false
+  }
+
+  // pause_and_wait behavior
+  const maxWaitMs = config.maxWaitMinutes * 60 * 1000
+  const retryIntervalMs = config.retryIntervalMinutes * 60 * 1000
+  const startWait = Date.now()
+
+  log(
+    `⏸️ All providers exhausted. Waiting up to ${config.maxWaitMinutes}m for limits to reset...`
+  )
+
+  while (Date.now() - startWait < maxWaitMs) {
+    if (isCanceled()) {
+      throw new WorkerCanceledError('Job canceled while waiting for provider availability')
+    }
+
+    // Wait for retry interval
+    await sleep(retryIntervalMs)
+
+    const elapsedMinutes = Math.round((Date.now() - startWait) / 60000)
+    log(`⏳ Waited ${elapsedMinutes}m, checking provider availability...`)
+
+    // Try to find an available provider
+    const { provider } = await CLIProviderRegistry.selectProvider(ctx.policy, checkLimitsExceeded)
+
+    if (provider) {
+      log(`✅ ${provider.metadata.displayName} is now available! Resuming...`)
+      // Return to main loop which will retry with the available provider
+      return runAI(ctx, originalPrompt, log, isCanceled)
+    }
+
+    log('⏸️ No providers available yet, continuing to wait...')
+  }
+
+  log(`❌ Max wait time (${config.maxWaitMinutes}m) exceeded, all providers still unavailable`)
+  return false
+}
+
+/**
+ * Try to execute with a provider and create handoff context on limit errors.
+ * Returns result, whether rate limited, and handoff context if applicable.
+ */
+async function tryProviderWithHandoff(
+  provider: ICLIProvider,
+  prompt: string,
+  timeoutMs: number,
+  workingDir: string,
+  log: LogFn,
+  isCanceled: () => boolean,
+  thinkingMode?: ThinkingMode,
+  thinkingBudget?: number
+): Promise<{
+  result: CLIExecutionResult
+  isRateLimited: boolean
+  handoffContext: HandoffContext | null
+}> {
+  // Create session for tracking
+  const session = sessions.create(provider.metadata.key)
+
+  try {
+    const result = await provider.execute({
+      prompt,
+      timeoutMs,
+      cwd: workingDir,
+      log: log as CLILogFn,
+      isCanceled,
+      thinkingMode: provider.capabilities.supportsThinking ? thinkingMode : undefined,
+      thinkingBudget
+    })
+
+    const isRateLimited =
+      !result.success && result.error ? provider.isRetryableLimitError(result.error) : false
+
+    // Create handoff context if rate limited
+    let handoffContext: HandoffContext | null = null
+    if (isRateLimited) {
+      handoffContext = sessions.serializeForHandoff(session.id, 'rate_limit')
+      if (handoffContext) {
+        handoffContext.originalPrompt = prompt
+      }
+    }
+
+    return { result, isRateLimited, handoffContext }
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error)
+    const isRateLimited = provider.isRetryableLimitError(errorMsg)
+
+    // Create handoff context on rate limit exception
+    let handoffContext: HandoffContext | null = null
+    if (isRateLimited) {
+      handoffContext = sessions.serializeForHandoff(session.id, 'rate_limit')
+      if (handoffContext) {
+        handoffContext.originalPrompt = prompt
+      }
+    }
+
+    return {
+      result: {
+        success: false,
+        error: errorMsg,
+        inputTokens: 0,
+        outputTokens: 0,
+        durationMs: Date.now() - session.startedAt,
+        outputLength: 0
+      },
+      isRateLimited,
+      handoffContext
+    }
+  } finally {
+    sessions.close(session.id)
+  }
+}
+
+// ============================================================================
 // Main Entry Point
 // ============================================================================
 
@@ -397,6 +588,7 @@ async function tryProvider(
 /**
  * Run AI implementation using the provider registry.
  * Automatically tries fallback providers when rate limits are hit.
+ * Supports mid-execution handoff with context preservation.
  */
 export async function runAI(
   ctx: PipelineContext,
@@ -409,9 +601,28 @@ export async function runAI(
   const maxMinutes = ctx.policy.worker?.maxMinutes || 25
   const timeoutMs = maxMinutes * 60 * 1000
   const workingDir = getWorkingDir(ctx)
+  const repoRoot = ctx.project.local_path
+  const switchConfig = getProviderSwitchConfig(ctx)
 
-  // Build the prompt once (reused across providers)
-  const prompt = await buildAIPrompt(ctx, plan)
+  // Check for existing handoff context (resuming from previous provider)
+  let activeHandoff: HandoffContext | null = null
+  if (ctx.jobId) {
+    activeHandoff = loadHandoffContext(repoRoot, ctx.jobId)
+    if (activeHandoff) {
+      log(`📋 Found handoff context from ${activeHandoff.fromProvider}, continuing work...`)
+    }
+  }
+
+  // Build the prompt (or use continuation prompt if resuming)
+  let currentPrompt: string
+  if (activeHandoff) {
+    currentPrompt = sessions.buildContinuationPrompt(activeHandoff)
+  } else {
+    currentPrompt = await buildAIPrompt(ctx, plan)
+  }
+
+  // Store original prompt for handoff
+  const originalPrompt = await buildAIPrompt(ctx, plan)
 
   // Get thinking mode configuration from policy
   const thinkingConfig = ctx.policy.features?.thinking
@@ -424,13 +635,30 @@ export async function runAI(
   // Track which provider keys hit rate limits (for fallback selection)
   const rateLimitedProviderKeys = new Set<string>()
 
+  // If resuming, mark the previous provider as already tried
+  if (activeHandoff) {
+    triedProviderKeys.add(activeHandoff.fromProvider)
+    rateLimitedProviderKeys.add(activeHandoff.fromProvider)
+  }
+
   // Use registry to select initial provider
   const { provider: initialProvider, fallbackUsed, reason } = await CLIProviderRegistry.selectProvider(
     ctx.policy,
-    checkLimitsExceeded
+    (toolType) => {
+      // Skip providers we've already tried in this session
+      const provider = CLIProviderRegistry.get(toolType)
+      if (provider && triedProviderKeys.has(provider.metadata.key)) {
+        return { exceeded: true, reason: 'Already tried' }
+      }
+      return checkLimitsExceeded(toolType)
+    }
   )
 
   if (!initialProvider) {
+    // Check if we should wait for providers
+    if (switchConfig.mode !== 'disabled' && switchConfig.exhaustedBehavior === 'pause_and_wait') {
+      return handleExhaustedProviders(ctx, switchConfig, originalPrompt, log, isCanceled)
+    }
     log(`❌ No AI tool available: ${reason}`)
     await createStubPlan(ctx, plan, workingDir, reason || 'No AI tool available')
     return false
@@ -455,9 +683,10 @@ export async function runAI(
     try {
       log(`🤖 Running ${currentProvider.metadata.displayName} with ${maxMinutes} minute timeout`)
 
-      const { result, isRateLimited } = await tryProvider(
+      // Use the handoff-aware execution
+      const { result, isRateLimited, handoffContext } = await tryProviderWithHandoff(
         currentProvider,
-        prompt,
+        currentPrompt,
         timeoutMs,
         workingDir,
         log,
@@ -467,8 +696,11 @@ export async function runAI(
       )
 
       if (result.success) {
-        // Success! Record usage and return
+        // Success! Record usage, clear any handoff, and return
         recordAIUsage(ctx, currentProvider, result, log)
+        if (ctx.jobId) {
+          clearHandoffContext(repoRoot, ctx.jobId)
+        }
         log('✅ AI implementation completed')
         return true
       }
@@ -478,15 +710,40 @@ export async function runAI(
 
       if (isRateLimited) {
         rateLimitedProviderKeys.add(currentProvider.metadata.key)
-        log(`⚠️ ${currentProvider.metadata.displayName} rate limited: ${lastError}`)
+        log(`⚠️ ${currentProvider.metadata.displayName} hit limit: ${lastError}`)
+
+        // Check if provider switching is enabled
+        if (switchConfig.mode === 'disabled') {
+          log('❌ Provider switching is disabled')
+          currentProvider = null
+          continue
+        }
+
+        // Save handoff context for continuation
+        if (handoffContext && ctx.jobId) {
+          const enrichedHandoff = await enrichHandoffWithGitState(
+            { ...handoffContext, originalPrompt },
+            workingDir,
+            ctx.progress?.baseHeadSha ?? 'HEAD~10'
+          )
+          saveHandoffContext(repoRoot, ctx.jobId, enrichedHandoff)
+          log(`💾 Saved handoff context for continuation`)
+
+          if (switchConfig.notifyOnSwitch) {
+            log(`🔔 Provider ${currentProvider.metadata.displayName} hit limit, switching...`)
+          }
+        }
 
         // Try to find another provider
         const { provider: nextProvider } = await CLIProviderRegistry.selectProvider(
           { ...ctx.policy, worker: { ...ctx.policy.worker, toolPreference: 'auto' } },
           (toolType) => {
-            // Check if this toolType's provider was already tried or rate limited
             const provider = CLIProviderRegistry.get(toolType)
-            if (provider && (triedProviderKeys.has(provider.metadata.key) || rateLimitedProviderKeys.has(provider.metadata.key))) {
+            if (
+              provider &&
+              (triedProviderKeys.has(provider.metadata.key) ||
+                rateLimitedProviderKeys.has(provider.metadata.key))
+            ) {
               return { exceeded: true, reason: 'Already tried or rate limited' }
             }
             return checkLimitsExceeded(toolType)
@@ -494,13 +751,27 @@ export async function runAI(
         )
 
         if (nextProvider && !triedProviderKeys.has(nextProvider.metadata.key)) {
-          log(`↪️ Falling back to ${nextProvider.metadata.displayName}...`)
+          log(`↪️ Switching to ${nextProvider.metadata.displayName}...`)
+
+          // Build continuation prompt from handoff
+          if (handoffContext) {
+            const enrichedHandoff = await enrichHandoffWithGitState(
+              { ...handoffContext, originalPrompt },
+              workingDir,
+              ctx.progress?.baseHeadSha ?? 'HEAD~10'
+            )
+            currentPrompt = sessions.buildContinuationPrompt(enrichedHandoff)
+          }
+
           currentProvider = nextProvider
           continue
         }
 
-        // No more providers to try
-        log(`❌ All available AI providers have been exhausted`)
+        // No more providers to try - check exhausted behavior
+        log(`⚠️ All available AI providers have been exhausted`)
+        if (switchConfig.exhaustedBehavior === 'pause_and_wait') {
+          return handleExhaustedProviders(ctx, switchConfig, originalPrompt, log, isCanceled)
+        }
         currentProvider = null
       } else {
         // Non-rate-limit error - don't try other providers for this type of failure
@@ -521,12 +792,22 @@ export async function runAI(
       if (currentProvider && currentProvider.isRetryableLimitError(lastError)) {
         if (providerKey) rateLimitedProviderKeys.add(providerKey)
 
+        // Check if provider switching is enabled
+        if (switchConfig.mode === 'disabled') {
+          currentProvider = null
+          continue
+        }
+
         // Try to find another provider
         const { provider: nextProvider } = await CLIProviderRegistry.selectProvider(
           { ...ctx.policy, worker: { ...ctx.policy.worker, toolPreference: 'auto' } },
           (toolType) => {
             const provider = CLIProviderRegistry.get(toolType)
-            if (provider && (triedProviderKeys.has(provider.metadata.key) || rateLimitedProviderKeys.has(provider.metadata.key))) {
+            if (
+              provider &&
+              (triedProviderKeys.has(provider.metadata.key) ||
+                rateLimitedProviderKeys.has(provider.metadata.key))
+            ) {
               return { exceeded: true, reason: 'Already tried or rate limited' }
             }
             return checkLimitsExceeded(toolType)
@@ -534,9 +815,14 @@ export async function runAI(
         )
 
         if (nextProvider && !triedProviderKeys.has(nextProvider.metadata.key)) {
-          log(`↪️ Falling back to ${nextProvider.metadata.displayName}...`)
+          log(`↪️ Switching to ${nextProvider.metadata.displayName}...`)
           currentProvider = nextProvider
           continue
+        }
+
+        // No more providers - check exhausted behavior
+        if (switchConfig.exhaustedBehavior === 'pause_and_wait') {
+          return handleExhaustedProviders(ctx, switchConfig, originalPrompt, log, isCanceled)
         }
       }
 

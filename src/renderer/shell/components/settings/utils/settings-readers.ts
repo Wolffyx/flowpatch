@@ -14,7 +14,9 @@ import type {
   PreCommitSettings,
   NotificationsSettings,
   SyncSettings,
-  WorkerPipelineSettings
+  WorkerPipelineSettings,
+  ManualTestSettings,
+  ProviderSwitchSettings
 } from '../types'
 
 export function readThinkingSettings(project: Project | null): ThinkingSettings {
@@ -83,7 +85,12 @@ export function readE2ESettings(project: Project | null): E2ESettings {
     maxRetries: 3,
     timeoutMinutes: 10,
     createTestsIfMissing: true,
-    testCommand: ''
+    testCommand: '',
+    appType: 'auto',
+    testPersistence: 'persistent',
+    devServerCommand: '',
+    devServerPort: null,
+    baseUrl: ''
   }
   if (!project?.policy_json) return defaults
   try {
@@ -94,7 +101,12 @@ export function readE2ESettings(project: Project | null): E2ESettings {
       timeoutMinutes: policy?.worker?.e2e?.timeoutMinutes ?? defaults.timeoutMinutes,
       createTestsIfMissing:
         policy?.worker?.e2e?.createTestsIfMissing ?? defaults.createTestsIfMissing,
-      testCommand: policy?.worker?.e2e?.testCommand ?? defaults.testCommand
+      testCommand: policy?.worker?.e2e?.testCommand ?? defaults.testCommand,
+      appType: policy?.worker?.e2e?.appType ?? defaults.appType,
+      testPersistence: policy?.worker?.e2e?.testPersistence ?? defaults.testPersistence,
+      devServerCommand: policy?.worker?.e2e?.devServer?.startCommand ?? defaults.devServerCommand,
+      devServerPort: policy?.worker?.e2e?.devServer?.port ?? defaults.devServerPort,
+      baseUrl: policy?.worker?.e2e?.baseUrl ?? defaults.baseUrl
     }
   } catch {
     return defaults
@@ -242,5 +254,59 @@ export function readShowPullRequestsSection(project: Project | null): boolean {
     return !!policy?.ui?.showPullRequestsSection
   } catch {
     return false
+  }
+}
+
+export function readManualTestSettings(project: Project | null): ManualTestSettings {
+  const defaults: ManualTestSettings = {
+    autoPromptAfterAI: false,
+    keepWorktreeForManualTest: false,
+    defaultTestLocation: 'worktree'
+  }
+  if (!project?.policy_json) return defaults
+  try {
+    const policy = JSON.parse(project.policy_json) as PolicyConfig
+    const loc = policy?.worker?.manualTest?.defaultTestLocation
+    return {
+      autoPromptAfterAI: policy?.worker?.manualTest?.autoPromptAfterAI ?? defaults.autoPromptAfterAI,
+      keepWorktreeForManualTest:
+        policy?.worker?.manualTest?.keepWorktreeForManualTest ?? defaults.keepWorktreeForManualTest,
+      defaultTestLocation:
+        loc === 'worktree' || loc === 'mainRepo' ? loc : defaults.defaultTestLocation
+    }
+  } catch {
+    return defaults
+  }
+}
+
+export function readProviderSwitchSettings(project: Project | null): ProviderSwitchSettings {
+  const defaults: ProviderSwitchSettings = {
+    mode: 'automatic',
+    exhaustedBehavior: 'pause_and_wait',
+    retryIntervalMinutes: 5,
+    maxWaitMinutes: 60,
+    notifyOnSwitch: true
+  }
+  if (!project?.policy_json) return defaults
+  try {
+    const policy = JSON.parse(project.policy_json) as PolicyConfig
+    const ps = policy?.features?.providerSwitch
+    const mode = ps?.mode
+    const exhausted = ps?.exhaustedBehavior
+    return {
+      mode:
+        mode === 'automatic' || mode === 'approval' || mode === 'disabled'
+          ? mode
+          : defaults.mode,
+      exhaustedBehavior:
+        exhausted === 'pause_and_wait' || exhausted === 'fail_immediately' || exhausted === 'queue_for_later'
+          ? exhausted
+          : defaults.exhaustedBehavior,
+      retryIntervalMinutes: ps?.retryIntervalMinutes ?? defaults.retryIntervalMinutes,
+      maxWaitMinutes: ps?.maxWaitMinutes ?? defaults.maxWaitMinutes,
+      notifyOnSwitch: ps?.notifyOnSwitch ?? defaults.notifyOnSwitch
+    }
+  } catch {
+    return defaults
   }
 }

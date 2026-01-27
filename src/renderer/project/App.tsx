@@ -526,6 +526,25 @@ export default function App(): React.JSX.Element {
     return unsubscribe
   }, [cards])
 
+  // Listen for manual test prompts after AI phase completes
+  useEffect(() => {
+    const unsubscribe = window.projectAPI.onManualTestPrompt((data) => {
+      // Show a toast notification prompting user to test
+      toast.info(`AI phase complete for "${data.cardTitle || 'Card'}"`, {
+        description: 'Would you like to test the modifications?',
+        action: {
+          label: 'Test Now',
+          onClick: () => {
+            // Open the card dialog to access the test button
+            setSelectedCardId(data.cardId)
+          }
+        },
+        duration: 30000 // 30 seconds
+      })
+    })
+    return unsubscribe
+  }, [])
+
   const clearWorkerLogs = useCallback((jobId: string) => {
     setWorkerLogsByJobId((prev) => {
       if (!(jobId in prev)) return prev

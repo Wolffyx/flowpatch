@@ -168,7 +168,7 @@ export function registerProjectHandlers(notifyRenderer: () => void): void {
           const configContent = readFileSync(configPath, 'utf-8')
           const config = YAML.parse(configContent) as FlowPatchConfig
 
-          // Merge E2E settings
+          // Merge E2E settings (including browser testing options)
           config.e2e = {
             ...config.e2e,
             enabled: payload.e2eConfig.enabled ?? config.e2e?.enabled,
@@ -178,7 +178,22 @@ export function registerProjectHandlers(notifyRenderer: () => void): void {
             createTestsIfMissing:
               payload.e2eConfig.createTestsIfMissing ?? config.e2e?.createTestsIfMissing,
             testCommand: payload.e2eConfig.testCommand ?? config.e2e?.testCommand,
-            testDirectories: payload.e2eConfig.testDirectories ?? config.e2e?.testDirectories
+            testDirectories: payload.e2eConfig.testDirectories ?? config.e2e?.testDirectories,
+            // Browser testing fields
+            appType: payload.e2eConfig.appType ?? config.e2e?.appType,
+            testPersistence: payload.e2eConfig.testPersistence ?? config.e2e?.testPersistence,
+            baseUrl: payload.e2eConfig.baseUrl ?? config.e2e?.baseUrl,
+            tempTestDirectory: payload.e2eConfig.tempTestDirectory ?? config.e2e?.tempTestDirectory
+          }
+
+          // Handle devServer config separately (it's a nested object)
+          const devServerConfig = payload.e2eConfig as { devServerCommand?: string; devServerPort?: number | null }
+          if (devServerConfig.devServerCommand !== undefined || devServerConfig.devServerPort !== undefined) {
+            config.e2e.devServer = {
+              ...config.e2e.devServer,
+              startCommand: devServerConfig.devServerCommand ?? config.e2e.devServer?.startCommand,
+              port: devServerConfig.devServerPort ?? config.e2e.devServer?.port
+            }
           }
 
           // Write back
@@ -273,6 +288,98 @@ export function registerProjectHandlers(notifyRenderer: () => void): void {
           preCommit: {
             ...currentPreCommit,
             ...payload.preCommitConfig
+          }
+        }
+      })
+      updateProjectPolicyJson(payload.projectId, JSON.stringify(updatedPolicy))
+
+      notifyRenderer()
+      return { success: true, project: getProject(payload.projectId) }
+    }
+  )
+
+  // Update Manual Test settings
+  ipcMain.handle(
+    'updateManualTestSettings',
+    (
+      _e,
+      payload: {
+        projectId: string
+        manualTestConfig: Partial<{
+          autoPromptAfterAI: boolean
+          keepWorktreeForManualTest: boolean
+          defaultTestLocation: 'worktree' | 'mainRepo'
+        }>
+      }
+    ) => {
+      logAction('updateManualTestSettings', payload)
+
+      if (!payload?.projectId) return { error: 'Project ID required' }
+      if (!payload?.manualTestConfig) return { error: 'Manual test config required' }
+
+      const project = getProject(payload.projectId)
+      if (!project) return { error: 'Project not found' }
+
+      // Update database (policy_json)
+      const currentPolicy = parsePolicyJson(project.policy_json)
+      const currentManualTest = currentPolicy.worker?.manualTest ?? {
+        autoPromptAfterAI: false,
+        keepWorktreeForManualTest: false,
+        defaultTestLocation: 'worktree'
+      }
+      const updatedPolicy = mergePolicyUpdate(currentPolicy, {
+        worker: {
+          manualTest: {
+            ...currentManualTest,
+            ...payload.manualTestConfig
+          }
+        }
+      })
+      updateProjectPolicyJson(payload.projectId, JSON.stringify(updatedPolicy))
+
+      notifyRenderer()
+      return { success: true, project: getProject(payload.projectId) }
+    }
+  )
+
+  // Update Provider Switch settings
+  ipcMain.handle(
+    'updateProviderSwitchSettings',
+    (
+      _e,
+      payload: {
+        projectId: string
+        providerSwitchConfig: Partial<{
+          mode: 'automatic' | 'approval' | 'disabled'
+          exhaustedBehavior: 'pause_and_wait' | 'fail_immediately' | 'queue_for_later'
+          retryIntervalMinutes: number
+          maxWaitMinutes: number
+          notifyOnSwitch: boolean
+        }>
+      }
+    ) => {
+      logAction('updateProviderSwitchSettings', payload)
+
+      if (!payload?.projectId) return { error: 'Project ID required' }
+      if (!payload?.providerSwitchConfig) return { error: 'Provider switch config required' }
+
+      const project = getProject(payload.projectId)
+      if (!project) return { error: 'Project not found' }
+
+      // Update database (policy_json)
+      const currentPolicy = parsePolicyJson(project.policy_json)
+      const currentProviderSwitch = currentPolicy.features?.providerSwitch ?? {
+        mode: 'automatic',
+        exhaustedBehavior: 'pause_and_wait',
+        retryIntervalMinutes: 5,
+        maxWaitMinutes: 60,
+        notifyOnSwitch: true
+      }
+      const updatedPolicy = mergePolicyUpdate(currentPolicy, {
+        features: {
+          providerSwitch: {
+            ...currentProviderSwitch,
+            ...payload.providerSwitchConfig
           }
         }
       })

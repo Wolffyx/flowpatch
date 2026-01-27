@@ -12,7 +12,9 @@ import {
   updateProjectPolicyJson,
   createEvent,
   createJob,
-  getCard
+  getCard,
+  deleteFailedWorkerRunJobsForCard,
+  updateCardTimestamp
 } from '../../db'
 import { getWorktreeByCard } from '../../db/worktrees'
 import { runWorker as executeWorkerPipeline } from '../../worker/pipeline'
@@ -28,10 +30,24 @@ import { updateCardStatus } from '../../db'
 import { parsePolicyJson, logAction } from '@shared/utils'
 import { verifySecureRequest } from '../../security'
 import { generateWorktreeBranchName } from '@shared/types'
-import type { ProjectWorkerStatus, WorkerError } from '@shared/types'
+import type {
+  ProjectWorkerStatus,
+  WorkerError,
+  TestLocation,
+  ManualTestInfo,
+  PrepareTestEnvironmentResult
+} from '@shared/types'
 import { checkBranchExists } from '../../worker/git-operations'
 import { detectProjectType } from '../../services/project-type-detector'
 import { devServerManager } from '../../services/dev-server-manager'
+import {
+  GitWorktreeManager,
+  type WorktreeConfig
+} from '../../services/git-worktree-manager'
+import {
+  createWorktree as createWorktreeRecord,
+  updateWorktreeStatus
+} from '../../db/worktrees'
 
 // ============================================================================
 // Security Helpers
@@ -172,6 +188,23 @@ export function registerWorkerHandlers(notifyRenderer: () => void): void {
     if (!project) return { error: 'Project not found' }
     if (!project.remote_repo_key) return { error: 'No remote configured' }
 
+    if (payload.cardId) {
+      const card = getCard(payload.cardId, payload.projectId)
+      if (!card) {
+        logAction('runWorker:cardNotFound', {
+          projectId: payload.projectId,
+          cardId: payload.cardId
+        })
+      } else {
+        deleteFailedWorkerRunJobsForCard(payload.cardId, payload.projectId)
+        updateCardTimestamp(payload.cardId, new Date().toISOString(), payload.projectId)
+        logAction('runWorker:clearedFailedJobs', {
+          projectId: payload.projectId,
+          cardId: payload.cardId
+        })
+      }
+    }
+
     // Create a worker job
     const job = createJob(payload.projectId, 'worker_run', payload.cardId)
     createEvent(payload.projectId, 'worker_run', payload.cardId, { jobId: job.id })
@@ -203,7 +236,10 @@ export function registerWorkerHandlers(notifyRenderer: () => void): void {
   // Get card test info (branch, worktree, project type, commands)
   ipcMain.handle(
     'getCardTestInfo',
-    async (event, payload: { projectId: string; cardId: string }) => {
+    async (
+      event,
+      payload: { projectId: string; cardId: string }
+    ): Promise<ManualTestInfo | { error: string }> => {
       const securityError = verifyWorkerRequest(event, 'getCardTestInfo')
       if (securityError) {
         return { error: `Security: ${securityError}` }
@@ -212,44 +248,75 @@ export function registerWorkerHandlers(notifyRenderer: () => void): void {
       try {
         const project = getProject(payload.projectId)
         if (!project) {
-          return { error: 'Project not found' }
+          return {
+            success: false,
+            error: 'Project not found',
+            hasWorktree: false,
+            branchName: null,
+            branchExistsLocal: false,
+            branchExistsRemote: false,
+            repoPath: '',
+            canRecreateWorktree: false,
+            canCheckoutInMainRepo: false
+          }
         }
 
         const card = getCard(payload.cardId)
         if (!card) {
-          return { error: 'Card not found' }
-        }
-
-        // Check for worktree first
-        const worktree = getWorktreeByCard(payload.cardId)
-        let workingDir: string
-        let branchName: string | null = null
-        let hasWorktree = false
-
-        if (worktree && worktree.status !== 'cleaned' && worktree.status !== 'error') {
-          hasWorktree = true
-          workingDir = worktree.worktree_path
-          branchName = worktree.branch_name
-        } else {
-          // No worktree, check for branch
-          workingDir = project.local_path
-          const policy = parsePolicyJson(project.policy_json)
-          const branchPrefix = policy.worker?.worktree?.branchPrefix ?? 'flowpatch/'
-          branchName = generateWorktreeBranchName(
-            card.provider,
-            card.remote_number_or_iid,
-            card.title,
-            branchPrefix
-          )
-
-          // Check if branch exists
-          const branchCheck = await checkBranchExists(project.local_path, branchName)
-          if (!branchCheck.localExists && !branchCheck.remoteExists) {
-            branchName = null
+          return {
+            success: false,
+            error: 'Card not found',
+            hasWorktree: false,
+            branchName: null,
+            branchExistsLocal: false,
+            branchExistsRemote: false,
+            repoPath: project.local_path,
+            canRecreateWorktree: false,
+            canCheckoutInMainRepo: false
           }
         }
 
-        // Detect project type
+        const policy = parsePolicyJson(project.policy_json)
+        const branchPrefix = policy.worker?.worktree?.branchPrefix ?? 'flowpatch/'
+
+        // Generate expected branch name
+        const branchName = generateWorktreeBranchName(
+          card.provider,
+          card.remote_number_or_iid,
+          card.title,
+          branchPrefix
+        )
+
+        // Check for worktree
+        const worktree = getWorktreeByCard(payload.cardId)
+        let hasWorktree = false
+        let worktreePath: string | undefined
+
+        if (worktree && worktree.status !== 'cleaned' && worktree.status !== 'error') {
+          // Verify worktree is actually healthy
+          const worktreeManager = new GitWorktreeManager(project.local_path)
+          const health = worktreeManager.verifyWorktree(
+            worktree.worktree_path,
+            worktree.branch_name
+          )
+          if (health.healthy) {
+            hasWorktree = true
+            worktreePath = worktree.worktree_path
+          }
+        }
+
+        // Check branch existence
+        const branchCheck = await checkBranchExists(project.local_path, branchName)
+        const branchExistsLocal = branchCheck.localExists
+        const branchExistsRemote = branchCheck.remoteExists
+        const branchExists = branchExistsLocal || branchExistsRemote
+
+        // Determine what actions are available
+        const canRecreateWorktree = !hasWorktree && branchExists
+        const canCheckoutInMainRepo = branchExists
+
+        // Detect project type from worktree if available, otherwise main repo
+        const workingDir = hasWorktree && worktreePath ? worktreePath : project.local_path
         const projectType = detectProjectType(workingDir)
 
         // Parse commands
@@ -267,15 +334,19 @@ export function registerWorkerHandlers(notifyRenderer: () => void): void {
         return {
           success: true,
           hasWorktree,
-          worktreePath: hasWorktree ? workingDir : undefined,
-          branchName,
+          worktreePath,
+          branchName: branchExists ? branchName : null,
+          branchExistsLocal,
+          branchExistsRemote,
           repoPath: project.local_path,
           projectType: {
             type: projectType.type,
             hasPackageJson: projectType.hasPackageJson,
             port: projectType.port
           },
-          commands
+          commands,
+          canRecreateWorktree,
+          canCheckoutInMainRepo
         }
       } catch (error) {
         logAction('getCardTestInfo:error', {
@@ -283,7 +354,169 @@ export function registerWorkerHandlers(notifyRenderer: () => void): void {
           cardId: payload.cardId,
           error: error instanceof Error ? error.message : String(error)
         })
-        return { error: error instanceof Error ? error.message : String(error) }
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+          hasWorktree: false,
+          branchName: null,
+          branchExistsLocal: false,
+          branchExistsRemote: false,
+          repoPath: '',
+          canRecreateWorktree: false,
+          canCheckoutInMainRepo: false
+        }
+      }
+    }
+  )
+
+  // Prepare test environment (recreate worktree or checkout branch in main repo)
+  ipcMain.handle(
+    'prepareTestEnvironment',
+    async (
+      event,
+      payload: { projectId: string; cardId: string; location: TestLocation }
+    ): Promise<PrepareTestEnvironmentResult> => {
+      const securityError = verifyWorkerRequest(event, 'prepareTestEnvironment')
+      if (securityError) {
+        return { success: false, error: `Security: ${securityError}` }
+      }
+
+      try {
+        logAction('prepareTestEnvironment', {
+          projectId: payload.projectId,
+          cardId: payload.cardId,
+          location: payload.location
+        })
+
+        const project = getProject(payload.projectId)
+        if (!project) {
+          return { success: false, error: 'Project not found' }
+        }
+
+        const card = getCard(payload.cardId)
+        if (!card) {
+          return { success: false, error: 'Card not found' }
+        }
+
+        const policy = parsePolicyJson(project.policy_json)
+        const branchPrefix = policy.worker?.worktree?.branchPrefix ?? 'flowpatch/'
+        const branchName = generateWorktreeBranchName(
+          card.provider,
+          card.remote_number_or_iid,
+          card.title,
+          branchPrefix
+        )
+
+        // Check branch exists
+        const branchCheck = await checkBranchExists(project.local_path, branchName)
+        if (!branchCheck.localExists && !branchCheck.remoteExists) {
+          return {
+            success: false,
+            error: `Branch ${branchName} not found locally or on remote`
+          }
+        }
+
+        const worktreeManager = new GitWorktreeManager(project.local_path)
+
+        if (payload.location === 'worktree') {
+          // Recreate or reuse worktree
+          const wtConfig: WorktreeConfig = {
+            root: policy.worker?.worktree?.root ?? 'repo',
+            customPath: policy.worker?.worktree?.customPath
+          }
+          const worktreePath = worktreeManager.computeWorktreePath(branchName, wtConfig)
+          const baseBranch =
+            policy.worker?.baseBranch || policy.worker?.worktree?.baseBranch || 'main'
+
+          const result = await worktreeManager.ensureWorktree(
+            worktreePath,
+            branchName,
+            baseBranch,
+            {
+              fetchFirst: true,
+              config: wtConfig
+            }
+          )
+
+          // Update or create DB record
+          let worktreeRecord = getWorktreeByCard(payload.cardId, payload.projectId)
+          if (worktreeRecord) {
+            updateWorktreeStatus(worktreeRecord.id, 'ready', undefined, payload.projectId)
+          } else {
+            createWorktreeRecord({
+              projectId: payload.projectId,
+              cardId: payload.cardId,
+              worktreePath: result.worktreePath,
+              branchName: result.branchName,
+              baseRef: baseBranch,
+              status: 'ready'
+            })
+          }
+
+          logAction('prepareTestEnvironment:worktreeCreated', {
+            projectId: payload.projectId,
+            cardId: payload.cardId,
+            worktreePath: result.worktreePath,
+            created: result.created
+          })
+
+          return {
+            success: true,
+            workingDir: result.worktreePath,
+            branchName: result.branchName,
+            location: 'worktree',
+            wasRecreated: result.created
+          }
+        } else {
+          // Checkout branch in main repo
+          // Check if working tree is clean first
+          if (worktreeManager.isDirty(project.local_path)) {
+            return {
+              success: false,
+              error:
+                'Main repository has uncommitted changes. Please commit or stash them first.'
+            }
+          }
+
+          // Checkout the branch
+          try {
+            const { execSync } = await import('child_process')
+            execSync(`git checkout "${branchName}"`, {
+              cwd: project.local_path,
+              encoding: 'utf-8',
+              windowsHide: true
+            })
+
+            logAction('prepareTestEnvironment:checkedOut', {
+              projectId: payload.projectId,
+              cardId: payload.cardId,
+              branchName
+            })
+
+            return {
+              success: true,
+              workingDir: project.local_path,
+              branchName,
+              location: 'mainRepo',
+              wasRecreated: false
+            }
+          } catch (err) {
+            return {
+              success: false,
+              error: `Failed to checkout branch: ${err instanceof Error ? err.message : String(err)}`
+            }
+          }
+        }
+      } catch (error) {
+        logAction('prepareTestEnvironment:error', {
+          projectId: payload.projectId,
+          cardId: payload.cardId,
+          error: error instanceof Error ? error.message : String(error)
+        })
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error)
+        }
       }
     }
   )

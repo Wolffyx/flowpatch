@@ -20,6 +20,9 @@ import { useNotificationSettings } from '../hooks/useNotificationSettings'
 import { useSyncSettings } from '../hooks/useSyncSettings'
 import { useWorkerPipelineSettings } from '../hooks/useWorkerPipelineSettings'
 import { useTestModeSettings } from '../hooks/useTestModeSettings'
+import { useManualTestSettings } from '../hooks/useManualTestSettings'
+import { useProviderSwitchSettings } from '../hooks/useProviderSwitchSettings'
+import type { ProviderSwitchMode, ExhaustedBehavior } from '../types'
 
 export function FeaturesSection(): React.JSX.Element {
   const { project, onClose } = useSettingsContext()
@@ -42,13 +45,25 @@ export function FeaturesSection(): React.JSX.Element {
     e2eTimeoutMinutes,
     e2eCreateTestsIfMissing,
     e2eTestCommand,
+    e2eAppType,
+    e2eTestPersistence,
+    e2eDevServerCommand,
+    e2eDevServerPort,
+    e2eBaseUrl,
     loadE2ESettings,
     handleE2eEnabledChange,
     handleE2eMaxRetriesChange,
     handleE2eTimeoutChange,
     handleE2eCreateTestsChange,
     handleE2eTestCommandChange,
-    handleE2eTestCommandBlur
+    handleE2eTestCommandBlur,
+    handleE2eAppTypeChange,
+    handleE2eTestPersistenceChange,
+    handleE2eDevServerCommandChange,
+    handleE2eDevServerCommandBlur,
+    handleE2eDevServerPortChange,
+    handleE2eBaseUrlChange,
+    handleE2eBaseUrlBlur
   } = useE2ESettings()
 
   const {
@@ -90,6 +105,30 @@ export function FeaturesSection(): React.JSX.Element {
     handleTestModeChange
   } = useTestModeSettings()
 
+  const {
+    autoPromptAfterAI,
+    keepWorktreeForManualTest,
+    defaultTestLocation,
+    loadManualTestSettings,
+    handleAutoPromptChange,
+    handleKeepWorktreeChange,
+    handleDefaultLocationChange
+  } = useManualTestSettings()
+
+  const {
+    mode: providerSwitchMode,
+    exhaustedBehavior,
+    retryIntervalMinutes,
+    maxWaitMinutes,
+    notifyOnSwitch,
+    loadProviderSwitchSettings,
+    handleModeChange: handleProviderSwitchModeChange,
+    handleExhaustedBehaviorChange,
+    handleRetryIntervalChange,
+    handleMaxWaitChange,
+    handleNotifyOnSwitchChange
+  } = useProviderSwitchSettings()
+
   useEffect(() => {
     if (project) {
       loadFeatureSettings(project)
@@ -97,6 +136,8 @@ export function FeaturesSection(): React.JSX.Element {
       loadNotificationSettings(project)
       loadSyncSettings(project)
       loadWorkerPipelineSettings(project)
+      loadManualTestSettings(project)
+      loadProviderSwitchSettings(project)
     }
     // Test mode is a global setting, load it regardless of project
     void loadTestModeSettings()
@@ -107,7 +148,9 @@ export function FeaturesSection(): React.JSX.Element {
     loadNotificationSettings,
     loadSyncSettings,
     loadWorkerPipelineSettings,
-    loadTestModeSettings
+    loadTestModeSettings,
+    loadManualTestSettings,
+    loadProviderSwitchSettings
   ])
 
   const handleReconfigureLabels = useCallback(async () => {
@@ -179,6 +222,151 @@ export function FeaturesSection(): React.JSX.Element {
         </div>
       ) : (
         <>
+          {/* Manual Testing Settings */}
+          <SettingsCard
+            title="Manual Testing"
+            description="Configure how manual testing of worker modifications works after AI completes."
+          >
+            <div className="space-y-3">
+              <SettingRow
+                title="Auto-prompt after AI"
+                description="Show a notification prompting you to test modifications after the AI phase completes."
+              >
+                <Switch
+                  checked={autoPromptAfterAI}
+                  onCheckedChange={(enabled) => handleAutoPromptChange(project, enabled)}
+                />
+              </SettingRow>
+
+              <SettingRow
+                title="Keep worktree for testing"
+                description="Keep the worktree available after pipeline completion for manual testing (overrides default cleanup)."
+              >
+                <Switch
+                  checked={keepWorktreeForManualTest}
+                  onCheckedChange={(enabled) => handleKeepWorktreeChange(project, enabled)}
+                />
+              </SettingRow>
+
+              <SettingRow
+                title="Default test location"
+                description="Where to test when worktree is not available."
+              >
+                <select
+                  value={defaultTestLocation}
+                  onChange={(e) =>
+                    handleDefaultLocationChange(project, e.target.value as 'worktree' | 'mainRepo')
+                  }
+                  className="h-9 rounded-md border bg-background px-3 text-sm"
+                >
+                  <option value="worktree">Worktree (isolated)</option>
+                  <option value="mainRepo">Main Repo</option>
+                </select>
+              </SettingRow>
+            </div>
+          </SettingsCard>
+
+          {/* AI Provider Switching */}
+          <SettingsCard
+            title="AI Provider Switching"
+            description="Configure automatic switching between AI providers (Claude, Codex, OpenCode) when limits are reached."
+          >
+            <div className="space-y-3">
+              <SettingRow
+                title="Switch Mode"
+                description="How to handle when a provider hits its limits mid-execution."
+              >
+                <select
+                  value={providerSwitchMode}
+                  onChange={(e) =>
+                    handleProviderSwitchModeChange(project, e.target.value as ProviderSwitchMode)
+                  }
+                  className="h-9 rounded-md border bg-background px-3 text-sm"
+                >
+                  <option value="automatic">Automatic (no approval)</option>
+                  <option value="approval">Ask for approval</option>
+                  <option value="disabled">Disabled</option>
+                </select>
+              </SettingRow>
+
+              {providerSwitchMode !== 'disabled' && (
+                <>
+                  <SettingRow
+                    title="When All Providers Exhausted"
+                    description="What to do when all providers hit their limits."
+                  >
+                    <select
+                      value={exhaustedBehavior}
+                      onChange={(e) =>
+                        handleExhaustedBehaviorChange(
+                          project,
+                          e.target.value as ExhaustedBehavior
+                        )
+                      }
+                      className="h-9 rounded-md border bg-background px-3 text-sm"
+                    >
+                      <option value="pause_and_wait">Pause and wait for reset</option>
+                      <option value="fail_immediately">Fail immediately</option>
+                      <option value="queue_for_later">Queue for later</option>
+                    </select>
+                  </SettingRow>
+
+                  {exhaustedBehavior === 'pause_and_wait' && (
+                    <>
+                      <SettingRow
+                        title="Retry Interval"
+                        description="How often to check if limits have reset (1-30 minutes)"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Input
+                            type="number"
+                            min={1}
+                            max={30}
+                            value={retryIntervalMinutes}
+                            onChange={(e) =>
+                              handleRetryIntervalChange(project, Number(e.target.value))
+                            }
+                            className="w-20"
+                          />
+                          <span className="text-xs text-muted-foreground">min</span>
+                        </div>
+                      </SettingRow>
+
+                      <SettingRow
+                        title="Max Wait Time"
+                        description="Maximum time to wait for limits to reset (5-240 minutes)"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Input
+                            type="number"
+                            min={5}
+                            max={240}
+                            value={maxWaitMinutes}
+                            onChange={(e) =>
+                              handleMaxWaitChange(project, Number(e.target.value))
+                            }
+                            className="w-20"
+                          />
+                          <span className="text-xs text-muted-foreground">min</span>
+                        </div>
+                      </SettingRow>
+                    </>
+                  )}
+
+                  <SettingRow
+                    title="Notify on Switch"
+                    description="Show notification when provider is switched."
+                  >
+                    <Switch
+                      checked={notifyOnSwitch}
+                      onCheckedChange={(enabled) => handleNotifyOnSwitchChange(project, enabled)}
+                    />
+                  </SettingRow>
+                </>
+              )}
+            </div>
+          </SettingsCard>
+
           {/* Cancel Behavior */}
           <SettingsCard title="Cancel Behavior">
             <SettingRow
@@ -282,6 +470,95 @@ export function FeaturesSection(): React.JSX.Element {
                   </SettingRow>
 
                   <div className="rounded-lg border p-3">
+                    <div className="font-medium text-sm mb-1">Application Type</div>
+                    <div className="text-xs text-muted-foreground mb-2">
+                      Type of application to test. Auto-detect analyzes your project structure.
+                    </div>
+                    <select
+                      value={e2eAppType}
+                      onChange={(e) =>
+                        handleE2eAppTypeChange(
+                          project,
+                          e.target.value as 'electron' | 'web' | 'static' | 'auto'
+                        )
+                      }
+                      className="h-9 rounded-md border bg-background px-3 text-sm w-full max-w-[200px]"
+                    >
+                      <option value="auto">Auto-detect</option>
+                      <option value="web">Web App (dev server)</option>
+                      <option value="static">Static App (file://)</option>
+                      <option value="electron">Electron App</option>
+                    </select>
+                  </div>
+
+                  <div className="rounded-lg border p-3">
+                    <div className="font-medium text-sm mb-1">Test Persistence</div>
+                    <div className="text-xs text-muted-foreground mb-2">
+                      Whether AI-created tests are kept permanently or cleaned up after completion.
+                    </div>
+                    <select
+                      value={e2eTestPersistence}
+                      onChange={(e) =>
+                        handleE2eTestPersistenceChange(
+                          project,
+                          e.target.value as 'persistent' | 'temporary'
+                        )
+                      }
+                      className="h-9 rounded-md border bg-background px-3 text-sm w-full max-w-[200px]"
+                    >
+                      <option value="persistent">Persistent (commit with PR)</option>
+                      <option value="temporary">Temporary (cleanup after)</option>
+                    </select>
+                  </div>
+
+                  {(e2eAppType === 'web' || e2eAppType === 'auto') && (
+                    <>
+                      <div className="rounded-lg border p-3">
+                        <div className="font-medium text-sm mb-1">Dev Server Command</div>
+                        <div className="text-xs text-muted-foreground mb-2">
+                          Command to start the dev server (leave empty for auto-detection from
+                          package.json)
+                        </div>
+                        <Input
+                          value={e2eDevServerCommand}
+                          onChange={(e) => handleE2eDevServerCommandChange(e.target.value)}
+                          onBlur={() => handleE2eDevServerCommandBlur(project)}
+                          placeholder="npm run dev"
+                        />
+                      </div>
+
+                      <div className="rounded-lg border p-3">
+                        <div className="font-medium text-sm mb-1">Dev Server Port</div>
+                        <div className="text-xs text-muted-foreground mb-2">
+                          Port for the dev server (leave empty for auto-detection)
+                        </div>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={65535}
+                          value={e2eDevServerPort ?? ''}
+                          onChange={(e) => handleE2eDevServerPortChange(project, e.target.value)}
+                          placeholder="3000"
+                          className="max-w-[120px]"
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  <div className="rounded-lg border p-3">
+                    <div className="font-medium text-sm mb-1">Base URL</div>
+                    <div className="text-xs text-muted-foreground mb-2">
+                      Override the base URL for tests (auto-detected from dev server if empty)
+                    </div>
+                    <Input
+                      value={e2eBaseUrl}
+                      onChange={(e) => handleE2eBaseUrlChange(e.target.value)}
+                      onBlur={() => handleE2eBaseUrlBlur(project)}
+                      placeholder="http://localhost:3000"
+                    />
+                  </div>
+
+                  <div className="rounded-lg border p-3">
                     <div className="font-medium text-sm mb-1">Max Retries</div>
                     <div className="text-xs text-muted-foreground mb-2">
                       Number of times to retry failing tests (1-10)
@@ -320,7 +597,7 @@ export function FeaturesSection(): React.JSX.Element {
                       value={e2eTestCommand}
                       onChange={(e) => handleE2eTestCommandChange(e.target.value)}
                       onBlur={() => handleE2eTestCommandBlur(project)}
-                      placeholder="npm test"
+                      placeholder="npx playwright test"
                     />
                   </div>
                 </>

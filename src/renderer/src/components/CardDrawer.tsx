@@ -34,7 +34,8 @@ import {
   type Event,
   type CardStatus,
   type Worktree,
-  type Job
+  type Job,
+  type ManualTestInfo
 } from '../../../shared/types'
 
 interface CardDrawerProps {
@@ -71,16 +72,7 @@ export function CardDrawer({
   const [isDeletingCard, setIsDeletingCard] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [testDialogOpen, setTestDialogOpen] = useState(false)
-  const [testInfo, setTestInfo] = useState<{
-    success: boolean
-    hasWorktree?: boolean
-    worktreePath?: string
-    branchName?: string | null
-    repoPath?: string
-    projectType?: { type: string; hasPackageJson: boolean; port?: number }
-    commands?: { install?: string; dev?: string; build?: string }
-    error?: string
-  } | null>(null)
+  const [testInfo, setTestInfo] = useState<ManualTestInfo | null>(null)
   const [checkingTestInfo, setCheckingTestInfo] = useState(false)
 
   // Load worktree and latest job info for this card
@@ -168,7 +160,8 @@ export function CardDrawer({
 
     setCheckingTestInfo(true)
     try {
-      const info = (await window.projectAPI.getCardTestInfo(projectId, card.id)) as typeof testInfo
+      const result = await window.projectAPI.getCardTestInfo(projectId, card.id)
+      const info = result as ManualTestInfo
       setTestInfo(info)
       if (info && info.success) {
         setTestDialogOpen(true)

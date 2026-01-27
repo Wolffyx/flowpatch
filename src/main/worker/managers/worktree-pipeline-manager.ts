@@ -139,7 +139,7 @@ export class WorktreePipelineManager {
       const baseBranch = this.baseBranch || policy.worker?.worktree?.baseBranch || 'main'
 
       // Check for existing worktree for this card
-      const existingWorktree = getWorktreeByCard(cardId)
+      const existingWorktree = getWorktreeByCard(cardId, projectId)
       if (existingWorktree) {
         const health = this.worktreeManager.verifyWorktree(
           existingWorktree.worktree_path,
@@ -148,10 +148,12 @@ export class WorktreePipelineManager {
 
         if (!health.healthy) {
           this.log(`Existing worktree is unhealthy: ${health.error}. Will recreate.`)
-          updateWorktreeStatus(existingWorktree.id, 'error', health.error)
+          updateWorktreeStatus(existingWorktree.id, 'error', health.error, projectId)
+          // Force release stale lock so we can recreate
+          releaseWorktreeLock(existingWorktree.id, null, projectId)
         } else {
           // Acquire lock
-          const locked = acquireWorktreeLock(existingWorktree.id, workerId, 10)
+          const locked = acquireWorktreeLock(existingWorktree.id, workerId, 10, projectId)
           if (!locked) {
             this.log(`Worktree is locked by another worker: ${existingWorktree.worktree_path}`)
             return false
@@ -161,8 +163,8 @@ export class WorktreePipelineManager {
           this.worktreeRecord = existingWorktree
           this.worktreePath = existingWorktree.worktree_path
           this.workerBranch = existingWorktree.branch_name
-          updateWorktreeJob(existingWorktree.id, jobId)
-          updateWorktreeStatus(existingWorktree.id, 'running')
+          updateWorktreeJob(existingWorktree.id, jobId, projectId)
+          updateWorktreeStatus(existingWorktree.id, 'running', undefined, projectId)
           return true
         }
       }
@@ -183,26 +185,35 @@ export class WorktreePipelineManager {
           existingByBranch.branch_name
         )
 
-        const locked = acquireWorktreeLock(existingByBranch.id, workerId, 10)
-        if (!locked) {
-          this.log(`Worktree is locked by another worker: ${existingByBranch.worktree_path}`)
-          return false
-        }
+        if (!health.healthy) {
+          this.log(`Existing worktree is unhealthy: ${health.error}. Attempting to recreate.`)
+          updateWorktreeStatus(existingByBranch.id, 'error', health.error, projectId)
+          releaseWorktreeLock(existingByBranch.id, null, projectId)
 
-        if (health.healthy) {
+          const relocked = acquireWorktreeLock(existingByBranch.id, workerId, 10, projectId)
+          if (!relocked) {
+            this.log(`Worktree is locked by another worker: ${existingByBranch.worktree_path}`)
+            return false
+          }
+
+          this.worktreeRecord = existingByBranch
+          updateWorktreeJob(existingByBranch.id, jobId, projectId)
+          updateWorktreeStatus(existingByBranch.id, 'creating', undefined, projectId)
+        } else {
+          const locked = acquireWorktreeLock(existingByBranch.id, workerId, 10, projectId)
+          if (!locked) {
+            this.log(`Worktree is locked by another worker: ${existingByBranch.worktree_path}`)
+            return false
+          }
+
           this.log(`Reusing existing worktree: ${existingByBranch.worktree_path}`)
           this.worktreeRecord = existingByBranch
           this.worktreePath = existingByBranch.worktree_path
           this.workerBranch = existingByBranch.branch_name
-          updateWorktreeJob(existingByBranch.id, jobId)
-          updateWorktreeStatus(existingByBranch.id, 'running')
+          updateWorktreeJob(existingByBranch.id, jobId, projectId)
+          updateWorktreeStatus(existingByBranch.id, 'running', undefined, projectId)
           return true
         }
-
-        this.log(`Existing worktree is unhealthy: ${health.error}. Attempting to recreate.`)
-        this.worktreeRecord = existingByBranch
-        updateWorktreeJob(existingByBranch.id, jobId)
-        updateWorktreeStatus(existingByBranch.id, 'creating')
       } else if (existingByBranch && existingByBranch.card_id !== cardId) {
         // Another card uses this branch, add suffix
         branchName = `${branchName}-${cardId.slice(0, 6)}`
@@ -250,12 +261,12 @@ export class WorktreePipelineManager {
       if (!health.healthy) {
         const error = `Worktree verification failed: ${health.error}`
         this.log(error)
-        updateWorktreeStatus(this.worktreeRecord.id, 'error', error)
+        updateWorktreeStatus(this.worktreeRecord.id, 'error', error, projectId)
         return false
       }
 
       // Update status to running
-      updateWorktreeStatus(this.worktreeRecord.id, 'running')
+      updateWorktreeStatus(this.worktreeRecord.id, 'running', undefined, projectId)
 
       this.log(`Worktree ${result.created ? 'created' : 'reused'}: ${result.branchName}`)
       return true
@@ -265,7 +276,8 @@ export class WorktreePipelineManager {
         updateWorktreeStatus(
           this.worktreeRecord.id,
           'error',
-          error instanceof Error ? error.message : String(error)
+          error instanceof Error ? error.message : String(error),
+          projectId
         )
       }
       return false
@@ -281,7 +293,7 @@ export class WorktreePipelineManager {
     this.lockInterval = setInterval(
       () => {
         if (this.worktreeRecord) {
-          renewWorktreeLock(this.worktreeRecord.id, this.config.workerId, 10)
+          renewWorktreeLock(this.worktreeRecord.id, this.config.workerId, 10, this.config.projectId)
         }
       },
       5 * 60 * 1000 // Renew every 5 minutes
@@ -304,11 +316,20 @@ export class WorktreePipelineManager {
   async cleanup(success: boolean): Promise<void> {
     if (!this.worktreeRecord) return
 
+    // Check if user wants to keep worktree for manual testing
+    const keepForManualTest = this.config.policy.worker?.manualTest?.keepWorktreeForManualTest
+    if (keepForManualTest) {
+      this.log('Keeping worktree for manual testing (keepWorktreeForManualTest=true)')
+      releaseWorktreeLock(this.worktreeRecord.id, this.config.workerId, this.config.projectId)
+      updateWorktreeStatus(this.worktreeRecord.id, 'ready', undefined, this.config.projectId)
+      return
+    }
+
     const cleanup = this.config.policy.worker?.worktree?.cleanup
     const cleanupTiming = success ? cleanup?.onSuccess : cleanup?.onFailure
 
     // Release lock
-    releaseWorktreeLock(this.worktreeRecord.id, this.config.workerId)
+    releaseWorktreeLock(this.worktreeRecord.id, this.config.workerId, this.config.projectId)
 
     switch (cleanupTiming) {
       case 'immediate':
@@ -318,25 +339,31 @@ export class WorktreePipelineManager {
             force: true,
             config: this.getWorktreeConfig()
           })
-          updateWorktreeStatus(this.worktreeRecord.id, 'cleaned')
+          updateWorktreeStatus(this.worktreeRecord.id, 'cleaned', undefined, this.config.projectId)
         } catch (error) {
           this.log(`Failed to cleanup worktree: ${error}`)
           updateWorktreeStatus(
             this.worktreeRecord.id,
             'error',
-            error instanceof Error ? error.message : String(error)
+            error instanceof Error ? error.message : String(error),
+            this.config.projectId
           )
         }
         break
 
       case 'delay':
         this.log('Worktree marked for delayed cleanup')
-        updateWorktreeStatus(this.worktreeRecord.id, 'cleanup_pending')
+        updateWorktreeStatus(
+          this.worktreeRecord.id,
+          'cleanup_pending',
+          undefined,
+          this.config.projectId
+        )
         break
 
       case 'never':
         this.log('Worktree kept (cleanup=never)')
-        updateWorktreeStatus(this.worktreeRecord.id, 'ready')
+        updateWorktreeStatus(this.worktreeRecord.id, 'ready', undefined, this.config.projectId)
         break
 
       default:
@@ -347,12 +374,27 @@ export class WorktreePipelineManager {
               force: true,
               config: this.getWorktreeConfig()
             })
-            updateWorktreeStatus(this.worktreeRecord.id, 'cleaned')
+            updateWorktreeStatus(
+              this.worktreeRecord.id,
+              'cleaned',
+              undefined,
+              this.config.projectId
+            )
           } catch {
-            updateWorktreeStatus(this.worktreeRecord.id, 'cleanup_pending')
+            updateWorktreeStatus(
+              this.worktreeRecord.id,
+              'cleanup_pending',
+              undefined,
+              this.config.projectId
+            )
           }
         } else {
-          updateWorktreeStatus(this.worktreeRecord.id, 'cleanup_pending')
+          updateWorktreeStatus(
+            this.worktreeRecord.id,
+            'cleanup_pending',
+            undefined,
+            this.config.projectId
+          )
         }
     }
   }

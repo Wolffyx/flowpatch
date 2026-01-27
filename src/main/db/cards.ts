@@ -19,6 +19,23 @@ import { getProjectDrizzle, hasProjectDb } from './project-db'
 
 export type { Card, CardStatus }
 
+export interface CardEligibilityDiagnostic {
+  cardId: string
+  cardTitle: string
+  isEligible: boolean
+  reasons: string[]
+  details: {
+    status: CardStatus
+    provider: string
+    hasRemoteRepoKey: boolean
+    hasActiveJob: boolean
+    isInCooldown: boolean
+    isBlockedByDependencies: boolean
+    cooldownEndsAt?: string
+    blockingDependencies?: string[]
+  }
+}
+
 /**
  * List all cards for a project.
  */
@@ -699,6 +716,177 @@ export function isCardBlockedByDependencies(cardId: string): boolean {
   }
 
   return false
+}
+
+function getBlockingDependenciesForReady(cardId: string): string[] {
+  const deps = getDependenciesForCard(cardId)
+  const blockingDeps = deps.filter(
+    (dep) => dep.is_active === 1 && dep.blocking_statuses.includes('ready')
+  )
+
+  if (blockingDeps.length === 0) return []
+
+  const statusOrder: CardStatus[] = [
+    'draft',
+    'ready',
+    'in_progress',
+    'in_review',
+    'testing',
+    'done'
+  ]
+
+  const blockedBy: string[] = []
+  for (const dep of blockingDeps) {
+    const depCard = getCard(dep.depends_on_card_id)
+    if (!depCard) continue
+
+    const currentIndex = statusOrder.indexOf(depCard.status)
+    const requiredIndex = statusOrder.indexOf(dep.required_status)
+
+    if (currentIndex < requiredIndex) {
+      blockedBy.push(dep.depends_on_card_id)
+    }
+  }
+
+  return blockedBy
+}
+
+function buildCardEligibilityDiagnostic(
+  card: Card,
+  projectId: string,
+  retryCooldownMinutes: number
+): CardEligibilityDiagnostic {
+  const { db, isLocalDb } = resolveProjectDb(projectId)
+  const reasons: string[] = []
+
+  if (card.status !== 'ready') reasons.push('status_not_ready')
+  if (card.provider === 'local') reasons.push('provider_local')
+  const hasRemoteRepoKey = !!card.remote_repo_key
+  if (!hasRemoteRepoKey) reasons.push('missing_remote_repo_key')
+
+  const activeJob = isLocalDb
+    ? db
+        .select({ id: projectJobs.id })
+        .from(projectJobs)
+        .where(
+          and(
+            eq(projectJobs.card_id, card.id),
+            eq(projectJobs.type, 'worker_run'),
+            inArray(projectJobs.state, ['queued', 'running'])
+          )
+        )
+        .limit(1)
+        .get()
+    : db
+        .select({ id: jobs.id })
+        .from(jobs)
+        .where(
+          and(
+            eq(jobs.card_id, card.id),
+            eq(jobs.type, 'worker_run'),
+            inArray(jobs.state, ['queued', 'running'])
+          )
+        )
+        .limit(1)
+        .get()
+  const hasActiveJob = !!activeJob
+  if (hasActiveJob) reasons.push('active_worker_job')
+
+  const cooldownMs = retryCooldownMinutes * 60 * 1000
+  const cooldownTime = new Date(Date.now() - cooldownMs).toISOString()
+
+  const failedJob = isLocalDb
+    ? db
+        .select({ updated_at: projectJobs.updated_at })
+        .from(projectJobs)
+        .where(
+          and(
+            eq(projectJobs.card_id, card.id),
+            eq(projectJobs.type, 'worker_run'),
+            eq(projectJobs.state, 'failed'),
+            gt(projectJobs.updated_at, cooldownTime),
+            lte(projectCards.updated_local_at, projectJobs.updated_at)
+          )
+        )
+        .orderBy(desc(projectJobs.updated_at))
+        .limit(1)
+        .get()
+    : db
+        .select({ updated_at: jobs.updated_at })
+        .from(jobs)
+        .where(
+          and(
+            eq(jobs.card_id, card.id),
+            eq(jobs.type, 'worker_run'),
+            eq(jobs.state, 'failed'),
+            gt(jobs.updated_at, cooldownTime),
+            lte(cards.updated_local_at, jobs.updated_at)
+          )
+        )
+        .orderBy(desc(jobs.updated_at))
+        .limit(1)
+        .get()
+
+  const isInCooldown = !!failedJob
+  if (isInCooldown) reasons.push('recent_failed_job_cooldown')
+
+  const blockingDependencies = getBlockingDependenciesForReady(card.id)
+  const isBlockedByDependencies = blockingDependencies.length > 0
+  if (isBlockedByDependencies) reasons.push('blocked_by_dependencies')
+
+  const cooldownEndsAt = failedJob
+    ? new Date(new Date(failedJob.updated_at).getTime() + cooldownMs).toISOString()
+    : undefined
+
+  return {
+    cardId: card.id,
+    cardTitle: card.title,
+    isEligible: reasons.length === 0,
+    reasons,
+    details: {
+      status: card.status,
+      provider: card.provider,
+      hasRemoteRepoKey,
+      hasActiveJob,
+      isInCooldown,
+      isBlockedByDependencies,
+      cooldownEndsAt,
+      blockingDependencies: blockingDependencies.length > 0 ? blockingDependencies : undefined
+    }
+  }
+}
+
+export function getCardEligibilityDiagnostic(
+  cardId: string,
+  projectId?: string,
+  retryCooldownMinutes = 30
+): CardEligibilityDiagnostic | null {
+  const card = getCard(cardId, projectId)
+  if (!card) return null
+  return buildCardEligibilityDiagnostic(card, card.project_id, retryCooldownMinutes)
+}
+
+export function getReadyCardsNotProcessing(
+  projectId: string,
+  retryCooldownMinutes = 30
+): CardEligibilityDiagnostic[] {
+  const { db, isLocalDb } = resolveProjectDb(projectId)
+
+  const readyCards = isLocalDb
+    ? db.select().from(projectCards).where(eq(projectCards.status, 'ready')).all()
+    : (db
+        .select()
+        .from(cards)
+        .where(and(eq(cards.project_id, projectId), eq(cards.status, 'ready')))
+        .all() as Card[])
+
+  return readyCards.map((card) =>
+    buildCardEligibilityDiagnostic(
+      isLocalDb ? ({ ...card, project_id: projectId } as Card) : (card as Card),
+      projectId,
+      retryCooldownMinutes
+    )
+  )
 }
 
 export function getNextReadyCards(

@@ -33,20 +33,32 @@ export async function commitAndPush(
   ctx: PipelineContext,
   branchName: string,
   branchManager?: { updateBranchFromOrigin(branch: string): Promise<void> } | null,
-  updateFromOrigin: boolean = true
+  updateFromOrigin: boolean = true,
+  log?: (message: string) => void
 ): Promise<void> {
   const commitMsg = buildCommitMessage(ctx.policy, ctx.card)
   const workingDir = getWorkingDir(ctx)
 
   try {
+    log?.(`Commit/push working directory: ${workingDir}`)
+    log?.(`Context worktreePath: ${ctx.worktreePath ?? 'null'}`)
+    log?.(`Context useWorktree: ${ctx.useWorktree}`)
+
+    if (ctx.useWorktree && !ctx.worktreePath) {
+      log?.('WARNING: useWorktree is true but worktreePath is null!')
+    }
+
     await stageAll(workingDir)
 
     if (!(await isWorkingTreeClean(workingDir))) {
+      log?.(`Changes detected, committing: ${commitMsg}`)
       await commit(workingDir, commitMsg)
+    } else {
+      log?.(`No changes to commit in ${workingDir}`)
     }
 
     // Update from origin before push
-    if (updateFromOrigin && branchManager) {
+    if (updateFromOrigin && branchManager && !ctx.useWorktree) {
       try {
         await branchManager.updateBranchFromOrigin(branchName)
       } catch {
@@ -54,7 +66,9 @@ export async function commitAndPush(
       }
     }
 
+    log?.(`Pushing branch ${branchName} from ${workingDir}`)
     await push(workingDir, branchName)
+    log?.('Push completed successfully')
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     if (

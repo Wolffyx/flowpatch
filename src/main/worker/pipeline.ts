@@ -24,6 +24,7 @@ import {
 import type { Project, Card, PolicyConfig, Subtask, PlanningMode } from '../../shared/types'
 import { broadcastToRenderers } from '../ipc/broadcast'
 import { writeCheckpoint, readCheckpoint } from '../services/flowpatch-runs'
+import { logAction } from '@shared/utils'
 
 // Phase implementations
 import { runAI } from './phases/ai'
@@ -50,7 +51,7 @@ import { IterativeAIManager } from './managers/iterative-ai-manager'
 // Utilities
 import { buildPipelineContext } from './pipeline-context'
 import { commitAndPush } from './commit-manager'
-import { ensureCleanWorkingTree, restoreAutostash } from './git-operations'
+import { ensureCleanWorkingTree, restoreAutostash, isWorkingTreeClean } from './git-operations'
 
 // Errors
 import { WorkerCanceledError, WorkerPendingApprovalError, PipelineTimeoutError } from './errors'
@@ -559,6 +560,45 @@ export class WorkerPipeline {
         }
       }
 
+      const aiWorkingDir = this.getWorkingDir()
+      if (await isWorkingTreeClean(aiWorkingDir)) {
+        const aiLogs = this.logManager.getLogs().join('\n')
+        const readOnlyPattern =
+          /read[- ]only|environment is read[- ]only|couldn.?t apply the change.*read[- ]only/i
+        const permissionPattern =
+          /approval required|approval denied|outside the workspace|not in the workspace|permission denied|access denied/i
+
+        if (readOnlyPattern.test(aiLogs) || permissionPattern.test(aiLogs)) {
+          const reason = readOnlyPattern.test(aiLogs)
+            ? 'read-only environment'
+            : 'permission denied (outside workspace)'
+          this.log(`AI tool reported ${reason}; moving card back to Ready`)
+          await this.cardStatusManager!.moveToReady('ai_permission_denied')
+          outcome = 'failed'
+          return {
+            success: false,
+            phase: 'ai',
+            error: `AI tool could not edit files (${reason})`,
+            plan,
+            logs: this.logManager.getLogs()
+          }
+        }
+      }
+
+      // Emit manual test prompt if enabled
+      if (this.policy.worker?.manualTest?.autoPromptAfterAI) {
+        this.log('AI phase complete - prompting for manual test')
+        broadcastToRenderers('worker:manualTestPrompt', {
+          projectId: this.projectId,
+          cardId: this.cardId,
+          jobId: this.jobId,
+          cardTitle: this.card?.title,
+          branchName:
+            this.worktreeManager?.getWorkerBranch() || this.branchManager?.getWorkerBranch(),
+          worktreePath: this.worktreeManager?.getWorktreePath()
+        })
+      }
+
       // Phase 7: Run checks
       this.setPhase('checks')
       this.log('Running verification checks')
@@ -805,7 +845,26 @@ export class WorkerPipeline {
 
   private async commitAndPushChanges(branchName: string): Promise<void> {
     const ctx = this.buildPipelineContext()
-    await commitAndPush(ctx, branchName, this.branchManager, true)
+    if (this.useWorktree) {
+      const expectedPath = this.worktreeManager?.getWorktreePath()
+      if (!expectedPath) {
+        this.log('ERROR: Worktree mode active but worktreePath is null')
+        throw new Error('Worktree path not available for commit/push')
+      }
+      if (ctx.worktreePath !== expectedPath) {
+        this.log(
+          `WARNING: Context worktreePath (${ctx.worktreePath}) differs from manager (${expectedPath})`
+        )
+      }
+    }
+
+    await commitAndPush(
+      ctx,
+      branchName,
+      this.useWorktree ? null : this.branchManager,
+      !this.useWorktree,
+      (msg) => this.log(msg)
+    )
   }
 
   private async createPR(
@@ -908,19 +967,37 @@ export class WorkerPipeline {
 // ==================== Public API ====================
 
 export async function runWorker(jobId: string): Promise<WorkerResult> {
+  logAction('workerPipeline:runWorker:start', { jobId })
   // First getJob call without projectId - searches all DBs
   const job = getJob(jobId)
   if (!job) {
+    logAction('workerPipeline:runWorker:jobNotFound', { jobId })
     return { success: false, phase: 'init', error: 'Job not found' }
   }
 
   const projectId = job.project_id
 
   if (!job.card_id) {
+    logAction('workerPipeline:runWorker:noCard', { jobId, projectId })
+    updateJobState(
+      jobId,
+      'failed',
+      { success: false, phase: 'init', error: 'No card specified' },
+      'No card specified',
+      projectId
+    )
     return { success: false, phase: 'init', error: 'No card specified' }
   }
 
   if (!acquireJobLease(jobId, 300, projectId)) {
+    logAction('workerPipeline:runWorker:leaseFailed', { jobId, projectId })
+    updateJobState(
+      jobId,
+      'failed',
+      { success: false, phase: 'init', error: 'Failed to acquire job lease' },
+      'Failed to acquire job lease',
+      projectId
+    )
     return { success: false, phase: 'init', error: 'Failed to acquire job lease' }
   }
   broadcastToRenderers('stateUpdated')
@@ -942,6 +1019,13 @@ export async function runWorker(jobId: string): Promise<WorkerResult> {
 
     updateJobState(jobId, canceled ? 'canceled' : 'failed', result, message, projectId)
     broadcastToRenderers('stateUpdated')
+    logAction('workerPipeline:runWorker:result', {
+      jobId,
+      projectId,
+      success: result.success,
+      phase: result.phase,
+      error: result.error
+    })
     return result
   }
 
@@ -963,6 +1047,13 @@ export async function runWorker(jobId: string): Promise<WorkerResult> {
     deleteFollowUpInstructionsByJob(jobId)
   }
   broadcastToRenderers('stateUpdated')
+  logAction('workerPipeline:runWorker:result', {
+    jobId,
+    projectId,
+    success: result.success,
+    phase: result.phase,
+    error: result.error
+  })
 
   // Trigger sync after job completion (success or failure)
   // This will be debounced by the scheduler
@@ -1014,7 +1105,13 @@ export async function resumeWorkerAfterApproval(jobId: string): Promise<WorkerRe
   }
 
   // Plan is approved or skipped - resume
-  updateJobState(jobId, 'running', { success: false, phase: 'ai', plan: approval.plan }, undefined, projectId)
+  updateJobState(
+    jobId,
+    'running',
+    { success: false, phase: 'ai', plan: approval.plan },
+    undefined,
+    projectId
+  )
   broadcastToRenderers('stateUpdated')
 
   return runWorker(jobId)

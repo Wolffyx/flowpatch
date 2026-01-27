@@ -38,9 +38,11 @@ export {
   deleteCard,
   getNextReadyCard,
   getNextReadyCards,
-  isCardBlockedByDependencies
+  isCardBlockedByDependencies,
+  getCardEligibilityDiagnostic,
+  getReadyCardsNotProcessing
 } from './cards'
-export type { Card, CardStatus } from './cards'
+export type { Card, CardStatus, CardEligibilityDiagnostic } from './cards'
 
 // Jobs
 export {

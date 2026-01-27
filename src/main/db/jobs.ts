@@ -10,7 +10,9 @@ import { jobs } from './schema'
 import { jobs as projectJobs } from './schema/project'
 import { generateId } from '@shared/utils'
 import type { Job, JobState, JobType } from '@shared/types'
-import { resolveProjectDb } from './db-resolver'
+import { resolveProjectDb, getProjectPath } from './db-resolver'
+import { listProjects } from './projects'
+import { getProjectDrizzle, hasProjectDb } from './project-db'
 
 export type { Job, JobState, JobType }
 
@@ -61,6 +63,25 @@ export function getJob(id: string, projectId?: string): Job | null {
     if (isLocalDb) {
       const row = db.select().from(projectJobs).where(eq(projectJobs.id, id)).get()
       return row ? ({ ...row, project_id: projectId } as Job) : null
+    }
+  }
+
+  // If no projectId provided, prioritize project DBs for migrated projects
+  if (!projectId) {
+    const projects = listProjects()
+    for (const project of projects) {
+      const projectPath = getProjectPath(project.id)
+      if (projectPath && hasProjectDb(projectPath)) {
+        try {
+          const projectDb = getProjectDrizzle(projectPath)
+          const row = projectDb.select().from(projectJobs).where(eq(projectJobs.id, id)).get()
+          if (row) {
+            return { ...row, project_id: project.id } as Job
+          }
+        } catch {
+          // Skip projects with DB access errors
+        }
+      }
     }
   }
 

@@ -85,6 +85,19 @@ export interface FollowUpInstructionsConfig {
   maxQueueSize: number
 }
 
+export interface ProviderSwitchConfig {
+  /** How to handle mid-execution limit hits. Default: 'automatic' */
+  mode: 'automatic' | 'approval' | 'disabled'
+  /** What to do when ALL providers are exhausted. Default: 'pause_and_wait' */
+  exhaustedBehavior: 'pause_and_wait' | 'fail_immediately' | 'queue_for_later'
+  /** Minutes to wait before retrying (for pause_and_wait). Default: 5 */
+  retryIntervalMinutes: number
+  /** Maximum total wait time in minutes before giving up. Default: 60 */
+  maxWaitMinutes: number
+  /** Show notification when provider switch occurs. Default: true */
+  notifyOnSwitch: boolean
+}
+
 export interface FeaturesConfig {
   thinking?: ThinkingConfig
   planning?: PlanningConfig
@@ -99,4 +112,5 @@ export interface FeaturesConfig {
   featureSuggestions?: FeatureSuggestionsConfig
   dependencies?: DependenciesConfig
   followUpInstructions?: FollowUpInstructionsConfig
+  providerSwitch?: ProviderSwitchConfig
 }

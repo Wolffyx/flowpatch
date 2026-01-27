@@ -1,6 +1,23 @@
+import type { AppType } from './e2e-test'
+
 export type CardStatus = 'draft' | 'ready' | 'in_progress' | 'in_review' | 'testing' | 'done'
 export type Provider = 'github' | 'gitlab' | 'local' | 'auto'
 export type CardType = 'issue' | 'pr' | 'draft' | 'mr' | 'local'
+
+/**
+ * Card-level E2E testing override configuration.
+ * Allows individual cards to override project-wide E2E settings.
+ */
+export interface CardE2EOverride {
+  /** Override project E2E enabled state for this card */
+  enabled?: boolean
+  /** Override app type for this card */
+  appType?: AppType
+  /** Override base URL for this card */
+  baseUrl?: string
+  /** Card-specific test command override */
+  testCommand?: string
+}
 
 export interface Card {
   id: string
@@ -22,6 +39,8 @@ export interface Card {
   sync_state: 'ok' | 'pending' | 'error'
   last_error: string | null
   has_conflicts: number
+  /** Card-specific metadata including E2E overrides (JSON stringified) */
+  metadata_json?: string | null
 }
 
 export interface CardLink {
