@@ -13,6 +13,7 @@
  * - 'project:{projectKey}:{key}' for project overrides
  */
 
+import { app } from 'electron'
 import { deleteAppSetting, getAppSetting, setAppSetting } from './db'
 import { getProjectPath } from './db/db-resolver'
 import {
@@ -55,7 +56,8 @@ export const APP_DEFAULTS: Record<string, string> = {
   // Log settings
   'logs.maxEntries': '5000',
   'logs.persistEnabled': 'false',
-  'logs.exportIncludeDiskWhenEnabled': 'true'
+  'logs.exportIncludeDiskWhenEnabled': 'true',
+  'logs.aiDebugEnabled': app.isPackaged ? 'false' : 'true'
 }
 
 // ============================================================================
@@ -341,7 +343,8 @@ export const SETTINGS_SCHEMA: Record<string, 'string' | 'boolean' | 'number'> = 
   'ui.logsMaxLines': 'number',
   'logs.maxEntries': 'number',
   'logs.persistEnabled': 'boolean',
-  'logs.exportIncludeDiskWhenEnabled': 'boolean'
+  'logs.exportIncludeDiskWhenEnabled': 'boolean',
+  'logs.aiDebugEnabled': 'boolean'
 }
 
 /**

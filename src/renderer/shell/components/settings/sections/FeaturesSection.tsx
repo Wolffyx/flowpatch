@@ -22,6 +22,7 @@ import { useWorkerPipelineSettings } from '../hooks/useWorkerPipelineSettings'
 import { useTestModeSettings } from '../hooks/useTestModeSettings'
 import { useManualTestSettings } from '../hooks/useManualTestSettings'
 import { useProviderSwitchSettings } from '../hooks/useProviderSwitchSettings'
+import { useAIDebugLogging } from '../hooks/useAIDebugLogging'
 import type { ProviderSwitchMode, ExhaustedBehavior } from '../types'
 
 export function FeaturesSection(): React.JSX.Element {
@@ -104,6 +105,11 @@ export function FeaturesSection(): React.JSX.Element {
     loadTestModeSettings,
     handleTestModeChange
   } = useTestModeSettings()
+  const {
+    aiDebugLoggingEnabled,
+    loading: aiDebugLoggingLoading,
+    handleAIDebugLoggingChange
+  } = useAIDebugLogging()
 
   const {
     autoPromptAfterAI,
@@ -211,6 +217,26 @@ export function FeaturesSection(): React.JSX.Element {
               checked={testModeEnabled}
               onCheckedChange={(enabled) => handleTestModeChange(enabled)}
               disabled={testModeLoading}
+            />
+          )}
+        </SettingRow>
+      </SettingsCard>
+
+      {/* AI Debug Logging - Global */}
+      <SettingsCard
+        title="AI Debug Logging"
+        description="Persist full AI agent logs to disk for debugging. Defaults on in dev, off in packaged builds."
+      >
+        <SettingRow
+          title="Save AI agent logs"
+          description="When enabled, AI execution logs are written to the local app data folder under logs/ai."
+        >
+          {aiDebugLoggingLoading ? (
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          ) : (
+            <Switch
+              checked={aiDebugLoggingEnabled}
+              onCheckedChange={(enabled) => handleAIDebugLoggingChange(enabled)}
             />
           )}
         </SettingRow>

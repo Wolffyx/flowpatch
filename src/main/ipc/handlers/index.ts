@@ -26,6 +26,7 @@ import { registerFeatureSuggestionHandlers } from './feature-suggestions'
 import { registerDependencyHandlers } from './dependencies'
 import { registerUpdaterHandlers } from './updater'
 import { registerMigrationHandlers } from './migration'
+import { registerGitAuthHandlers } from './git-auth'
 import { sendToAllTabs } from '../../tabManager'
 
 let mainWindowRef: BrowserWindow | null = null
@@ -69,6 +70,7 @@ export function registerAllHandlers(mainWindow: BrowserWindow): void {
   registerDependencyHandlers(notifyRenderer)
   registerUpdaterHandlers()
   registerMigrationHandlers(notifyRenderer)
+  registerGitAuthHandlers()
 }
 
 // Re-export individual registrations for granular use

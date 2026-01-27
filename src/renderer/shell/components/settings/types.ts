@@ -20,6 +20,8 @@ export type SettingsSection =
   | 'shortcuts'
   | 'ai-agents'
   | 'usage-limits'
+  | 'storage'
+  | 'git-auth'
   | 'danger-zone'
   | 'about'
 

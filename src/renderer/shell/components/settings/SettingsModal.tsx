@@ -31,6 +31,7 @@ import {
   AIAgentsSection,
   UsageLimitsSection,
   StorageSection,
+  GitAuthSection,
   DangerZoneSection,
   AboutSection
 } from './sections'
@@ -66,6 +67,8 @@ function SettingsContent(): React.JSX.Element {
       return <UsageLimitsSection />
     case 'storage':
       return <StorageSection />
+    case 'git-auth':
+      return <GitAuthSection />
     case 'danger-zone':
       return <DangerZoneSection />
     case 'about':

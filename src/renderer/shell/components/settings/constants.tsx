@@ -35,6 +35,7 @@ export const SETTINGS_SECTIONS: SectionConfig[] = [
   { id: 'ai-agents', label: 'AI Agents', icon: Bot },
   { id: 'usage-limits', label: 'Usage & Limits', icon: Zap },
   { id: 'storage', label: 'Storage', icon: Database },
+  { id: 'git-auth', label: 'Git Auth', icon: Wrench },
   { id: 'danger-zone', label: 'Danger Zone', icon: AlertTriangle },
   { id: 'about', label: 'About', icon: Info }
 ]

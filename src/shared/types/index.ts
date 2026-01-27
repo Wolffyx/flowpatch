@@ -31,6 +31,7 @@ export * from './interfaces/sync'
 export * from './interfaces/security'
 export * from './interfaces/provider-availability'
 export * from './interfaces/provider-switch'
+export * from './interfaces/git-auth'
 
 // IPC types (refactored from ipc.ts into modular interface files)
 export * from './interfaces/ipc-common'
@@ -45,3 +46,4 @@ export * from './interfaces/ipc-ui'
 export * from './interfaces/ipc-onboarding'
 export * from './interfaces/ipc-worktree'
 export * from './interfaces/ipc-channels'
+export * from './interfaces/ipc-git-auth'

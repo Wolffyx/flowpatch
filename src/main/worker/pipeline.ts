@@ -806,7 +806,9 @@ export class WorkerPipeline {
     const success = await runAI(
       ctx,
       plan,
-      (msg, meta) => this.log(msg, meta),
+      (msg, meta) => {
+        this.log(msg, { ...meta, ai: true, source: meta?.source ?? 'ai' })
+      },
       () => this.lifecycleManager!.isCanceled()
     )
 

@@ -17,6 +17,11 @@ export interface PolicyConfig {
     gitlab?: {
       host?: string
     }
+    gitAuth?: {
+      mode?: 'auto' | 'ssh' | 'https' | 'gh_cli' | 'glab_cli'
+      forceSshRewrite?: boolean
+      preferredHost?: string | null
+    }
   }
   sync?: {
     webhookPreferred?: boolean

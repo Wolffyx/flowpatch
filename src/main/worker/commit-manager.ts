@@ -6,6 +6,7 @@
 
 import type { PipelineContext } from './phases/types'
 import type { PolicyConfig, Card } from '@shared/types'
+import { detectGitAuthState } from '../utils/git-auth'
 import { stageAll, commit, push, isWorkingTreeClean } from './git-operations'
 import { getWorkingDir } from './phases/types'
 
@@ -46,6 +47,18 @@ export async function commitAndPush(
 
     if (ctx.useWorktree && !ctx.worktreePath) {
       log?.('WARNING: useWorktree is true but worktreePath is null!')
+    }
+
+    // Detect auth mode and warn if HTTPS without creds or SSH unreachable
+    try {
+      const authState = await detectGitAuthState(workingDir)
+      if (authState.warnings?.length) {
+        for (const w of authState.warnings) {
+          log?.(`Git auth warning: ${w}`)
+        }
+      }
+    } catch (e) {
+      log?.(`Git auth check skipped: ${e instanceof Error ? e.message : String(e)}`)
     }
 
     await stageAll(workingDir)

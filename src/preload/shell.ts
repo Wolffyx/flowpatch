@@ -116,6 +116,14 @@ export interface ShellAPI {
     callback: (data: { type: string; message: AgentChatMessage; jobId: string }) => void
   ) => () => void
 
+  // Git Auth
+  getGitAuthState: (
+    projectId: string
+  ) => Promise<{ success: boolean; state: any; mode: any; forceSshRewrite: boolean }>
+  setGitAuthMode: (projectId: string, payload: { mode: any; forceSshRewrite?: boolean }) => Promise<{ success: boolean }>
+  fixRemoteToSsh: (projectId: string) => Promise<{ success: boolean; error?: string; newUrl?: string }>
+  testGitAuth: (projectId: string) => Promise<{ success: boolean; state?: any; error?: string }>
+
   // App Reset (Dev only)
   resetEverything: () => Promise<{ success: boolean; error?: string }>
   onDevResetTrigger: (callback: () => void) => () => void
@@ -623,6 +631,26 @@ const shellAPI: ShellAPI = {
     return ipcRenderer.invoke('app:resetEverything')
   },
 
+  // -------------------------------------------------------------------------
+  // Git Auth
+  // -------------------------------------------------------------------------
+
+  getGitAuthState: (projectId: string) => {
+    return ipcRenderer.invoke('gitAuth:getState', { projectId })
+  },
+
+  setGitAuthMode: (projectId: string, payload: { mode: any; forceSshRewrite?: boolean }) => {
+    return ipcRenderer.invoke('gitAuth:setMode', { projectId, ...payload })
+  },
+
+  fixRemoteToSsh: (projectId: string) => {
+    return ipcRenderer.invoke('gitAuth:fixRemote', { projectId })
+  },
+
+  testGitAuth: (projectId: string) => {
+    return ipcRenderer.invoke('gitAuth:test', { projectId })
+  },
+
   onDevResetTrigger: (callback: () => void) => {
     const handler = (_event: IpcRendererEvent) => callback()
     ipcRenderer.on('dev:triggerReset', handler)
@@ -707,7 +735,12 @@ const allowedInvokeChannels = [
   // Migration
   'getMigrationStatus',
   'getCentralDataCounts',
-  'migrateProjectToLocal'
+  'migrateProjectToLocal',
+  // Git Auth
+  'gitAuth:getState',
+  'gitAuth:setMode',
+  'gitAuth:fixRemote',
+  'gitAuth:test'
 ]
 
 const electronAPI = {

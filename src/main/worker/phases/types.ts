@@ -66,7 +66,7 @@ export interface WorkerResult {
  */
 export type LogFn = (
   message: string,
-  meta?: { source?: string; stream?: 'stdout' | 'stderr' }
+  meta?: { source?: string; stream?: 'stdout' | 'stderr'; ai?: boolean }
 ) => void
 
 /**

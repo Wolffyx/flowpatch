@@ -7,6 +7,7 @@
 import { updateJobResult } from '../../db'
 import { broadcastToRenderers } from '../../ipc/broadcast'
 import type { WorkerLogMessage } from '../../../shared/types'
+import { logAiDebug } from '../../utils/ai-logger'
 
 export interface LogManagerConfig {
   /** Number of logs to accumulate before flushing to DB */
@@ -97,7 +98,10 @@ export class LogManager {
   /**
    * Log a message with optional source metadata.
    */
-  log(message: string, meta?: { source?: string; stream?: 'stdout' | 'stderr' }): void {
+  log(
+    message: string,
+    meta?: { source?: string; stream?: 'stdout' | 'stderr'; ai?: boolean }
+  ): void {
     const ts = new Date().toISOString()
     const sourcePrefix = meta?.source
       ? `[${meta.source}${meta.stream ? `:${meta.stream}` : ''}] `
@@ -106,6 +110,24 @@ export class LogManager {
     const line = `[${ts}] ${fullMessage}`
     this.logs.push(line)
     console.log(`[Worker] ${fullMessage}`)
+
+    const isAiLog =
+      meta?.ai ||
+      this.phase === 'ai' ||
+      (meta?.source ? ['ai', 'claude', 'codex', 'opencode'].includes(meta.source) : false)
+
+    if (isAiLog) {
+      logAiDebug({
+        projectKey: null,
+        projectId: this.projectId,
+        jobId: this.jobId,
+        cardId: this.cardId,
+        phase: this.phase,
+        message: fullMessage,
+        source: meta?.source,
+        stream: meta?.stream
+      })
+    }
 
     if (!this.jobId) return
 
