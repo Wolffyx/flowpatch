@@ -7,12 +7,7 @@
 
 import { useState } from 'react'
 import { GitCompareArrows, SplitSquareHorizontal, AlignJustify } from 'lucide-react'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle
-} from './ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
 import { GitDiffViewer } from './GitDiffViewer'
 import { cn } from '../lib/utils'
@@ -38,9 +33,7 @@ export function GitDiffDialog({
         <DialogHeader className="px-6 py-4 border-b flex-row items-center justify-between space-y-0">
           <div className="flex items-center gap-2">
             <GitCompareArrows className="h-5 w-5" />
-            <DialogTitle>
-              {branchName ? `Changes on ${branchName}` : 'Git Diff'}
-            </DialogTitle>
+            <DialogTitle>{branchName ? `Changes on ${branchName}` : 'Git Diff'}</DialogTitle>
           </div>
 
           {/* View mode toggle */}
@@ -48,10 +41,7 @@ export function GitDiffDialog({
             <Button
               variant="ghost"
               size="sm"
-              className={cn(
-                'h-7 px-2',
-                viewMode === 'inline' && 'bg-muted'
-              )}
+              className={cn('h-7 px-2', viewMode === 'inline' && 'bg-muted')}
               onClick={() => setViewMode('inline')}
               title="Inline view"
             >
@@ -60,10 +50,7 @@ export function GitDiffDialog({
             <Button
               variant="ghost"
               size="sm"
-              className={cn(
-                'h-7 px-2',
-                viewMode === 'side-by-side' && 'bg-muted'
-              )}
+              className={cn('h-7 px-2', viewMode === 'side-by-side' && 'bg-muted')}
               onClick={() => setViewMode('side-by-side')}
               title="Side-by-side view"
             >
@@ -73,11 +60,7 @@ export function GitDiffDialog({
         </DialogHeader>
 
         <div className="flex-1 min-h-0 overflow-hidden">
-          <GitDiffViewer
-            worktreeId={worktreeId}
-            viewMode={viewMode}
-            className="h-full"
-          />
+          <GitDiffViewer worktreeId={worktreeId} viewMode={viewMode} className="h-full" />
         </div>
       </DialogContent>
     </Dialog>

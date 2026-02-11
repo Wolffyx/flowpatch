@@ -16,7 +16,7 @@ import {
   type CreateAIProfileData,
   type UpdateAIProfileData
 } from '../../db'
-import { logAction } from '@shared/utils'
+import { logAction } from '../../utils/main-logger'
 import type { AIProfile } from '@shared/types'
 
 // ============================================================================

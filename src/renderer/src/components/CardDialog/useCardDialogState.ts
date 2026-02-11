@@ -1,16 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
-import type { Card, Worktree, Job } from '../../../../shared/types'
+import type { Card, Worktree, Job, ManualTestInfo } from '../../../../shared/types'
 
-interface TestInfo {
-  success: boolean
-  hasWorktree?: boolean
-  worktreePath?: string
-  branchName?: string | null
-  repoPath?: string
-  projectType?: { type: string; hasPackageJson: boolean; port?: number }
-  commands?: { install?: string; dev?: string; build?: string }
-  error?: string
-}
+type TestInfo = ManualTestInfo
 
 export function useCardDialogState(card: Card | null, projectId: string | null) {
   const [worktree, setWorktree] = useState<Worktree | null>(null)
@@ -57,7 +48,9 @@ export function useCardDialogState(card: Card | null, projectId: string | null) 
         const jobs = (await window.projectAPI.getJobs()) as Job[]
         const cardJobs = jobs.filter((j) => j.card_id === card.id)
         if (cardJobs.length > 0) {
-          cardJobs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+          cardJobs.sort(
+            (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          )
           setLatestJob(cardJobs[0])
         } else {
           setLatestJob(null)
@@ -117,30 +110,29 @@ export function useCardDialogState(card: Card | null, projectId: string | null) 
 
     setCheckingTestInfo(true)
     try {
-      if (worktree) {
-        setTestInfo({
-          success: true,
-          hasWorktree: true,
-          worktreePath: worktree.worktree_path,
-          branchName: worktree.branch_name
-        })
-        setTestDialogOpen(true)
-      } else {
-        setTestInfo({
-          success: false,
-          error: 'No worktree found for this card'
-        })
+      const result = await window.projectAPI.getCardTestInfo(projectId, card.id)
+      if ('error' in result && !result.success) {
+        console.error('Failed to get test info:', result.error)
       }
+      setTestInfo(result as ManualTestInfo)
+      setTestDialogOpen(true)
     } catch (error) {
       console.error('Failed to load test info:', error)
       setTestInfo({
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: error instanceof Error ? error.message : 'Unknown error',
+        hasWorktree: false,
+        branchName: null,
+        branchExistsLocal: false,
+        branchExistsRemote: false,
+        repoPath: '',
+        canRecreateWorktree: false,
+        canCheckoutInMainRepo: false
       })
     } finally {
       setCheckingTestInfo(false)
     }
-  }, [card, projectId, worktree])
+  }, [card, projectId])
 
   // Description editing
   const handleSaveDescription = useCallback(

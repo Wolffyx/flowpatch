@@ -208,5 +208,7 @@ export function buildPromptContext(repoRoot: string, bundle: ContextBundle): str
     '',
     '### Snippets (bounded, may be redacted)',
     snippetText || '(none)'
-  ].filter(Boolean).join('\n')
+  ]
+    .filter(Boolean)
+    .join('\n')
 }

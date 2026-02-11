@@ -43,11 +43,7 @@ class IntervalRegistryClass {
    * Register a new interval timer.
    * @returns Interval ID for later reference
    */
-  register(
-    callback: () => void | Promise<void>,
-    intervalMs: number,
-    description?: string
-  ): string {
+  register(callback: () => void | Promise<void>, intervalMs: number, description?: string): string {
     const id = `interval_${++this.idCounter}_${Date.now()}`
 
     // Wrap callback to track execution
@@ -250,11 +246,7 @@ class TimeoutRegistryClass {
   private timeouts = new Map<string, RegisteredTimeout>()
   private idCounter = 0
 
-  register(
-    callback: () => void | Promise<void>,
-    delayMs: number,
-    description?: string
-  ): string {
+  register(callback: () => void | Promise<void>, delayMs: number, description?: string): string {
     const id = `timeout_${++this.idCounter}_${Date.now()}`
 
     const wrappedCallback = async (): Promise<void> => {

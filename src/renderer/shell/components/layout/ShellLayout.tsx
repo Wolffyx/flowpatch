@@ -30,16 +30,10 @@ export function ShellLayout({
       {titleBar}
 
       {/* Main Content Area */}
-      <div className="flex-1 relative overflow-hidden">
-        {children}
-      </div>
+      <div className="flex-1 relative overflow-hidden">{children}</div>
 
       {/* Logs Panel - Fixed at bottom, above everything */}
-      {logsPanel && (
-        <div className="shrink-0 border-t bg-background z-20">
-          {logsPanel}
-        </div>
-      )}
+      {logsPanel && <div className="shrink-0 border-t bg-background z-20">{logsPanel}</div>}
     </div>
   )
 }

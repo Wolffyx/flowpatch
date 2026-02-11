@@ -4,7 +4,7 @@
  * Global type definitions for the shell renderer's IPC API
  */
 
-import type { Project, Job } from '@shared/types'
+import type { Project, Job, ProjectWorkerStatus, WorkerStatus, WorkerError } from '@shared/types'
 import type { TabState, TabManagerState } from './tab'
 import type { LogEntry } from './log'
 
@@ -54,6 +54,18 @@ declare global {
         }) => void
       ) => () => void
 
+      // Worker Status (unified)
+      getWorkerStatus: (projectId: string) => Promise<ProjectWorkerStatus | null>
+      onWorkerStatusChanged: (
+        callback: (data: { projectId: string; status: WorkerStatus }) => void
+      ) => () => void
+      clearWorkerErrorStatus: (projectId: string) => Promise<boolean>
+      getWorkerErrorHistory: (projectId: string) => Promise<WorkerError[]>
+      clearWorkerErrorHistory: (projectId: string) => Promise<boolean>
+      retryLastFailedCard: (
+        projectId: string
+      ) => Promise<{ success: boolean; cardId?: string; error?: string }>
+
       // Jobs (Activity feed)
       getRecentJobs: (limit?: number) => Promise<Job[]>
       onStateUpdated: (callback: () => void) => () => void
@@ -71,6 +83,9 @@ declare global {
         projectKey: string,
         patch: Record<string, string | null>
       ) => Promise<void>
+      clearProjectOverrides: (projectKey: string, keys?: string[]) => Promise<void>
+      getStoragePreference: (projectId: string) => Promise<{ useLocalDb: boolean }>
+      setStoragePreference: (projectId: string, useLocalDb: boolean) => Promise<{ success: boolean }>
 
       // Shortcuts
       getShortcuts: () => Promise<import('@shared/shortcuts').ShortcutBinding[]>
@@ -92,7 +107,10 @@ declare global {
       getSystemTheme: () => Promise<'light' | 'dark'>
 
       // Agent Chat
-      getChatMessages: (jobId: string, limit?: number) => Promise<{
+      getChatMessages: (
+        jobId: string,
+        limit?: number
+      ) => Promise<{
         messages: {
           id: string
           job_id: string
@@ -129,23 +147,27 @@ declare global {
         error?: string
       }>
       markChatAsRead: (jobId: string) => Promise<{ success: boolean; error?: string }>
-      clearChatHistory: (jobId: string) => Promise<{ success: boolean; count: number; error?: string }>
-      onChatMessage: (callback: (data: {
-        type: string
-        message: {
-          id: string
-          job_id: string
-          card_id: string
-          project_id: string
-          role: 'user' | 'agent' | 'system'
-          content: string
-          status: 'sent' | 'delivered' | 'read' | 'error'
-          metadata_json?: string
-          created_at: string
-          updated_at?: string
-        }
+      clearChatHistory: (
         jobId: string
-      }) => void) => () => void
+      ) => Promise<{ success: boolean; count: number; error?: string }>
+      onChatMessage: (
+        callback: (data: {
+          type: string
+          message: {
+            id: string
+            job_id: string
+            card_id: string
+            project_id: string
+            role: 'user' | 'agent' | 'system'
+            content: string
+            status: 'sent' | 'delivered' | 'read' | 'error'
+            metadata_json?: string
+            created_at: string
+            updated_at?: string
+          }
+          jobId: string
+        }) => void
+      ) => () => void
 
       // App Reset (Dev only)
       resetEverything: () => Promise<{ success: boolean; error?: string }>
@@ -164,7 +186,14 @@ declare global {
 
 // Auto-Updater types
 export interface UpdateStatus {
-  state: 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
+  state:
+    | 'idle'
+    | 'checking'
+    | 'available'
+    | 'not-available'
+    | 'downloading'
+    | 'downloaded'
+    | 'error'
   version?: string
   releaseNotes?: string
   releaseDate?: string

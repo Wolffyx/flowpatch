@@ -46,13 +46,15 @@ export const test = base.extend<ElectronFixtures>({
     await window.waitForLoadState('domcontentloaded')
 
     // Wait for app to be fully loaded
-    await window.waitForSelector('[data-testid="app-loaded"]', {
-      timeout: 30000,
-      state: 'attached'
-    }).catch(() => {
-      // If no test id, wait a bit for the app to settle
-      return window.waitForTimeout(2000)
-    })
+    await window
+      .waitForSelector('[data-testid="app-loaded"]', {
+        timeout: 30000,
+        state: 'attached'
+      })
+      .catch(() => {
+        // If no test id, wait a bit for the app to settle
+        return window.waitForTimeout(2000)
+      })
 
     await use(window)
   }

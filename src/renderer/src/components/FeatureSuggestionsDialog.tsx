@@ -154,25 +154,22 @@ export function FeatureSuggestionsDialog({
     }
   }, [formTitle, formDescription, formCategory, loadSuggestions])
 
-  const handleVote = useCallback(
-    async (suggestionId: string, voteType: 'up' | 'down') => {
-      try {
-        const result = await window.projectAPI.voteOnSuggestion(suggestionId, voteType)
-        if (result.error) {
-          toast.error('Failed to vote', { description: result.error })
-        } else {
-          setSuggestions((prev) =>
-            prev.map((s) => (s.id === suggestionId ? { ...s, vote_count: result.voteCount } : s))
-          )
-        }
-      } catch (err) {
-        toast.error('Failed to vote', {
-          description: err instanceof Error ? err.message : 'Unknown error'
-        })
+  const handleVote = useCallback(async (suggestionId: string, voteType: 'up' | 'down') => {
+    try {
+      const result = await window.projectAPI.voteOnSuggestion(suggestionId, voteType)
+      if (result.error) {
+        toast.error('Failed to vote', { description: result.error })
+      } else {
+        setSuggestions((prev) =>
+          prev.map((s) => (s.id === suggestionId ? { ...s, vote_count: result.voteCount } : s))
+        )
       }
-    },
-    []
-  )
+    } catch (err) {
+      toast.error('Failed to vote', {
+        description: err instanceof Error ? err.message : 'Unknown error'
+      })
+    }
+  }, [])
 
   const handleDelete = useCallback(
     async (suggestionId: string) => {
@@ -218,9 +215,7 @@ export function FeatureSuggestionsDialog({
             <Lightbulb className="h-5 w-5" />
             Feature Suggestions
           </DialogTitle>
-          <DialogDescription>
-            Submit and vote on feature ideas for this project.
-          </DialogDescription>
+          <DialogDescription>Submit and vote on feature ideas for this project.</DialogDescription>
         </DialogHeader>
 
         {isCreating ? (

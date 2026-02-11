@@ -164,23 +164,66 @@ export abstract class BaseCLIProvider implements ICLIProvider {
     const msg = error instanceof Error ? error.message : String(error)
     const s = msg.toLowerCase()
 
-    return (
-      s.includes('rate limit') ||
-      s.includes('ratelimit') ||
-      s.includes('rate_limit') ||
-      s.includes("you've hit your limit") ||
-      s.includes('you\u2019ve hit your limit') ||
-      s.includes('limit reached') ||
-      s.includes('quota') ||
-      s.includes('insufficient_quota') ||
-      s.includes('too many requests') ||
-      s.includes('http 429') ||
-      s.includes('status 429') ||
-      s.includes('usage limit') ||
-      s.includes('overloaded') ||
-      s.includes('exceeded') ||
-      s.includes('429')
-    )
+    // Rate limit patterns
+    const rateLimitPatterns = [
+      'rate limit',
+      'ratelimit',
+      'rate_limit',
+      'too many requests',
+      'http 429',
+      'status 429',
+      '429'
+    ]
+
+    // Usage/quota limit patterns
+    const usageLimitPatterns = [
+      "you've hit your limit",
+      'you\u2019ve hit your limit', // Unicode apostrophe
+      'limit reached',
+      'usage limit',
+      'token limit',
+      'context limit',
+      'max tokens',
+      'maximum tokens',
+      'quota',
+      'insufficient_quota',
+      'credit',
+      'billing'
+    ]
+
+    // Capacity/availability patterns
+    const capacityPatterns = [
+      'overloaded',
+      'capacity',
+      'temporarily unavailable',
+      'service unavailable',
+      'try again later',
+      'exceeded',
+      'exceed',
+      'maximum'
+    ]
+
+    // Claude Code specific patterns
+    const claudePatterns = ['anthropic', 'claude', 'api error', 'api_error']
+
+    // Check all patterns
+    for (const pattern of [...rateLimitPatterns, ...usageLimitPatterns, ...capacityPatterns]) {
+      if (s.includes(pattern)) {
+        return true
+      }
+    }
+
+    // For Claude-specific errors, also check if it mentions limits
+    for (const claudePattern of claudePatterns) {
+      if (
+        s.includes(claudePattern) &&
+        (s.includes('limit') || s.includes('error') || s.includes('fail'))
+      ) {
+        return true
+      }
+    }
+
+    return false
   }
 
   parseError(output: string, exitCode?: number): { message: string; isRetryable: boolean } {

@@ -49,7 +49,9 @@ function getPriorityColor(labelsJson: string | null): string | null {
   const labels = parseLabels(labelsJson)
   const priorityLabels = labels.map((l) => l.toLowerCase())
 
-  if (priorityLabels.some((l) => l.includes('critical') || l.includes('urgent') || l.includes('p0'))) {
+  if (
+    priorityLabels.some((l) => l.includes('critical') || l.includes('urgent') || l.includes('p0'))
+  ) {
     return 'bg-red-500'
   }
   if (priorityLabels.some((l) => l.includes('high') || l.includes('p1'))) {
@@ -77,7 +79,6 @@ function KanbanCardBase({
   isDragOverlay = false,
   devServerStatus
 }: KanbanCardBaseProps): React.JSX.Element {
-
   const getProviderIcon = (): React.ReactNode => {
     switch (card.provider) {
       case 'github':
@@ -131,6 +132,10 @@ function KanbanCardBase({
         card.sync_state === 'pending' && 'border-chart-4/50'
       )}
       onClick={(e) => {
+        // Don't handle click if card is being dragged
+        if (isDragging) {
+          return
+        }
         e.stopPropagation()
         onClick()
       }}
@@ -244,11 +249,7 @@ function KanbanCardBase({
         {labels.length > 0 && (
           <div className="flex flex-wrap gap-1 mb-2">
             {labels.slice(0, 3).map((label) => (
-              <Badge
-                key={label}
-                variant="secondary"
-                className="text-xs py-0.5 px-1.5 font-normal"
-              >
+              <Badge key={label} variant="secondary" className="text-xs py-0.5 px-1.5 font-normal">
                 {truncate(formatLabel(label), 15)}
               </Badge>
             ))}
@@ -289,8 +290,7 @@ export function KanbanCard({
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: card.id,
     data: { card },
-    animateLayoutChanges: (args) =>
-      args.isSorting ? false : defaultAnimateLayoutChanges(args)
+    animateLayoutChanges: (args) => (args.isSorting ? false : defaultAnimateLayoutChanges(args))
   })
 
   const style = {

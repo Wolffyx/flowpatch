@@ -66,7 +66,11 @@ function getFileStatusInfo(status: DiffFile['status']): {
     case 'C':
       return { label: 'Copied', color: 'text-purple-500', icon: <FileCode className="h-4 w-4" /> }
     default:
-      return { label: 'Changed', color: 'text-muted-foreground', icon: <FileCode className="h-4 w-4" /> }
+      return {
+        label: 'Changed',
+        color: 'text-muted-foreground',
+        icon: <FileCode className="h-4 w-4" />
+      }
   }
 }
 
@@ -103,7 +107,11 @@ function computeDiffLines(oldContent: string, newContent: string): DiffLine[] {
         })
         newIdx++
       }
-    } else if (lcsIdx < lcs.length && newIdx < newLines.length && newLines[newIdx] === lcs[lcsIdx]) {
+    } else if (
+      lcsIdx < lcs.length &&
+      newIdx < newLines.length &&
+      newLines[newIdx] === lcs[lcsIdx]
+    ) {
       // Line removed from old
       result.push({
         type: 'remove',
@@ -310,7 +318,10 @@ function SideBySideDiffView({ diff }: { diff: FileDiff }): React.JSX.Element {
               {pair.left?.oldLineNumber ?? ''}
             </span>
             <span
-              className={cn('w-6 text-center select-none', pair.left?.type === 'remove' && 'text-red-500')}
+              className={cn(
+                'w-6 text-center select-none',
+                pair.left?.type === 'remove' && 'text-red-500'
+              )}
             >
               {pair.left?.type === 'remove' ? '-' : ' '}
             </span>
@@ -336,7 +347,10 @@ function SideBySideDiffView({ diff }: { diff: FileDiff }): React.JSX.Element {
               {pair.right?.newLineNumber ?? ''}
             </span>
             <span
-              className={cn('w-6 text-center select-none', pair.right?.type === 'add' && 'text-green-500')}
+              className={cn(
+                'w-6 text-center select-none',
+                pair.right?.type === 'add' && 'text-green-500'
+              )}
             >
               {pair.right?.type === 'add' ? '+' : ' '}
             </span>

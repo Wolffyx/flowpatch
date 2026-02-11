@@ -1,12 +1,28 @@
 /**
  * Usage Tracking Database Module
  *
+ * Supports both central database (legacy) and project-local database.
  * Handles CRUD operations for AI tool usage tracking.
+ * Note: AI tool limits remain in central DB as they are global settings.
+ *
+ * Timezone: Calendar limit windows (hourly, daily, monthly) use local time:
+ * - Hourly = from start of current clock hour
+ * - Daily = from midnight
+ * - Monthly = from 1st of month
+ * Records are stored with created_at in UTC. For multi-timezone or server use,
+ * consider storing or normalizing to a single timezone.
  */
 
 import { and, asc, desc, eq, gte, lt, sql, sum } from 'drizzle-orm'
+import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { getDrizzle } from './drizzle'
-import { usageRecords, aiToolLimits } from './schema'
+import { usageRecords, aiToolLimits, jobs, cards } from './schema'
+import * as projectSchema from './schema/project'
+import {
+  usageRecords as projectUsageRecords,
+  jobs as projectJobs,
+  cards as projectCards
+} from './schema/project'
 import { generateId } from '@shared/utils'
 import type {
   UsageRecord,
@@ -16,6 +32,7 @@ import type {
   AIToolLimits,
   UsageWithLimits
 } from '@shared/types'
+import { resolveProjectDb } from './db-resolver'
 
 export type { UsageRecord, UsageStats, UsageSummary, AIToolLimits, UsageWithLimits }
 
@@ -32,20 +49,121 @@ export interface UsageRecordCreate {
   model?: string
 }
 
+function resolveLocalRefs(
+  db: ReturnType<typeof resolveProjectDb>['db'],
+  data: UsageRecordCreate
+): { jobId: string | null; cardId: string | null } {
+  const localDb = db as BetterSQLite3Database<typeof projectSchema>
+  const jobId = data.jobId
+    ? localDb
+        .select({ id: projectJobs.id })
+        .from(projectJobs)
+        .where(eq(projectJobs.id, data.jobId))
+        .get()
+        ? data.jobId
+        : null
+    : null
+  const cardId = data.cardId
+    ? localDb
+        .select({ id: projectCards.id })
+        .from(projectCards)
+        .where(eq(projectCards.id, data.cardId))
+        .get()
+        ? data.cardId
+        : null
+    : null
+
+  return { jobId, cardId }
+}
+
+function resolveCentralRefs(
+  data: UsageRecordCreate
+): { jobId: string | null; cardId: string | null } {
+  const centralDb = getDrizzle()
+  const jobId = data.jobId
+    ? centralDb.select({ id: jobs.id }).from(jobs).where(eq(jobs.id, data.jobId)).get()
+        ? data.jobId
+        : null
+    : null
+  const cardId = data.cardId
+    ? centralDb.select({ id: cards.id }).from(cards).where(eq(cards.id, data.cardId)).get()
+        ? data.cardId
+        : null
+    : null
+
+  return { jobId, cardId }
+}
+
 /**
  * Create a new usage record.
  */
 export function createUsageRecord(data: UsageRecordCreate): UsageRecord {
-  const db = getDrizzle()
+  const { db, isLocalDb } = resolveProjectDb(data.projectId)
   const id = generateId()
   const now = new Date().toISOString()
 
-  db.insert(usageRecords)
-    .values({
+  if (isLocalDb) {
+    const localRefs = resolveLocalRefs(db, data)
+    db.insert(projectUsageRecords)
+      .values({
+        id,
+        job_id: localRefs.jobId,
+        card_id: localRefs.cardId,
+        tool_type: data.toolType,
+        input_tokens: data.inputTokens,
+        output_tokens: data.outputTokens,
+        total_tokens: data.totalTokens,
+        cost_usd: data.costUsd ?? null,
+        duration_ms: data.durationMs,
+        model: data.model ?? null,
+        created_at: now
+      })
+      .run()
+
+    // Dual-write to central DB for limit aggregation (getHourlyUsage etc. read central only)
+    const centralDb = getDrizzle()
+    const centralRefs = resolveCentralRefs(data)
+    centralDb
+      .insert(usageRecords)
+      .values({
+        id,
+        project_id: data.projectId,
+        job_id: centralRefs.jobId,
+        card_id: centralRefs.cardId,
+        tool_type: data.toolType,
+        input_tokens: data.inputTokens,
+        output_tokens: data.outputTokens,
+        total_tokens: data.totalTokens,
+        cost_usd: data.costUsd ?? null,
+        duration_ms: data.durationMs,
+        model: data.model ?? null,
+        created_at: now
+      })
+      .run()
+
+    return {
       id,
       project_id: data.projectId,
       job_id: data.jobId ?? null,
       card_id: data.cardId ?? null,
+      tool_type: data.toolType,
+      input_tokens: data.inputTokens,
+      output_tokens: data.outputTokens,
+      total_tokens: data.totalTokens,
+      cost_usd: data.costUsd ?? null,
+      duration_ms: data.durationMs,
+      model: data.model ?? null,
+      created_at: now
+    }
+  }
+
+  const centralRefs = resolveCentralRefs(data)
+  db.insert(usageRecords)
+    .values({
+      id,
+      project_id: data.projectId,
+      job_id: centralRefs.jobId,
+      card_id: centralRefs.cardId,
       tool_type: data.toolType,
       input_tokens: data.inputTokens,
       output_tokens: data.outputTokens,
@@ -77,7 +195,19 @@ export function createUsageRecord(data: UsageRecordCreate): UsageRecord {
  * Get usage records for a project.
  */
 export function getUsageRecords(projectId: string, limit = 100, offset = 0): UsageRecord[] {
-  const db = getDrizzle()
+  const { db, isLocalDb } = resolveProjectDb(projectId)
+
+  if (isLocalDb) {
+    const rows = db
+      .select()
+      .from(projectUsageRecords)
+      .orderBy(desc(projectUsageRecords.created_at))
+      .limit(limit)
+      .offset(offset)
+      .all()
+    return rows.map((r) => ({ ...r, project_id: projectId })) as UsageRecord[]
+  }
+
   return db
     .select()
     .from(usageRecords)
@@ -90,8 +220,24 @@ export function getUsageRecords(projectId: string, limit = 100, offset = 0): Usa
 
 /**
  * Get usage records for a job.
+ * @param jobId - The job ID
+ * @param projectId - Optional project ID for direct DB resolution
  */
-export function getUsageRecordsByJob(jobId: string): UsageRecord[] {
+export function getUsageRecordsByJob(jobId: string, projectId?: string): UsageRecord[] {
+  if (projectId) {
+    const { db, isLocalDb } = resolveProjectDb(projectId)
+    if (isLocalDb) {
+      const rows = db
+        .select()
+        .from(projectUsageRecords)
+        .where(eq(projectUsageRecords.job_id, jobId))
+        .orderBy(asc(projectUsageRecords.created_at))
+        .all()
+      return rows.map((r) => ({ ...r, project_id: projectId })) as UsageRecord[]
+    }
+  }
+
+  // Central DB fallback
   const db = getDrizzle()
   return db
     .select()
@@ -102,15 +248,81 @@ export function getUsageRecordsByJob(jobId: string): UsageRecord[] {
 }
 
 /**
+ * Get usage records for a card.
+ * @param cardId - The card ID
+ * @param projectId - Optional project ID for direct DB resolution
+ */
+export function getUsageRecordsByCard(cardId: string, projectId?: string): UsageRecord[] {
+  if (projectId) {
+    const { db, isLocalDb } = resolveProjectDb(projectId)
+    if (isLocalDb) {
+      const rows = db
+        .select()
+        .from(projectUsageRecords)
+        .where(eq(projectUsageRecords.card_id, cardId))
+        .orderBy(desc(projectUsageRecords.created_at))
+        .all()
+      return rows.map((r) => ({ ...r, project_id: projectId })) as UsageRecord[]
+    }
+  }
+
+  // Central DB fallback
+  const db = getDrizzle()
+  return db
+    .select()
+    .from(usageRecords)
+    .where(eq(usageRecords.card_id, cardId))
+    .orderBy(desc(usageRecords.created_at))
+    .all() as UsageRecord[]
+}
+
+/**
  * Get aggregated usage stats by tool type for a time period.
+ * Note: For project-specific queries on local DB, we query the project DB.
+ * For cross-project (projectId=null), we query central DB only.
  */
 export function getUsageStatsByTool(
   projectId: string | null,
   startDate: string,
   endDate: string
 ): UsageStats[] {
-  const db = getDrizzle()
+  if (projectId) {
+    const { db, isLocalDb } = resolveProjectDb(projectId)
+    if (isLocalDb) {
+      const rows = db
+        .select({
+          tool_type: projectUsageRecords.tool_type,
+          total_input_tokens: sum(projectUsageRecords.input_tokens),
+          total_output_tokens: sum(projectUsageRecords.output_tokens),
+          total_tokens: sum(projectUsageRecords.total_tokens),
+          total_cost_usd: sql<number>`SUM(COALESCE(${projectUsageRecords.cost_usd}, 0))`,
+          invocation_count: sql<number>`COUNT(*)`,
+          avg_duration_ms: sql<number>`AVG(${projectUsageRecords.duration_ms})`
+        })
+        .from(projectUsageRecords)
+        .where(
+          and(
+            gte(projectUsageRecords.created_at, startDate),
+            lt(projectUsageRecords.created_at, endDate)
+          )
+        )
+        .groupBy(projectUsageRecords.tool_type)
+        .all()
 
+      return rows.map((row) => ({
+        tool_type: row.tool_type as AIToolType,
+        total_input_tokens: Number(row.total_input_tokens) || 0,
+        total_output_tokens: Number(row.total_output_tokens) || 0,
+        total_tokens: Number(row.total_tokens) || 0,
+        total_cost_usd: Number(row.total_cost_usd) || 0,
+        invocation_count: Number(row.invocation_count),
+        avg_duration_ms: Math.round(Number(row.avg_duration_ms) || 0)
+      }))
+    }
+  }
+
+  // Central DB query
+  const db = getDrizzle()
   const conditions = [gte(usageRecords.created_at, startDate), lt(usageRecords.created_at, endDate)]
 
   if (projectId) {
@@ -164,11 +376,21 @@ export function getUsageSummary(
 
 /**
  * Get hourly usage for a tool type.
+ * Note: This is a global query across all projects (central DB only).
+ * Timezone: Limit windows use local time (start of current hour); created_at is stored in UTC.
  */
 export function getHourlyUsage(toolType: AIToolType): { tokens: number; cost: number } {
   const db = getDrizzle()
   const now = new Date()
-  const startOfHour = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), 0, 0, 0).toISOString()
+  const startOfHour = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    now.getHours(),
+    0,
+    0,
+    0
+  ).toISOString()
 
   const result = db
     .select({
@@ -187,6 +409,8 @@ export function getHourlyUsage(toolType: AIToolType): { tokens: number; cost: nu
 
 /**
  * Get daily usage for a tool type.
+ * Note: This is a global query across all projects (central DB only).
+ * Timezone: Limit windows use local time (midnight); created_at is stored in UTC.
  */
 export function getDailyUsage(toolType: AIToolType): { tokens: number; cost: number } {
   const db = getDrizzle()
@@ -211,6 +435,8 @@ export function getDailyUsage(toolType: AIToolType): { tokens: number; cost: num
 
 /**
  * Get monthly usage for a tool type.
+ * Note: This is a global query across all projects (central DB only).
+ * Timezone: Limit windows use local time (1st of month); created_at is stored in UTC.
  */
 export function getMonthlyUsage(toolType: AIToolType): { tokens: number; cost: number } {
   const db = getDrizzle()
@@ -232,8 +458,83 @@ export function getMonthlyUsage(toolType: AIToolType): { tokens: number; cost: n
   }
 }
 
+// ============================================================================
+// Rolling windows (optional: "last N" instead of calendar boundaries)
+// Limit windows use local time; created_at is stored in UTC.
+// ============================================================================
+
+/**
+ * Get usage for the last 60 minutes (rolling) for a tool type.
+ */
+export function getRollingHourlyUsage(toolType: AIToolType): { tokens: number; cost: number } {
+  const db = getDrizzle()
+  const now = Date.now()
+  const oneHourAgo = new Date(now - 60 * 60 * 1000).toISOString()
+
+  const result = db
+    .select({
+      tokens: sum(usageRecords.total_tokens),
+      cost: sql<number>`SUM(COALESCE(${usageRecords.cost_usd}, 0))`
+    })
+    .from(usageRecords)
+    .where(and(eq(usageRecords.tool_type, toolType), gte(usageRecords.created_at, oneHourAgo)))
+    .get()
+
+  return {
+    tokens: Number(result?.tokens) || 0,
+    cost: Number(result?.cost) || 0
+  }
+}
+
+/**
+ * Get usage for the last 24 hours (rolling) for a tool type.
+ */
+export function getRollingDailyUsage(toolType: AIToolType): { tokens: number; cost: number } {
+  const db = getDrizzle()
+  const now = Date.now()
+  const oneDayAgo = new Date(now - 24 * 60 * 60 * 1000).toISOString()
+
+  const result = db
+    .select({
+      tokens: sum(usageRecords.total_tokens),
+      cost: sql<number>`SUM(COALESCE(${usageRecords.cost_usd}, 0))`
+    })
+    .from(usageRecords)
+    .where(and(eq(usageRecords.tool_type, toolType), gte(usageRecords.created_at, oneDayAgo)))
+    .get()
+
+  return {
+    tokens: Number(result?.tokens) || 0,
+    cost: Number(result?.cost) || 0
+  }
+}
+
+/**
+ * Get usage for the last 30 days (rolling) for a tool type.
+ */
+export function getRollingMonthlyUsage(toolType: AIToolType): { tokens: number; cost: number } {
+  const db = getDrizzle()
+  const now = Date.now()
+  const thirtyDaysAgo = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString()
+
+  const result = db
+    .select({
+      tokens: sum(usageRecords.total_tokens),
+      cost: sql<number>`SUM(COALESCE(${usageRecords.cost_usd}, 0))`
+    })
+    .from(usageRecords)
+    .where(and(eq(usageRecords.tool_type, toolType), gte(usageRecords.created_at, thirtyDaysAgo)))
+    .get()
+
+  return {
+    tokens: Number(result?.tokens) || 0,
+    cost: Number(result?.cost) || 0
+  }
+}
+
 /**
  * Get total usage across all tools (for the header display).
+ * Note: This is a global query across all projects (central DB only).
  */
 export function getTotalUsage(): { tokens: number; cost: number } {
   const db = getDrizzle()
@@ -256,7 +557,7 @@ export function getTotalUsage(): { tokens: number; cost: number } {
 }
 
 // ============================================================================
-// AI Tool Limits
+// AI Tool Limits (Central DB only - global settings)
 // ============================================================================
 
 /**
@@ -264,11 +565,7 @@ export function getTotalUsage(): { tokens: number; cost: number } {
  */
 export function getToolLimits(toolType: AIToolType): AIToolLimits | null {
   const db = getDrizzle()
-  const row = db
-    .select()
-    .from(aiToolLimits)
-    .where(eq(aiToolLimits.tool_type, toolType))
-    .get()
+  const row = db.select().from(aiToolLimits).where(eq(aiToolLimits.tool_type, toolType)).get()
 
   if (!row) return null
 
@@ -377,12 +674,13 @@ export function setToolLimits(
 
 /**
  * Get usage with limits for all tools (for display in dropdown).
+ * Note: This queries central DB for global usage stats.
  */
 export function getUsageWithLimits(): UsageWithLimits[] {
   const db = getDrizzle()
 
-  // Get all tool types that have either usage or limits
-  const toolTypes: AIToolType[] = ['claude', 'codex', 'other']
+  // All tool types so limits and usage UI stay in sync with the registry
+  const toolTypes: AIToolType[] = ['claude', 'codex', 'opencode', 'cursor', 'other']
   const results: UsageWithLimits[] = []
 
   for (const toolType of toolTypes) {
@@ -435,21 +733,33 @@ export function getUsageWithLimits(): UsageWithLimits[] {
  * Calculate time until hourly, daily, and monthly limits reset.
  * Returns seconds remaining until each period resets.
  */
-export function getResetTimes(): { hourly_resets_in: number; daily_resets_in: number; monthly_resets_in: number } {
+export function getResetTimes(): {
+  hourly_resets_in: number
+  daily_resets_in: number
+  monthly_resets_in: number
+} {
   const now = new Date()
-  
+
   // Hourly reset: next hour boundary
-  const nextHour = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours() + 1, 0, 0, 0)
+  const nextHour = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    now.getHours() + 1,
+    0,
+    0,
+    0
+  )
   const hourlyResetsIn = Math.max(0, Math.floor((nextHour.getTime() - now.getTime()) / 1000))
-  
+
   // Daily reset: next midnight
   const nextDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0)
   const dailyResetsIn = Math.max(0, Math.floor((nextDay.getTime() - now.getTime()) / 1000))
-  
+
   // Monthly reset: first of next month
   const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0)
   const monthlyResetsIn = Math.max(0, Math.floor((nextMonth.getTime() - now.getTime()) / 1000))
-  
+
   return {
     hourly_resets_in: hourlyResetsIn,
     daily_resets_in: dailyResetsIn,
@@ -459,12 +769,23 @@ export function getResetTimes(): { hourly_resets_in: number; daily_resets_in: nu
 
 /**
  * Delete usage records older than a certain date.
+ * @param beforeDate - The cutoff date
+ * @param projectId - Optional project ID for direct DB resolution
  */
-export function deleteOldUsageRecords(beforeDate: string): number {
+export function deleteOldUsageRecords(beforeDate: string, projectId?: string): number {
+  if (projectId) {
+    const { db, isLocalDb } = resolveProjectDb(projectId)
+    if (isLocalDb) {
+      const result = db
+        .delete(projectUsageRecords)
+        .where(lt(projectUsageRecords.created_at, beforeDate))
+        .run()
+      return result.changes
+    }
+  }
+
+  // Central DB fallback
   const db = getDrizzle()
-  const result = db
-    .delete(usageRecords)
-    .where(lt(usageRecords.created_at, beforeDate))
-    .run()
+  const result = db.delete(usageRecords).where(lt(usageRecords.created_at, beforeDate)).run()
   return result.changes
 }

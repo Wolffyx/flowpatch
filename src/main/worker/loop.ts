@@ -9,7 +9,7 @@ import {
   wakeUpWorkerPool,
   wakeUpAllWorkerPools
 } from './pool'
-import { logAction } from '../../shared/utils'
+import { logAction } from '../utils/main-logger'
 import type { PolicyConfig } from '../../shared/types'
 import type { AIToolAvailability } from './cache'
 

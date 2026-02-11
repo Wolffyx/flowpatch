@@ -239,7 +239,10 @@ export function HomeView({
                         onClick={() => toggleGroup(provider)}
                         className="w-full flex items-center gap-3 p-3 hover:bg-muted/50 transition-colors"
                       >
-                        <ProviderIcon provider={provider} className="h-5 w-5 text-muted-foreground" />
+                        <ProviderIcon
+                          provider={provider}
+                          className="h-5 w-5 text-muted-foreground"
+                        />
                         <span className="font-semibold text-sm flex-1 text-left">
                           {getProviderLabel(provider)}
                         </span>
@@ -344,10 +347,7 @@ function ProjectCard({
 
   return (
     <div
-      className={cn(
-        'border-b last:border-b-0 transition-colors',
-        hasError && 'bg-destructive/5'
-      )}
+      className={cn('border-b last:border-b-0 transition-colors', hasError && 'bg-destructive/5')}
     >
       {/* Main row - always visible */}
       <div className="flex items-center gap-2 p-3 hover:bg-muted/30 transition-colors">
@@ -366,11 +366,7 @@ function ProjectCard({
         </button>
 
         {/* Project info - clickable to open */}
-        <button
-          type="button"
-          onClick={onOpen}
-          className="flex-1 min-w-0 text-left group"
-        >
+        <button type="button" onClick={onOpen} className="flex-1 min-w-0 text-left group">
           <div className="flex items-center gap-2">
             <span className="font-medium text-foreground truncate group-hover:text-primary transition-colors">
               {project.name}

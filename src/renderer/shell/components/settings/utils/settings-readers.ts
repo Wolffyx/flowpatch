@@ -5,6 +5,7 @@
  */
 
 import type { Project, PolicyConfig } from '@shared/types'
+import { LINT_FIX_ATTEMPTS_DEFAULT } from '@shared/constants'
 import type {
   ThinkingSettings,
   PlanningSettings,
@@ -14,7 +15,9 @@ import type {
   PreCommitSettings,
   NotificationsSettings,
   SyncSettings,
-  WorkerPipelineSettings
+  WorkerPipelineSettings,
+  ManualTestSettings,
+  ProviderSwitchSettings
 } from '../types'
 
 export function readThinkingSettings(project: Project | null): ThinkingSettings {
@@ -83,7 +86,12 @@ export function readE2ESettings(project: Project | null): E2ESettings {
     maxRetries: 3,
     timeoutMinutes: 10,
     createTestsIfMissing: true,
-    testCommand: ''
+    testCommand: '',
+    appType: 'auto',
+    testPersistence: 'persistent',
+    devServerCommand: '',
+    devServerPort: null,
+    baseUrl: ''
   }
   if (!project?.policy_json) return defaults
   try {
@@ -94,7 +102,12 @@ export function readE2ESettings(project: Project | null): E2ESettings {
       timeoutMinutes: policy?.worker?.e2e?.timeoutMinutes ?? defaults.timeoutMinutes,
       createTestsIfMissing:
         policy?.worker?.e2e?.createTestsIfMissing ?? defaults.createTestsIfMissing,
-      testCommand: policy?.worker?.e2e?.testCommand ?? defaults.testCommand
+      testCommand: policy?.worker?.e2e?.testCommand ?? defaults.testCommand,
+      appType: policy?.worker?.e2e?.appType ?? defaults.appType,
+      testPersistence: policy?.worker?.e2e?.testPersistence ?? defaults.testPersistence,
+      devServerCommand: policy?.worker?.e2e?.devServer?.startCommand ?? defaults.devServerCommand,
+      devServerPort: policy?.worker?.e2e?.devServer?.port ?? defaults.devServerPort,
+      baseUrl: policy?.worker?.e2e?.baseUrl ?? defaults.baseUrl
     }
   } catch {
     return defaults
@@ -184,7 +197,24 @@ export function readWorkerPipelineSettings(project: Project | null): WorkerPipel
     leaseRenewalIntervalMs: 60000,
     pipelineTimeoutMs: 30 * 60 * 1000, // 30 minutes
     maxRetries: 3,
-    retryDelayMs: 1000
+    retryDelayMs: 1000,
+    maxIterations: 3,
+    lintCommand: '',
+    lintFixAttempts: LINT_FIX_ATTEMPTS_DEFAULT,
+    draftAiTimeoutSeconds: 300,
+    // Phase toggles - all enabled by default
+    enableInstallPhase: true,
+    enableChecksPhase: true,
+    // Individual check toggles (all enabled by default)
+    enableLintCheck: true,
+    enableTestCheck: true,
+    enableBuildCheck: true,
+    enableE2EPhase: true,
+    enableDecompositionPhase: true,
+    enablePlanPhase: true,
+    enablePlanApprovalPhase: true,
+    enableCommitPhase: true,
+    enablePrPhase: true
   }
   if (!project?.policy_json) return defaults
   try {
@@ -194,19 +224,39 @@ export function readWorkerPipelineSettings(project: Project | null): WorkerPipel
         policy?.worker?.leaseRenewalIntervalMs ?? defaults.leaseRenewalIntervalMs,
       pipelineTimeoutMs: policy?.worker?.pipelineTimeoutMs ?? defaults.pipelineTimeoutMs,
       maxRetries: policy?.worker?.maxRetries ?? defaults.maxRetries,
-      retryDelayMs: policy?.worker?.retryDelayMs ?? defaults.retryDelayMs
+      retryDelayMs: policy?.worker?.retryDelayMs ?? defaults.retryDelayMs,
+      maxIterations: policy?.worker?.session?.maxIterations ?? defaults.maxIterations,
+      lintCommand: policy?.worker?.lintCommand ?? defaults.lintCommand,
+      lintFixAttempts: policy?.worker?.lintFixAttempts ?? defaults.lintFixAttempts,
+      draftAiTimeoutSeconds:
+        policy?.worker?.draftAiTimeoutSeconds ?? defaults.draftAiTimeoutSeconds,
+      // Phase toggles - undefined means enabled (true)
+      enableInstallPhase: policy?.worker?.enableInstallPhase ?? defaults.enableInstallPhase,
+      enableChecksPhase: policy?.worker?.enableChecksPhase ?? defaults.enableChecksPhase,
+      // Individual check toggles - undefined means enabled (true)
+      enableLintCheck: policy?.worker?.enableLintCheck ?? defaults.enableLintCheck,
+      enableTestCheck: policy?.worker?.enableTestCheck ?? defaults.enableTestCheck,
+      enableBuildCheck: policy?.worker?.enableBuildCheck ?? defaults.enableBuildCheck,
+      enableE2EPhase: policy?.worker?.enableE2EPhase ?? defaults.enableE2EPhase,
+      enableDecompositionPhase:
+        policy?.worker?.enableDecompositionPhase ?? defaults.enableDecompositionPhase,
+      enablePlanPhase: policy?.worker?.enablePlanPhase ?? defaults.enablePlanPhase,
+      enablePlanApprovalPhase:
+        policy?.worker?.enablePlanApprovalPhase ?? defaults.enablePlanApprovalPhase,
+      enableCommitPhase: policy?.worker?.enableCommitPhase ?? defaults.enableCommitPhase,
+      enablePrPhase: policy?.worker?.enablePrPhase ?? defaults.enablePrPhase
     }
   } catch {
     return defaults
   }
 }
 
-export function readToolPreference(project: Project | null): 'auto' | 'claude' | 'codex' {
+export function readToolPreference(project: Project | null): 'auto' | 'claude' | 'codex' | 'opencode' {
   if (!project?.policy_json) return 'auto'
   try {
     const policy = JSON.parse(project.policy_json)
     const pref = policy?.worker?.toolPreference
-    if (pref === 'claude' || pref === 'codex' || pref === 'auto') {
+    if (pref === 'claude' || pref === 'codex' || pref === 'opencode' || pref === 'auto') {
       return pref
     }
     return 'auto'
@@ -242,5 +292,59 @@ export function readShowPullRequestsSection(project: Project | null): boolean {
     return !!policy?.ui?.showPullRequestsSection
   } catch {
     return false
+  }
+}
+
+export function readManualTestSettings(project: Project | null): ManualTestSettings {
+  const defaults: ManualTestSettings = {
+    autoPromptAfterAI: false,
+    keepWorktreeForManualTest: false,
+    defaultTestLocation: 'worktree'
+  }
+  if (!project?.policy_json) return defaults
+  try {
+    const policy = JSON.parse(project.policy_json) as PolicyConfig
+    const loc = policy?.worker?.manualTest?.defaultTestLocation
+    return {
+      autoPromptAfterAI: policy?.worker?.manualTest?.autoPromptAfterAI ?? defaults.autoPromptAfterAI,
+      keepWorktreeForManualTest:
+        policy?.worker?.manualTest?.keepWorktreeForManualTest ?? defaults.keepWorktreeForManualTest,
+      defaultTestLocation:
+        loc === 'worktree' || loc === 'mainRepo' ? loc : defaults.defaultTestLocation
+    }
+  } catch {
+    return defaults
+  }
+}
+
+export function readProviderSwitchSettings(project: Project | null): ProviderSwitchSettings {
+  const defaults: ProviderSwitchSettings = {
+    mode: 'automatic',
+    exhaustedBehavior: 'pause_and_wait',
+    retryIntervalMinutes: 5,
+    maxWaitMinutes: 60,
+    notifyOnSwitch: true
+  }
+  if (!project?.policy_json) return defaults
+  try {
+    const policy = JSON.parse(project.policy_json) as PolicyConfig
+    const ps = policy?.features?.providerSwitch
+    const mode = ps?.mode
+    const exhausted = ps?.exhaustedBehavior
+    return {
+      mode:
+        mode === 'automatic' || mode === 'approval' || mode === 'disabled'
+          ? mode
+          : defaults.mode,
+      exhaustedBehavior:
+        exhausted === 'pause_and_wait' || exhausted === 'fail_immediately' || exhausted === 'queue_for_later'
+          ? exhausted
+          : defaults.exhaustedBehavior,
+      retryIntervalMinutes: ps?.retryIntervalMinutes ?? defaults.retryIntervalMinutes,
+      maxWaitMinutes: ps?.maxWaitMinutes ?? defaults.maxWaitMinutes,
+      notifyOnSwitch: ps?.notifyOnSwitch ?? defaults.notifyOnSwitch
+    }
+  } catch {
+    return defaults
   }
 }

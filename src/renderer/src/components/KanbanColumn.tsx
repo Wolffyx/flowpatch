@@ -1,7 +1,7 @@
 import type { MouseEvent } from 'react'
 import { useDroppable } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
-import { Plus, Sparkles, Inbox } from 'lucide-react'
+import { Plus, Sparkles, Inbox, ArrowDownUp } from 'lucide-react'
 import { Button } from './ui/button'
 import { ScrollArea } from './ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
@@ -21,7 +21,11 @@ interface KanbanColumnProps {
   isOverColumn?: boolean
   onAddCard?: () => void
   onGenerateCards?: () => void
-  devServerStatusByCardId?: Record<string, { isRunning: boolean; port?: number; status?: 'starting' | 'running' | 'stopped' | 'error' }>
+  onSortByPriority?: () => void
+  devServerStatusByCardId?: Record<
+    string,
+    { isRunning: boolean; port?: number; status?: 'starting' | 'running' | 'stopped' | 'error' }
+  >
 }
 
 export function KanbanColumn({
@@ -36,6 +40,7 @@ export function KanbanColumn({
   isOverColumn = false,
   onAddCard,
   onGenerateCards,
+  onSortByPriority,
   devServerStatusByCardId
 }: KanbanColumnProps): React.JSX.Element {
   const { setNodeRef, isOver } = useDroppable({
@@ -58,7 +63,12 @@ export function KanbanColumn({
       {/* Column header */}
       <div className="flex items-center justify-between p-3 pb-2">
         <div className="flex items-center gap-2.5">
-          <div className={cn('h-3 w-3 rounded-full ring-2 ring-offset-2 ring-offset-background', color)} />
+          <div
+            className={cn(
+              'h-3 w-3 rounded-full ring-2 ring-offset-2 ring-offset-background',
+              color
+            )}
+          />
           <h3 className="font-semibold text-sm">{label}</h3>
           <span
             className={cn(
@@ -70,9 +80,26 @@ export function KanbanColumn({
             {cards.length}
           </span>
         </div>
-        {id === 'draft' && (
+        {(id === 'draft' || id === 'ready') && (
           <div className="flex items-center gap-0.5">
-            {onGenerateCards && (
+            {onSortByPriority && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-muted-foreground hover:text-primary"
+                    onClick={onSortByPriority}
+                  >
+                    <ArrowDownUp className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  <p>Sort by priority (highest to lowest)</p>
+                </TooltipContent>
+              </Tooltip>
+            )}
+            {id === 'draft' && onGenerateCards && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -89,7 +116,7 @@ export function KanbanColumn({
                 </TooltipContent>
               </Tooltip>
             )}
-            {onAddCard && (
+            {id === 'draft' && onAddCard && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button

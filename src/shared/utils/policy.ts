@@ -44,7 +44,7 @@ function simpleHash(str: string): string {
   let hash = 0
   for (let i = 0; i < str.length; i++) {
     const char = str.charCodeAt(i)
-    hash = ((hash << 5) - hash) + char
+    hash = (hash << 5) - hash + char
     hash = hash & hash // Convert to 32-bit integer
   }
   return hash.toString(36)
@@ -163,14 +163,30 @@ export function validatePolicy(policy: PolicyConfig): PolicyValidationResult {
     }
 
     if (policy.worker.leaseRenewalIntervalMs !== undefined) {
-      if (typeof policy.worker.leaseRenewalIntervalMs !== 'number' || policy.worker.leaseRenewalIntervalMs < 10000) {
+      if (
+        typeof policy.worker.leaseRenewalIntervalMs !== 'number' ||
+        policy.worker.leaseRenewalIntervalMs < 10000
+      ) {
         errors.push('worker.leaseRenewalIntervalMs must be at least 10000ms')
       }
     }
 
     if (policy.worker.pipelineTimeoutMs !== undefined) {
-      if (typeof policy.worker.pipelineTimeoutMs !== 'number' || policy.worker.pipelineTimeoutMs < 60000) {
+      if (
+        typeof policy.worker.pipelineTimeoutMs !== 'number' ||
+        policy.worker.pipelineTimeoutMs < 60000
+      ) {
         errors.push('worker.pipelineTimeoutMs must be at least 60000ms (1 minute)')
+      }
+    }
+
+    if (policy.worker.draftAiTimeoutSeconds !== undefined) {
+      if (
+        typeof policy.worker.draftAiTimeoutSeconds !== 'number' ||
+        policy.worker.draftAiTimeoutSeconds < 60 ||
+        policy.worker.draftAiTimeoutSeconds > 1800
+      ) {
+        errors.push('worker.draftAiTimeoutSeconds must be between 60 and 1800 seconds')
       }
     }
   }
@@ -220,9 +236,10 @@ export function parsePolicyJson(json: string | null | undefined): PolicyConfig {
  * Parse and validate a policy JSON string.
  * Returns the policy and validation results.
  */
-export function parsePolicyJsonWithValidation(
-  json: string | null | undefined
-): { policy: PolicyConfig; validation: PolicyValidationResult } {
+export function parsePolicyJsonWithValidation(json: string | null | undefined): {
+  policy: PolicyConfig
+  validation: PolicyValidationResult
+} {
   const policy = parsePolicyJson(json)
   const validation = validatePolicy(policy)
   return { policy, validation }
@@ -380,7 +397,7 @@ export function mergePolicyUpdate(
       sessionMode:
         update.worker?.session?.sessionMode ?? current.worker?.session?.sessionMode ?? 'single',
       maxIterations:
-        update.worker?.session?.maxIterations ?? current.worker?.session?.maxIterations ?? 5,
+        update.worker?.session?.maxIterations ?? current.worker?.session?.maxIterations ?? 3,
       progressCheckpoint:
         update.worker?.session?.progressCheckpoint ??
         current.worker?.session?.progressCheckpoint ??
@@ -388,7 +405,11 @@ export function mergePolicyUpdate(
       contextCarryover:
         update.worker?.session?.contextCarryover ??
         current.worker?.session?.contextCarryover ??
-        'summary'
+        'summary',
+      minimalContinuationPrompt:
+        update.worker?.session?.minimalContinuationPrompt ??
+        current.worker?.session?.minimalContinuationPrompt ??
+        true
     }
 
     // Ensure e2e has required fields
@@ -403,10 +424,8 @@ export function mergePolicyUpdate(
         current.worker?.e2e?.createTestsIfMissing ??
         true,
       testCommand: update.worker?.e2e?.testCommand ?? current.worker?.e2e?.testCommand,
-      testDirectories:
-        update.worker?.e2e?.testDirectories ??
-        current.worker?.e2e?.testDirectories ??
-        ['e2e', 'tests/e2e', 'test/e2e'],
+      testDirectories: update.worker?.e2e?.testDirectories ??
+        current.worker?.e2e?.testDirectories ?? ['e2e', 'tests/e2e', 'test/e2e'],
       fixToolPriority: 'claude-first'
     }
   }
@@ -425,6 +444,7 @@ export function getStatusLabelFromPolicy(status: CardStatus, policy: PolicyConfi
     in_progress: 'In Progress',
     in_review: 'In Review',
     testing: 'Testing',
+    failed: 'Failed',
     done: 'Done'
   }
   const keyMap: Record<CardStatus, keyof NonNullable<typeof statusLabels>> = {
@@ -433,6 +453,7 @@ export function getStatusLabelFromPolicy(status: CardStatus, policy: PolicyConfi
     in_progress: 'inProgress',
     in_review: 'inReview',
     testing: 'testing',
+    failed: 'failed',
     done: 'done'
   }
   return statusLabels[keyMap[status]] || defaults[status]
@@ -449,6 +470,7 @@ export function getAllStatusLabelsFromPolicy(policy: PolicyConfig): string[] {
     statusLabels.inProgress || 'In Progress',
     statusLabels.inReview || 'In Review',
     statusLabels.testing || 'Testing',
+    statusLabels.failed || 'Failed',
     statusLabels.done || 'Done'
   ]
 }
@@ -463,6 +485,8 @@ export function isWorkerEnabled(policy: PolicyConfig): boolean {
 /**
  * Get the tool preference from policy.
  */
-export function getToolPreference(policy: PolicyConfig): 'auto' | 'claude' | 'codex' | 'opencode' | 'cursor' {
+export function getToolPreference(
+  policy: PolicyConfig
+): 'auto' | 'claude' | 'codex' | 'opencode' | 'cursor' {
   return policy.worker?.toolPreference ?? 'auto'
 }

@@ -427,6 +427,8 @@ export class GitWorktreeManager {
   /**
    * Remove a worktree safely.
    * Verifies the path is valid before removal.
+   * Handles TOCTOU race conditions gracefully - if directory disappears during removal,
+   * the operation is considered successful.
    */
   async removeWorktree(
     worktreePath: string,
@@ -450,9 +452,25 @@ export class GitWorktreeManager {
 
     if (!match) {
       // Not a registered worktree, but might be a leftover directory
-      if (existsSync(worktreePath)) {
+      // Use try-catch to handle TOCTOU race conditions gracefully
+      try {
+        if (!existsSync(worktreePath)) {
+          // Directory already removed - success
+          return
+        }
+
         // Only remove if it looks like a worktree (has `.git`) or is empty.
-        const stats = lstatSync(worktreePath)
+        let stats
+        try {
+          stats = lstatSync(worktreePath)
+        } catch (statErr) {
+          // Directory was removed between existsSync and lstatSync - success
+          if ((statErr as NodeJS.ErrnoException).code === 'ENOENT') {
+            return
+          }
+          throw statErr
+        }
+
         if (stats.isSymbolicLink()) {
           throw new Error(`Refusing to remove symlink path: ${worktreePath}`)
         }
@@ -460,12 +478,26 @@ export class GitWorktreeManager {
           throw new Error(`Refusing to remove non-directory path: ${worktreePath}`)
         }
         if (this.isWorktreeDirectory(worktreePath) || this.isEmptyDirectory(worktreePath)) {
-          rmSync(worktreePath, { recursive: true, force: true })
+          try {
+            rmSync(worktreePath, { recursive: true, force: true })
+          } catch (rmErr) {
+            // Directory was removed by another process - success
+            if ((rmErr as NodeJS.ErrnoException).code === 'ENOENT') {
+              return
+            }
+            throw rmErr
+          }
         } else {
           throw new Error(
             `Refusing to remove untracked non-empty directory (not a worktree): ${worktreePath}`
           )
         }
+      } catch (err) {
+        // If directory doesn't exist, consider it a success
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          return
+        }
+        throw err
       }
       return
     }
@@ -480,9 +512,23 @@ export class GitWorktreeManager {
     try {
       this.git(args)
     } catch (err) {
+      // Check if worktree was already removed by another process
+      if (!existsSync(worktreePath)) {
+        // Directory gone - prune to clean up git's worktree list and return success
+        this.prune()
+        return
+      }
+
       if (options?.force) {
         // Force remove failed, try manual cleanup
-        rmSync(worktreePath, { recursive: true, force: true })
+        try {
+          rmSync(worktreePath, { recursive: true, force: true })
+        } catch (rmErr) {
+          // Ignore ENOENT - directory was removed by another process
+          if ((rmErr as NodeJS.ErrnoException).code !== 'ENOENT') {
+            throw rmErr
+          }
+        }
         this.prune()
       } else {
         throw err

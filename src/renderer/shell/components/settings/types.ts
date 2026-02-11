@@ -8,7 +8,9 @@ import type {
   PlanningMode,
   MergeStrategy,
   ConflictResolution,
-  AIModelProvider
+  AIModelProvider,
+  AppType,
+  TestPersistence
 } from '@shared/types'
 
 // Section types
@@ -18,11 +20,13 @@ export type SettingsSection =
   | 'shortcuts'
   | 'ai-agents'
   | 'usage-limits'
+  | 'storage'
+  | 'git-auth'
   | 'danger-zone'
   | 'about'
 
 export type ThemePreference = 'light' | 'dark' | 'system'
-export type WorkerToolPreference = 'auto' | 'claude' | 'codex'
+export type WorkerToolPreference = 'auto' | 'claude' | 'codex' | 'opencode'
 
 // Settings interfaces
 export interface ThinkingSettings {
@@ -50,6 +54,11 @@ export interface E2ESettings {
   timeoutMinutes: number
   createTestsIfMissing: boolean
   testCommand: string
+  appType: AppType
+  testPersistence: TestPersistence
+  devServerCommand: string
+  devServerPort: number | null
+  baseUrl: string
 }
 
 export interface UnitTestSettings {
@@ -82,6 +91,53 @@ export interface WorkerPipelineSettings {
   pipelineTimeoutMs: number
   maxRetries: number
   retryDelayMs: number
+  maxIterations: number
+  lintCommand: string
+  /** When lint fails, how many times to run the AI to fix (0 = disable, 1-3). */
+  lintFixAttempts: number
+  /** Timeout for draft AI operations (description, starter cards, split cards) in seconds */
+  draftAiTimeoutSeconds: number
+
+  // Phase toggles (all default to true when undefined)
+  /** Enable/disable install dependencies phase */
+  enableInstallPhase: boolean
+  /** Enable/disable checks phase (lint, test, build) - master toggle */
+  enableChecksPhase: boolean
+  /** Enable/disable lint check (requires enableChecksPhase) */
+  enableLintCheck: boolean
+  /** Enable/disable test check (requires enableChecksPhase) */
+  enableTestCheck: boolean
+  /** Enable/disable build check (requires enableChecksPhase) */
+  enableBuildCheck: boolean
+  /** Enable/disable E2E testing phase */
+  enableE2EPhase: boolean
+  /** Enable/disable task decomposition phase */
+  enableDecompositionPhase: boolean
+  /** Enable/disable plan generation phase */
+  enablePlanPhase: boolean
+  /** Enable/disable plan approval phase */
+  enablePlanApprovalPhase: boolean
+  /** Enable/disable commit & push phase */
+  enableCommitPhase: boolean
+  /** Enable/disable PR/MR creation phase */
+  enablePrPhase: boolean
+}
+
+export interface ManualTestSettings {
+  autoPromptAfterAI: boolean
+  keepWorktreeForManualTest: boolean
+  defaultTestLocation: 'worktree' | 'mainRepo'
+}
+
+export type ProviderSwitchMode = 'automatic' | 'approval' | 'disabled'
+export type ExhaustedBehavior = 'pause_and_wait' | 'fail_immediately' | 'queue_for_later'
+
+export interface ProviderSwitchSettings {
+  mode: ProviderSwitchMode
+  exhaustedBehavior: ExhaustedBehavior
+  retryIntervalMinutes: number
+  maxWaitMinutes: number
+  notifyOnSwitch: boolean
 }
 
 export interface ToolLimitsState {

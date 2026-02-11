@@ -39,6 +39,7 @@ import {
   getDefault,
   getResolved,
   getResolvedBool,
+  setProjectOverride,
   patchDefaults,
   patchProjectOverrides,
   getAllResolvedSettings,
@@ -60,7 +61,7 @@ import {
   getDefaultRemote,
   normalizeProjectPath
 } from '../projectIdentity'
-import { logAction } from '@shared/utils'
+import { logAction } from '../utils/main-logger'
 import { registerProjectHandlers } from './projectHandlers'
 import { broadcastToRenderers } from './broadcast'
 import { getAllShortcuts, setShortcuts } from '../shortcuts'
@@ -446,6 +447,19 @@ export function registerShellHandlers(mainWindow: BrowserWindow): void {
       { projectKey, patch }: { projectKey: string; patch: Record<string, string | null> }
     ) => {
       patchProjectOverrides(projectKey, patch)
+    }
+  )
+
+  // Storage preference handlers
+  ipcMain.handle('settings:getStoragePreference', async (_e, projectId: string) => {
+    return { useLocalDb: getResolvedBool(projectId, 'storage.useLocalDb') }
+  })
+
+  ipcMain.handle(
+    'settings:setStoragePreference',
+    async (_e, projectId: string, useLocalDb: boolean) => {
+      setProjectOverride(projectId, 'storage.useLocalDb', useLocalDb ? 'true' : 'false')
+      return { success: true }
     }
   )
 

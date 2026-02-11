@@ -14,7 +14,7 @@ import type {
   SecurityAuditEntry,
   SecurityConfig
 } from '../../shared/types'
-import { logAction } from '../../shared/utils'
+import { logAction } from '../utils/main-logger'
 
 // ============================================================================
 // Configuration
@@ -81,9 +81,12 @@ export function initializeSecurityGuard(mainWindow: BrowserWindow): void {
   registerTrustedWebContents(mainWindow.webContents)
 
   // Start nonce cleanup interval (every 5 minutes)
-  nonceCleanupInterval = setInterval(() => {
-    usedNonces.clear()
-  }, 5 * 60 * 1000)
+  nonceCleanupInterval = setInterval(
+    () => {
+      usedNonces.clear()
+    },
+    5 * 60 * 1000
+  )
 
   logAction('security:initialized', {
     mainWindowId: mainWindow.webContents.id,
@@ -273,7 +276,10 @@ export function verifySignedRequest(
       allowed: false,
       rejectionReason: 'Request expired'
     })
-    return { valid: false, error: `Request expired (age: ${age}ms, max: ${securityConfig.maxRequestAgeMs}ms)` }
+    return {
+      valid: false,
+      error: `Request expired (age: ${age}ms, max: ${securityConfig.maxRequestAgeMs}ms)`
+    }
   }
 
   // Check for replay attack

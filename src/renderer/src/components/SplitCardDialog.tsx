@@ -13,8 +13,9 @@ import { Textarea } from './ui/textarea'
 import { Loader2, ArrowUp, ArrowDown, Trash2, Minus, Plus, RefreshCw } from 'lucide-react'
 import { cn } from '../lib/utils'
 import type { Card } from '../../../shared/types'
+import { useProviderAvailability } from '../../shell/components/settings/hooks/useProviderAvailability'
 
-type ToolPreference = 'auto' | 'claude' | 'codex'
+type ToolPreference = 'auto' | 'claude' | 'codex' | 'opencode'
 type CountMode = 'auto' | 'manual'
 type Step = 'configure' | 'review'
 
@@ -36,6 +37,7 @@ export function SplitCardDialog({
   projectId,
   card
 }: SplitCardDialogProps): React.JSX.Element {
+  const { isAvailable } = useProviderAvailability()
   const [step, setStep] = useState<Step>('configure')
   const [toolPreference, setToolPreference] = useState<ToolPreference>('auto')
   const [countMode, setCountMode] = useState<CountMode>('auto')
@@ -72,10 +74,12 @@ export function SplitCardDialog({
         let fullGuidance = guidance
         if (adjustment === 'more') {
           const currentCount = cards.length || count
-          fullGuidance = `${guidance}\n\nIMPORTANT: The previous split produced ${currentCount} cards which was too few. Please generate MORE cards (at least ${currentCount + 2}).`.trim()
+          fullGuidance =
+            `${guidance}\n\nIMPORTANT: The previous split produced ${currentCount} cards which was too few. Please generate MORE cards (at least ${currentCount + 2}).`.trim()
         } else if (adjustment === 'fewer') {
           const currentCount = cards.length || count
-          fullGuidance = `${guidance}\n\nIMPORTANT: The previous split produced ${currentCount} cards which was too many. Please generate FEWER cards (at most ${Math.max(2, currentCount - 2)}).`.trim()
+          fullGuidance =
+            `${guidance}\n\nIMPORTANT: The previous split produced ${currentCount} cards which was too many. Please generate FEWER cards (at most ${Math.max(2, currentCount - 2)}).`.trim()
         }
 
         // When adjusting (more/fewer), always use auto mode (count=0) so AI can decide new count
@@ -137,7 +141,9 @@ export function SplitCardDialog({
 
   const handleCreate = useCallback(async (): Promise<void> => {
     if (isCreating) return
-    const items = validCards.map((c) => ({ title: c.title.trim(), body: c.body.trim() })).slice(0, 12)
+    const items = validCards
+      .map((c) => ({ title: c.title.trim(), body: c.body.trim() }))
+      .slice(0, 12)
     if (items.length === 0) {
       setError('Add at least one card title before creating.')
       return
@@ -148,6 +154,10 @@ export function SplitCardDialog({
     try {
       const result = await window.projectAPI.splitCard({ cardId: card.id, items })
       if (result?.error) throw new Error(result.error)
+      if (result?.warning) {
+        setError(result.warning)
+        return
+      }
       onOpenChange(false)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create split cards')
@@ -169,199 +179,214 @@ export function SplitCardDialog({
         <div className="flex-1 min-h-0 overflow-y-auto pr-2">
           {step === 'configure' ? (
             <div className="grid gap-4 py-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm text-muted-foreground">Tool:</span>
-                  <div className="flex gap-2">
-                    {(['auto', 'claude', 'codex'] as const).map((t) => (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm text-muted-foreground">Tool:</span>
+                <div className="flex gap-2 flex-wrap">
+                  {(['auto', 'claude', 'codex', 'opencode'] as const).map((t) => {
+                    const isToolDisabled = t !== 'auto' && !isAvailable(t)
+                    const toolLabel =
+                      t === 'auto'
+                        ? 'Auto'
+                        : t === 'claude'
+                          ? 'Claude'
+                          : t === 'codex'
+                            ? 'Codex'
+                            : 'OpenCode'
+
+                    return (
                       <Button
                         key={t}
                         type="button"
                         size="sm"
                         variant={toolPreference === t ? 'default' : 'outline'}
                         onClick={() => setToolPreference(t)}
-                        disabled={isGenerating || isCreating}
+                        disabled={isToolDisabled || isGenerating || isCreating}
+                        title={isToolDisabled ? `${toolLabel} CLI not installed` : undefined}
                       >
-                        {t === 'auto' ? 'Auto' : t === 'claude' ? 'Claude' : 'Codex'}
+                        {toolLabel}
                       </Button>
-                    ))}
-                  </div>
+                    )
+                  })}
                 </div>
+              </div>
 
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm text-muted-foreground">Cards:</span>
-                  <div className="flex gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant={countMode === 'auto' ? 'default' : 'outline'}
-                      onClick={() => setCountMode('auto')}
-                      disabled={isGenerating || isCreating}
-                    >
-                      Auto
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant={countMode === 'manual' ? 'default' : 'outline'}
-                      onClick={() => setCountMode('manual')}
-                      disabled={isGenerating || isCreating}
-                    >
-                      Manual
-                    </Button>
-                  </div>
-                  {countMode === 'manual' && (
-                    <Input
-                      type="number"
-                      inputMode="numeric"
-                      min={1}
-                      max={12}
-                      value={count}
-                      onChange={(e) => setCount(clampCount(Number(e.target.value)))}
-                      className="w-20"
-                      disabled={isGenerating || isCreating}
-                    />
-                  )}
-                  {countMode === 'auto' && (
-                    <span className="text-xs text-muted-foreground">AI decides the optimal number</span>
-                  )}
-                </div>
-
-                <div className="grid gap-2">
-                  <div className="text-sm font-medium">Create as</div>
-                  <div
-                    className={cn(
-                      'flex items-center gap-3 rounded-lg border p-3 text-left',
-                      'border-primary bg-primary/5'
-                    )}
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm text-muted-foreground">Cards:</span>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={countMode === 'auto' ? 'default' : 'outline'}
+                    onClick={() => setCountMode('auto')}
+                    disabled={isGenerating || isCreating}
                   >
-                    <div className="flex h-4 w-4 items-center justify-center rounded-full border border-primary bg-primary text-primary-foreground" />
-                    <div className="flex-1">
-                      <div className="font-medium">{createLabel}</div>
-                      <div className="text-xs text-muted-foreground">
-                        Matches the parent card type.
-                      </div>
+                    Auto
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={countMode === 'manual' ? 'default' : 'outline'}
+                    onClick={() => setCountMode('manual')}
+                    disabled={isGenerating || isCreating}
+                  >
+                    Manual
+                  </Button>
+                </div>
+                {countMode === 'manual' && (
+                  <Input
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    max={12}
+                    value={count}
+                    onChange={(e) => setCount(clampCount(Number(e.target.value)))}
+                    className="w-20"
+                    disabled={isGenerating || isCreating}
+                  />
+                )}
+                {countMode === 'auto' && (
+                  <span className="text-xs text-muted-foreground">
+                    AI decides the optimal number
+                  </span>
+                )}
+              </div>
+
+              <div className="grid gap-2">
+                <div className="text-sm font-medium">Create as</div>
+                <div
+                  className={cn(
+                    'flex items-center gap-3 rounded-lg border p-3 text-left',
+                    'border-primary bg-primary/5'
+                  )}
+                >
+                  <div className="flex h-4 w-4 items-center justify-center rounded-full border border-primary bg-primary text-primary-foreground" />
+                  <div className="flex-1">
+                    <div className="font-medium">{createLabel}</div>
+                    <div className="text-xs text-muted-foreground">
+                      Matches the parent card type.
                     </div>
                   </div>
                 </div>
-
-                <div className="grid gap-2">
-                  <label className="text-sm font-medium">Guidance (optional)</label>
-                  <Textarea
-                    value={guidance}
-                    onChange={(e) => setGuidance(e.target.value)}
-                    placeholder="Add any extra context or preferred split approach."
-                    rows={4}
-                    disabled={isGenerating || isCreating}
-                  />
-                </div>
-
-                {error && (
-                  <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                    {error}
-                  </div>
-                )}
               </div>
+
+              <div className="grid gap-2">
+                <label className="text-sm font-medium">Guidance (optional)</label>
+                <Textarea
+                  value={guidance}
+                  onChange={(e) => setGuidance(e.target.value)}
+                  placeholder="Add any extra context or preferred split approach."
+                  rows={4}
+                  disabled={isGenerating || isCreating}
+                />
+              </div>
+
+              {error && (
+                <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                  {error}
+                </div>
+              )}
+            </div>
           ) : (
             <div className="grid gap-3 py-2">
               <div className="flex items-center justify-between gap-2 sticky top-0 bg-background py-2 -mt-2 z-10">
-                  <div className="text-sm text-muted-foreground">
-                    Review and edit the {cards.length} generated cards. They will be created as{' '}
-                    {createLabel.toLowerCase()}.
-                  </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleGenerate('fewer')}
-                      disabled={isGenerating || isCreating}
-                      title="Regenerate with fewer cards"
-                    >
-                      <Minus className="h-3 w-3 mr-1" />
-                      Fewer
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleGenerate()}
-                      disabled={isGenerating || isCreating}
-                      title="Regenerate cards"
-                    >
-                      <RefreshCw className={cn('h-3 w-3', isGenerating && 'animate-spin')} />
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleGenerate('more')}
-                      disabled={isGenerating || isCreating}
-                      title="Regenerate with more cards"
-                    >
-                      More
-                      <Plus className="h-3 w-3 ml-1" />
-                    </Button>
-                  </div>
+                <div className="text-sm text-muted-foreground">
+                  Review and edit the {cards.length} generated cards. They will be created as{' '}
+                  {createLabel.toLowerCase()}.
                 </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleGenerate('fewer')}
+                    disabled={isGenerating || isCreating}
+                    title="Regenerate with fewer cards"
+                  >
+                    <Minus className="h-3 w-3 mr-1" />
+                    Fewer
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleGenerate()}
+                    disabled={isGenerating || isCreating}
+                    title="Regenerate cards"
+                  >
+                    <RefreshCw className={cn('h-3 w-3', isGenerating && 'animate-spin')} />
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleGenerate('more')}
+                    disabled={isGenerating || isCreating}
+                    title="Regenerate with more cards"
+                  >
+                    More
+                    <Plus className="h-3 w-3 ml-1" />
+                  </Button>
+                </div>
+              </div>
 
-                {cards.map((c, idx) => (
-                  <div key={idx} className="rounded-lg border p-3">
-                    <div className="flex items-start gap-2">
-                      <div className="min-w-0 flex-1 grid gap-2">
-                        <div className="flex items-center gap-2">
-                          <div className="text-xs text-muted-foreground w-8">{idx + 1}.</div>
-                          <Input
-                            value={c.title}
-                            onChange={(e) => updateCard(idx, { title: e.target.value })}
-                            placeholder="Card title"
-                            disabled={isCreating}
-                          />
-                        </div>
-                        <Textarea
-                          value={c.body}
-                          onChange={(e) => updateCard(idx, { body: e.target.value })}
-                          placeholder="Card description (Markdown supported)"
-                          rows={4}
+              {cards.map((c, idx) => (
+                <div key={idx} className="rounded-lg border p-3">
+                  <div className="flex items-start gap-2">
+                    <div className="min-w-0 flex-1 grid gap-2">
+                      <div className="flex items-center gap-2">
+                        <div className="text-xs text-muted-foreground w-8">{idx + 1}.</div>
+                        <Input
+                          value={c.title}
+                          onChange={(e) => updateCard(idx, { title: e.target.value })}
+                          placeholder="Card title"
                           disabled={isCreating}
                         />
                       </div>
+                      <Textarea
+                        value={c.body}
+                        onChange={(e) => updateCard(idx, { body: e.target.value })}
+                        placeholder="Card description (Markdown supported)"
+                        rows={4}
+                        disabled={isCreating}
+                      />
+                    </div>
 
-                      <div className="flex flex-col gap-2">
-                        <Button
-                          type="button"
-                          size="icon"
-                          variant="outline"
-                          onClick={() => moveCard(idx, -1)}
-                          disabled={isCreating || idx === 0}
-                          title="Move up"
-                        >
-                          <ArrowUp className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          type="button"
-                          size="icon"
-                          variant="outline"
-                          onClick={() => moveCard(idx, 1)}
-                          disabled={isCreating || idx === cards.length - 1}
-                          title="Move down"
-                        >
-                          <ArrowDown className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          type="button"
-                          size="icon"
-                          variant="outline"
-                          onClick={() => removeCard(idx)}
-                          disabled={isCreating}
-                          title="Remove"
-                          className={cn('text-destructive')}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
+                    <div className="flex flex-col gap-2">
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="outline"
+                        onClick={() => moveCard(idx, -1)}
+                        disabled={isCreating || idx === 0}
+                        title="Move up"
+                      >
+                        <ArrowUp className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="outline"
+                        onClick={() => moveCard(idx, 1)}
+                        disabled={isCreating || idx === cards.length - 1}
+                        title="Move down"
+                      >
+                        <ArrowDown className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="outline"
+                        onClick={() => removeCard(idx)}
+                        disabled={isCreating}
+                        title="Remove"
+                        className={cn('text-destructive')}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
                     </div>
                   </div>
-                ))}
+                </div>
+              ))}
 
               {error && (
                 <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
@@ -386,13 +411,22 @@ export function SplitCardDialog({
               Back
             </Button>
           ) : (
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isGenerating || isCreating}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={isGenerating || isCreating}
+            >
               Close
             </Button>
           )}
 
           {step === 'configure' ? (
-            <Button type="button" onClick={() => handleGenerate()} disabled={!canGenerate || isCreating}>
+            <Button
+              type="button"
+              onClick={() => handleGenerate()}
+              disabled={!canGenerate || isCreating}
+            >
               {isGenerating ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -403,7 +437,11 @@ export function SplitCardDialog({
               )}
             </Button>
           ) : (
-            <Button type="button" onClick={handleCreate} disabled={isCreating || validCards.length === 0}>
+            <Button
+              type="button"
+              onClick={handleCreate}
+              disabled={isCreating || validCards.length === 0}
+            >
               {isCreating ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />

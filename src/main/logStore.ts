@@ -15,6 +15,16 @@ import { writeFileSync, mkdirSync, existsSync } from 'fs'
 import { join } from 'path'
 import { broadcastToRenderers } from './ipc/broadcast'
 
+// Import lazily to avoid circular dependency issues at startup
+let logToFileRef: ((entry: LogEntry) => void) | null = null
+function getLogToFile(): (entry: LogEntry) => void {
+  if (!logToFileRef) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    logToFileRef = require('./utils/file-logger').logToFile
+  }
+  return logToFileRef
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -109,6 +119,9 @@ export function appendLog(entry: Omit<LogEntry, 'id'>): LogEntry {
   buffer.push(fullEntry)
   trimBuffer()
 
+  // Write to file if enabled
+  getLogToFile()(fullEntry)
+
   // Broadcast to all renderers
   broadcastToRenderers('logEntry', fullEntry)
 
@@ -129,8 +142,10 @@ export function appendLogs(entries: Omit<LogEntry, 'id'>[]): LogEntry[] {
   buffer.push(...fullEntries)
   trimBuffer()
 
-  // Broadcast each entry
+  // Write to file and broadcast each entry
+  const logToFile = getLogToFile()
   for (const entry of fullEntries) {
+    logToFile(entry)
     broadcastToRenderers('logEntry', entry)
   }
 

@@ -14,8 +14,9 @@ import { ScrollArea } from './ui/scroll-area'
 import { Loader2, Sparkles, ArrowUp, ArrowDown, Trash2, Check } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { AIDescriptionDialog } from './AIDescriptionDialog'
+import { useProviderAvailability } from '../../shell/components/settings/hooks/useProviderAvailability'
 
-type ToolPreference = 'auto' | 'claude' | 'codex'
+type ToolPreference = 'auto' | 'claude' | 'codex' | 'opencode'
 
 export type StarterCardsWizardMode = 'onboarding' | 'manual'
 
@@ -48,6 +49,7 @@ export function StarterCardsWizardDialog({
   repoIssueProvider,
   onCreateCards
 }: StarterCardsWizardDialogProps): React.JSX.Element {
+  const { isAvailable } = useProviderAvailability()
   const [step, setStep] = useState<Step>('describe')
   const [toolPreference, setToolPreference] = useState<ToolPreference>('auto')
   const [count, setCount] = useState<number>(8)
@@ -80,7 +82,8 @@ export function StarterCardsWizardDialog({
   }, [canCreateRepoIssues, createType])
 
   const safeProjectId = projectId || ''
-  const canGenerate = safeProjectId.trim().length > 0 && description.trim().length > 0 && !isGenerating
+  const canGenerate =
+    safeProjectId.trim().length > 0 && description.trim().length > 0 && !isGenerating
 
   const title = mode === 'onboarding' ? 'Create starter cards' : 'Generate cards with AI'
   const subtitle =
@@ -105,7 +108,16 @@ export function StarterCardsWizardDialog({
         toolPreference
       })
 
-      if (result?.error) throw new Error(result.error)
+      if (result?.error) {
+        const msg = result.error
+        if (msg.startsWith('TIMEOUT:')) {
+          setError(
+            'AI request timed out while generating cards. You can increase the draft AI timeout in Settings → Features → Worker Pipeline Settings → Draft AI timeout.'
+          )
+          return
+        }
+        throw new Error(msg)
+      }
       const nextCards = Array.isArray(result?.cards) ? result.cards : []
       if (nextCards.length === 0) throw new Error('No cards returned from agent')
 
@@ -134,15 +146,20 @@ export function StarterCardsWizardDialog({
     setCards((prev) => prev.filter((_, i) => i !== index))
   }, [])
 
-  const updateCard = useCallback((index: number, patch: Partial<{ title: string; body: string }>) => {
-    setCards((prev) => prev.map((c, i) => (i === index ? { ...c, ...patch } : c)))
-  }, [])
+  const updateCard = useCallback(
+    (index: number, patch: Partial<{ title: string; body: string }>) => {
+      setCards((prev) => prev.map((c, i) => (i === index ? { ...c, ...patch } : c)))
+    },
+    []
+  )
 
   const validCards = useMemo(() => cards.filter((c) => c.title.trim().length > 0), [cards])
 
   const handleCreate = useCallback(async (): Promise<void> => {
     if (isCreating) return
-    const items = validCards.map((c) => ({ title: c.title.trim(), body: c.body.trim() })).slice(0, 15)
+    const items = validCards
+      .map((c) => ({ title: c.title.trim(), body: c.body.trim() }))
+      .slice(0, 15)
     if (items.length === 0) {
       setError('Add at least one card title before creating.')
       return
@@ -171,7 +188,9 @@ export function StarterCardsWizardDialog({
       return
     }
     try {
-      await window.electron.ipcRenderer.invoke('dismissStarterCardsWizard', { projectId: safeProjectId })
+      await window.electron.ipcRenderer.invoke('dismissStarterCardsWizard', {
+        projectId: safeProjectId
+      })
     } catch {
       // ignore
     } finally {
@@ -193,19 +212,32 @@ export function StarterCardsWizardDialog({
               <div className="grid gap-4 py-2">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-sm text-muted-foreground">Tool:</span>
-                  <div className="flex gap-2">
-                    {(['auto', 'claude', 'codex'] as const).map((t) => (
-                      <Button
-                        key={t}
-                        type="button"
-                        size="sm"
-                        variant={toolPreference === t ? 'default' : 'outline'}
-                        onClick={() => setToolPreference(t)}
-                        disabled={isGenerating || isCreating}
-                      >
-                        {t === 'auto' ? 'Auto' : t === 'claude' ? 'Claude' : 'Codex'}
-                      </Button>
-                    ))}
+                  <div className="flex gap-2 flex-wrap">
+                    {(['auto', 'claude', 'codex', 'opencode'] as const).map((t) => {
+                      const isToolDisabled = t !== 'auto' && !isAvailable(t)
+                      const toolLabel =
+                        t === 'auto'
+                          ? 'Auto'
+                          : t === 'claude'
+                            ? 'Claude'
+                            : t === 'codex'
+                              ? 'Codex'
+                              : 'OpenCode'
+
+                      return (
+                        <Button
+                          key={t}
+                          type="button"
+                          size="sm"
+                          variant={toolPreference === t ? 'default' : 'outline'}
+                          onClick={() => setToolPreference(t)}
+                          disabled={isToolDisabled || isGenerating || isCreating}
+                          title={isToolDisabled ? `${toolLabel} CLI not installed` : undefined}
+                        >
+                          {toolLabel}
+                        </Button>
+                      )
+                    })}
                   </div>
                   <div className="flex-1" />
                   <div className="flex items-center gap-2">
@@ -232,9 +264,7 @@ export function StarterCardsWizardDialog({
                       disabled={isGenerating || isCreating}
                       className={cn(
                         'flex items-center gap-3 rounded-lg border p-3 text-left transition-colors',
-                        createType === 'local'
-                          ? 'border-primary bg-primary/5'
-                          : 'hover:bg-muted/50'
+                        createType === 'local' ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'
                       )}
                     >
                       <div
@@ -413,7 +443,12 @@ export function StarterCardsWizardDialog({
               Back
             </Button>
           ) : (
-            <Button type="button" variant="outline" onClick={handleSkip} disabled={isGenerating || isCreating}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleSkip}
+              disabled={isGenerating || isCreating}
+            >
               {mode === 'onboarding' ? 'Skip' : 'Close'}
             </Button>
           )}
@@ -430,19 +465,23 @@ export function StarterCardsWizardDialog({
               )}
             </Button>
           ) : (
-              <Button type="button" onClick={handleCreate} disabled={isCreating || validCards.length === 0}>
-                {isCreating ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Creating…
-                  </>
-                ) : (
-                  createType === 'repo_issue'
-                    ? `Create ${validCards.length} repo issues`
-                    : `Create ${validCards.length} draft cards`
-                )}
-              </Button>
-            )}
+            <Button
+              type="button"
+              onClick={handleCreate}
+              disabled={isCreating || validCards.length === 0}
+            >
+              {isCreating ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Creating…
+                </>
+              ) : createType === 'repo_issue' ? (
+                `Create ${validCards.length} repo issues`
+              ) : (
+                `Create ${validCards.length} draft cards`
+              )}
+            </Button>
+          )}
         </DialogFooter>
 
         <AIDescriptionDialog

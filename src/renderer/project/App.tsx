@@ -12,6 +12,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Toaster } from '../src/components/ui/sonner'
+import { toast } from 'sonner'
 import { KanbanBoard } from '../src/components/KanbanBoard'
 import { CardDialog } from '../src/components/CardDialog'
 import { AddCardDialog, type CreateCardType } from '../src/components/AddCardDialog'
@@ -29,31 +30,66 @@ import { UsageIndicator } from './components/UsageIndicator'
 import { FeatureSuggestionsDialog } from '../src/components/FeatureSuggestionsDialog'
 import { GraphViewDialog } from '../src/components/GraphViewDialog'
 import { SplitCardDialog } from '../src/components/SplitCardDialog'
+import { MigrationPromptDialog } from '../src/components/MigrationPromptDialog'
+import { WorkerErrorHistoryDialog } from '../src/components/WorkerErrorHistoryDialog'
 import { useAudioNotifications } from '../src/hooks/useAudioNotifications'
 import { useDevServerStatus } from '../src/hooks/useDevServerStatus'
 import { Button } from '../src/components/ui/button'
 import { Switch } from '../src/components/ui/switch'
 import { Badge } from '../src/components/ui/badge'
-import { RefreshCw, Bot, Loader2, Play, Pause, AlertCircle, Terminal, Folder, Lightbulb, Network, Send } from 'lucide-react'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '../src/components/ui/dialog'
+import {
+  RefreshCw,
+  Bot,
+  Loader2,
+  Play,
+  Pause,
+  AlertCircle,
+  Terminal,
+  Folder,
+  Lightbulb,
+  Network,
+  Send,
+  RotateCcw,
+  X,
+  History
+} from 'lucide-react'
 import { cn } from '../src/lib/utils'
 import {
   buildLinkedPullRequestIndex,
   filterOutLinkedPullRequestCards,
   isLinkedPullRequestCard
 } from '../src/lib/linkedPullRequests'
+import { getPriorityFromLabels } from '@shared/utils/priority'
 import { PullRequestsSection } from '../src/components/PullRequestsSection'
 import type { PolicyConfig } from '@shared/types'
 import type {
   Card,
   CardLink,
   CardStatus,
+  Event,
   Job,
   Project,
   Provider,
   FlowPatchWorkspaceStatus,
   FollowUpInstructionType,
-  PlanApproval
+  PlanApproval,
+  WorkerError,
+  WorkerStatus
 } from '@shared/types'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger
+} from '../src/components/ui/tooltip'
 
 // All projectAPI types are now imported from preload/index.d.ts
 // This avoids duplicate type declarations
@@ -80,6 +116,7 @@ export default function App(): React.JSX.Element {
   const [cards, setCards] = useState<Card[]>([])
   const [cardLinks, setCardLinks] = useState<CardLink[]>([])
   const [jobs, setJobs] = useState<Job[]>([])
+  const [events, setEvents] = useState<Event[]>([])
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null)
   const [addCardOpen, setAddCardOpen] = useState(false)
   const [labelSetupOpen, setLabelSetupOpen] = useState(false)
@@ -92,6 +129,7 @@ export default function App(): React.JSX.Element {
   const [workerEnabled, setWorkerEnabled] = useState(false)
   const [workerLogsOpen, setWorkerLogsOpen] = useState(false)
   const [workerLogsByJobId, setWorkerLogsByJobId] = useState<Record<string, string[]>>({})
+  const [logsJobOverrideId, setLogsJobOverrideId] = useState<string | null>(null)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [workspaceStatus, setWorkspaceStatus] = useState<FlowPatchWorkspaceStatus | null>(null)
   const [workspaceStatusLoading, setWorkspaceStatusLoading] = useState(false)
@@ -102,6 +140,19 @@ export default function App(): React.JSX.Element {
   const [approvalCard, setApprovalCard] = useState<Card | null>(null)
   const [splitDialogOpen, setSplitDialogOpen] = useState(false)
   const [splitDialogCard, setSplitDialogCard] = useState<Card | null>(null)
+  const [migrationState, setMigrationState] = useState<{
+    needed: boolean
+    showPrompt: boolean
+    counts: Record<string, number>
+  }>({ needed: false, showPrompt: false, counts: {} })
+  const [isMigrating, setIsMigrating] = useState(false)
+
+  // Unified worker status from main process
+  const [unifiedWorkerStatus, setUnifiedWorkerStatus] = useState<WorkerStatus | null>(null)
+
+  // Error history dialog state
+  const [errorHistoryOpen, setErrorHistoryOpen] = useState(false)
+  const [errorHistory, setErrorHistory] = useState<WorkerError[]>([])
 
   // Audio notifications - read config from project policy
   const notificationsConfig = useMemo(() => {
@@ -144,7 +195,10 @@ export default function App(): React.JSX.Element {
 
   // Build dev server status map for cards
   const devServerStatusByCardId = useMemo(() => {
-    const statusMap: Record<string, { isRunning: boolean; port?: number; status?: 'starting' | 'running' | 'stopped' | 'error' }> = {}
+    const statusMap: Record<
+      string,
+      { isRunning: boolean; port?: number; status?: 'starting' | 'running' | 'stopped' | 'error' }
+    > = {}
     cards.forEach((card) => {
       if (isRunning(card.id)) {
         const status = getStatus(card.id)
@@ -226,15 +280,20 @@ export default function App(): React.JSX.Element {
   const visibleCards = useMemo(
     () =>
       filterOutLinkedPullRequestCards(
-        showPullRequestsSection
-          ? cards.filter((c) => c.type !== 'pr' && c.type !== 'mr')
-          : cards,
+        showPullRequestsSection ? cards.filter((c) => c.type !== 'pr' && c.type !== 'mr') : cards,
         linkedPrIndex
       ),
     [cards, linkedPrIndex, showPullRequestsSection]
   )
 
-  // Worker status calculations
+  // Worker status from unified status store
+  const isWorkerProcessing = unifiedWorkerStatus
+    ? ['processing', 'testing', 'pushing', 'queued', 'paused'].includes(unifiedWorkerStatus.state)
+    : false
+  const hasWorkerError = unifiedWorkerStatus?.state === 'failed'
+  const readyCards = cards.filter((c) => c.status === 'ready')
+
+  // For logs dialog and follow-up instructions, we still need the job reference
   const workerJobs = jobs.filter((j) => j.type === 'worker_run')
   const activeWorkerJob = workerJobs.find((j) => j.state === 'running' || j.state === 'queued')
   const latestWorkerJob =
@@ -245,9 +304,9 @@ export default function App(): React.JSX.Element {
           const jobTime = job.updated_at || job.created_at
           return jobTime > latestTime ? job : latest
         })
-  const hasWorkerError = latestWorkerJob?.state === 'failed'
-  const readyCards = cards.filter((c) => c.status === 'ready')
-  const jobForLogs = activeWorkerJob || latestWorkerJob
+  // Prefer override job if set, otherwise use active/latest
+  const overrideJob = logsJobOverrideId ? jobs.find((j) => j.id === logsJobOverrideId) : null
+  const jobForLogs = overrideJob || activeWorkerJob || latestWorkerJob
   const cardForLogs = jobForLogs?.card_id
     ? (cards.find((c) => c.id === jobForLogs.card_id) ?? null)
     : null
@@ -260,6 +319,65 @@ export default function App(): React.JSX.Element {
       setSelectedCardId(null)
     }
   }, [cards, linkedPrIndex, selectedCardId])
+
+  // Load card-specific events when a card is selected
+  useEffect(() => {
+    if (!selectedCardId) return
+
+    const loadCardEvents = async (): Promise<void> => {
+      try {
+        const cardEvents = await window.projectAPI.getCardEvents(selectedCardId, 200)
+        // Merge card events with existing events, avoiding duplicates
+        setEvents((prev) => {
+          const eventMap = new Map<string, Event>()
+          // Add existing events
+          for (const event of prev) {
+            eventMap.set(event.id, event)
+          }
+          // Add/update card events
+          for (const event of cardEvents) {
+            eventMap.set(event.id, event)
+          }
+          // Convert back to array and sort by created_at descending
+          return Array.from(eventMap.values()).sort(
+            (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          )
+        })
+      } catch (error) {
+        console.error('Failed to load card events:', error)
+      }
+    }
+
+    void loadCardEvents()
+  }, [selectedCardId])
+
+  // Listen for unified worker status changes
+  useEffect(() => {
+    if (!projectInfo) return
+
+    // Load initial status
+    window.projectAPI.getWorkerStatus(projectInfo.projectId).then((status) => {
+      if (status) {
+        setUnifiedWorkerStatus(status.status)
+      }
+    })
+
+    // Subscribe to changes
+    const unsubscribe = window.projectAPI.onWorkerStatusChanged((data) => {
+      if (data.projectId === projectInfo.projectId) {
+        setUnifiedWorkerStatus(data.status)
+      }
+    })
+
+    return unsubscribe
+  }, [projectInfo])
+
+  // Load error history when dialog opens
+  useEffect(() => {
+    if (errorHistoryOpen && projectInfo) {
+      window.projectAPI.getWorkerErrorHistory(projectInfo.projectId).then(setErrorHistory)
+    }
+  }, [errorHistoryOpen, projectInfo])
 
   // Listen for project opened event
   useEffect(() => {
@@ -319,6 +437,40 @@ export default function App(): React.JSX.Element {
     loadProjectAndOnboarding()
   }, [projectInfo])
 
+  // Check if migration is needed when project opens
+  useEffect(() => {
+    if (!projectInfo) return
+
+    const checkMigration = async (): Promise<void> => {
+      try {
+        const result = await window.projectAPI.checkMigrationNeeded({ projectId: projectInfo.projectId })
+        console.log('[Migration Check]', {
+          projectId: projectInfo.projectId,
+          needsMigration: result.needsMigration,
+          hasCentralData: result.hasCentralData,
+          hasLocalDb: result.hasLocalDb,
+          reason: result.reason
+        })
+        if (result.needsMigration) {
+          const countsResult = await window.projectAPI.getCentralDataCounts({ projectId: projectInfo.projectId })
+          console.log('[Migration Check] Central data counts:', countsResult.counts)
+          setMigrationState({
+            needed: true,
+            showPrompt: !result.hasLocalDb, // Only auto-show prompt if not already migrated
+            counts: countsResult.counts || {}
+          })
+        } else {
+          console.log('[Migration Check] Migration not needed:', result.reason || 'Already migrated or no data')
+          setMigrationState({ needed: false, showPrompt: false, counts: {} })
+        }
+      } catch (error) {
+        console.error('Failed to check migration status:', error)
+      }
+    }
+
+    checkMigration()
+  }, [projectInfo])
+
   async function checkOnboardingState(projectId: string): Promise<void> {
     try {
       const state = await window.projectAPI.getRepoOnboardingState(projectId)
@@ -364,7 +516,7 @@ export default function App(): React.JSX.Element {
         const result = await window.projectAPI.getPlanApproval({ approvalId: data.approvalId })
         if (result.approval) {
           setPendingApproval(result.approval)
-          const card = cards.find(c => c.id === data.cardId) ?? null
+          const card = cards.find((c) => c.id === data.cardId) ?? null
           setApprovalCard(card)
         }
       } catch (error) {
@@ -373,6 +525,25 @@ export default function App(): React.JSX.Element {
     })
     return unsubscribe
   }, [cards])
+
+  // Listen for manual test prompts after AI phase completes
+  useEffect(() => {
+    const unsubscribe = window.projectAPI.onManualTestPrompt((data) => {
+      // Show a toast notification prompting user to test
+      toast.info(`AI phase complete for "${data.cardTitle || 'Card'}"`, {
+        description: 'Would you like to test the modifications?',
+        action: {
+          label: 'Test Now',
+          onClick: () => {
+            // Open the card dialog to access the test button
+            setSelectedCardId(data.cardId)
+          }
+        },
+        duration: 30000 // 30 seconds
+      })
+    })
+    return unsubscribe
+  }, [])
 
   const clearWorkerLogs = useCallback((jobId: string) => {
     setWorkerLogsByJobId((prev) => {
@@ -383,18 +554,28 @@ export default function App(): React.JSX.Element {
     })
   }, [])
 
+  const handleOpenWorkerLogsForJob = useCallback(
+    (jobId: string) => {
+      setLogsJobOverrideId(jobId)
+      setWorkerLogsOpen(true)
+    },
+    []
+  )
+
   // Initial load - shows loading screen
   async function loadData(): Promise<void> {
     setIsLoading(true)
     try {
-      const [cardsData, linksData, jobsData] = await Promise.all([
+      const [cardsData, linksData, jobsData, eventsData] = await Promise.all([
         window.projectAPI.getCards(),
         window.projectAPI.getCardLinks(),
-        window.projectAPI.getJobs()
+        window.projectAPI.getJobs(),
+        window.projectAPI.getEvents()
       ])
       setCards(cardsData)
       setCardLinks(linksData)
       setJobs(jobsData)
+      setEvents(eventsData)
     } catch (error) {
       console.error('Failed to load project data:', error)
     } finally {
@@ -405,14 +586,16 @@ export default function App(): React.JSX.Element {
   // Background refresh - does NOT show loading screen to avoid flashing
   async function refreshData(): Promise<void> {
     try {
-      const [cardsData, linksData, jobsData] = await Promise.all([
+      const [cardsData, linksData, jobsData, eventsData] = await Promise.all([
         window.projectAPI.getCards(),
         window.projectAPI.getCardLinks(),
-        window.projectAPI.getJobs()
+        window.projectAPI.getJobs(),
+        window.projectAPI.getEvents()
       ])
       setCards(cardsData)
       setCardLinks(linksData)
       setJobs(jobsData)
+      setEvents(eventsData)
     } catch (error) {
       console.error('Failed to refresh project data:', error)
     }
@@ -447,18 +630,64 @@ export default function App(): React.JSX.Element {
     }
   }, [])
 
+  const [resetWorkerStateConfirmOpen, setResetWorkerStateConfirmOpen] = useState(false)
+  const [isResettingWorkerState, setIsResettingWorkerState] = useState(false)
+
+  const handleResetWorkerState = useCallback(async (): Promise<void> => {
+    setIsResettingWorkerState(true)
+    try {
+      const result = await window.projectAPI.resetWorkerState()
+      if (result.success) {
+        const parts: string[] = []
+        if (result.canceledJobs > 0) parts.push(`${result.canceledJobs} job(s) canceled`)
+        if (result.releasedSlots > 0) parts.push(`${result.releasedSlots} slot(s) released`)
+        if (result.deletedFailedJobs && result.deletedFailedJobs > 0)
+          parts.push(`${result.deletedFailedJobs} failed job(s) deleted`)
+        const message =
+          parts.length > 0
+            ? `Reset worker state: ${parts.join(', ')}`
+            : 'Worker state reset (no active jobs or slots found)'
+        toast.success(message)
+        setResetWorkerStateConfirmOpen(false)
+        // Wait a bit for the state to propagate, then refresh data
+        await new Promise((resolve) => setTimeout(resolve, 100))
+        // Force refresh of all data - refresh multiple times to ensure UI updates
+        await Promise.all([refreshData(), loadWorkerEnabled()])
+        // Refresh again after a short delay to ensure UI updates
+        await new Promise((resolve) => setTimeout(resolve, 200))
+        await refreshData()
+      } else {
+        toast.error('Failed to reset worker state', {
+          description: result.error ?? 'Unknown error'
+        })
+      }
+    } catch (error) {
+      console.error('Failed to reset worker state:', error)
+      toast.error('Failed to reset worker state', {
+        description: error instanceof Error ? error.message : 'Unknown error'
+      })
+    } finally {
+      setIsResettingWorkerState(false)
+    }
+  }, [refreshData])
+
   const handleMoveCard = useCallback(async (cardId: string, status: CardStatus): Promise<void> => {
     // Optimistic update
     setCards((prev) => prev.map((card) => (card.id === cardId ? { ...card, status } : card)))
 
     try {
       await window.projectAPI.moveCard(cardId, status)
+
+      // Auto-clear error status when any card is moved to Ready
+      if (status === 'ready' && hasWorkerError && projectInfo) {
+        await window.projectAPI.clearWorkerErrorStatus(projectInfo.projectId)
+      }
     } catch (error) {
       console.error('Failed to move card:', error)
       // Reload to get correct state (use refreshData to avoid flash)
       refreshData()
     }
-  }, [])
+  }, [refreshData, hasWorkerError, projectInfo])
 
   const remoteProvider: Provider | null = project?.remote_repo_key
     ? project.remote_repo_key.startsWith('github:')
@@ -468,7 +697,8 @@ export default function App(): React.JSX.Element {
         : null
     : null
 
-  const repoIssueProvider = remoteProvider === 'github' || remoteProvider === 'gitlab' ? remoteProvider : null
+  const repoIssueProvider =
+    remoteProvider === 'github' || remoteProvider === 'gitlab' ? remoteProvider : null
   const canCreateRepoIssues = repoIssueProvider !== null
 
   const handleOpenAddCard = useCallback((): void => {
@@ -487,6 +717,64 @@ export default function App(): React.JSX.Element {
     setStarterCardsWizardMode('manual')
     setStarterCardsWizardOpen(true)
   }, [])
+
+  const handleSortDraftByPriority = useCallback(async (): Promise<void> => {
+    const draftCards = cards.filter((c) => c.status === 'draft')
+
+    if (draftCards.length === 0) {
+      toast.info('No draft cards to sort')
+      return
+    }
+
+    // Sort by priority (lower number = higher priority)
+    const sorted = [...draftCards].sort((a, b) => {
+      const priorityA = getPriorityFromLabels(a.labels_json)
+      const priorityB = getPriorityFromLabels(b.labels_json)
+      return priorityA - priorityB
+    })
+
+    // Update timestamps to persist order (stagger by 1 second each)
+    const now = Date.now()
+    for (let i = 0; i < sorted.length; i++) {
+      const timestamp = new Date(now + i * 1000).toISOString()
+      await window.projectAPI.updateCardTimestamp(sorted[i].id, timestamp)
+    }
+
+    // Refresh cards to show new order
+    const cardsData = await window.projectAPI.getCards()
+    setCards(cardsData)
+
+    toast.success(`Sorted ${sorted.length} draft cards by priority`)
+  }, [cards])
+
+  const handleSortReadyByPriority = useCallback(async (): Promise<void> => {
+    const readyCards = cards.filter((c) => c.status === 'ready')
+
+    if (readyCards.length === 0) {
+      toast.info('No ready cards to sort')
+      return
+    }
+
+    // Sort by priority (lower number = higher priority)
+    const sorted = [...readyCards].sort((a, b) => {
+      const priorityA = getPriorityFromLabels(a.labels_json)
+      const priorityB = getPriorityFromLabels(b.labels_json)
+      return priorityA - priorityB
+    })
+
+    // Update timestamps to persist order (stagger by 1 second each)
+    const now = Date.now()
+    for (let i = 0; i < sorted.length; i++) {
+      const timestamp = new Date(now + i * 1000).toISOString()
+      await window.projectAPI.updateCardTimestamp(sorted[i].id, timestamp)
+    }
+
+    // Refresh cards to show new order
+    const cardsData = await window.projectAPI.getCards()
+    setCards(cardsData)
+
+    toast.success(`Sorted ${sorted.length} ready cards by priority`)
+  }, [cards])
 
   const handleCreateCardsBatch = useCallback(
     async (
@@ -514,14 +802,14 @@ export default function App(): React.JSX.Element {
 
   const handleCreateCard = useCallback(
     async (data: { title: string; body: string; createType: CreateCardType }): Promise<void> => {
-    try {
-      const newCard = await window.projectAPI.createCard(data)
-      setCards((prev) => [...prev, newCard])
-      setAddCardOpen(false)
-    } catch (error) {
-      console.error('Failed to create card:', error)
-    }
-  },
+      try {
+        const newCard = await window.projectAPI.createCard(data)
+        setCards((prev) => [...prev, newCard])
+        setAddCardOpen(false)
+      } catch (error) {
+        console.error('Failed to create card:', error)
+      }
+    },
     []
   )
 
@@ -534,41 +822,96 @@ export default function App(): React.JSX.Element {
     setSplitDialogOpen(true)
   }, [])
 
-  // Follow-up instruction handler
-  const handleFollowUpSubmit = useCallback(async (data: {
-    jobId: string
-    cardId: string
-    instructionType: FollowUpInstructionType
-    content: string
-    priority?: number
-  }): Promise<void> => {
-    await window.projectAPI.createFollowUpInstruction({
-      jobId: data.jobId,
-      cardId: data.cardId,
-      instructionType: data.instructionType,
-      content: data.content,
-      priority: data.priority
+  const handlePushToRemote = useCallback(async (cardId: string): Promise<void> => {
+    const result = await window.projectAPI.pushCardToRemote(cardId)
+    if (result.error) {
+      toast.error(result.error)
+      return
+    }
+    toast.success(`Created issue #${result.issueNumber}`, {
+      action: {
+        label: 'Open',
+        onClick: () => window.electron.ipcRenderer.send('openExternal', result.url)
+      }
     })
+    refreshData()
   }, [])
+
+  // Follow-up instruction handler
+  const handleFollowUpSubmit = useCallback(
+    async (data: {
+      jobId: string
+      cardId: string
+      instructionType: FollowUpInstructionType
+      content: string
+      priority?: number
+    }): Promise<void> => {
+      await window.projectAPI.createFollowUpInstruction({
+        jobId: data.jobId,
+        cardId: data.cardId,
+        instructionType: data.instructionType,
+        content: data.content,
+        priority: data.priority
+      })
+    },
+    []
+  )
 
   // Plan approval handlers
-  const handleApprovePlan = useCallback(async (approvalId: string, notes?: string): Promise<void> => {
-    await window.projectAPI.approvePlan(approvalId, notes)
-    setPendingApproval(null)
-    setApprovalCard(null)
-  }, [])
+  const handleApprovePlan = useCallback(
+    async (approvalId: string, notes?: string): Promise<void> => {
+      await window.projectAPI.approvePlan(approvalId, notes)
+      setPendingApproval(null)
+      setApprovalCard(null)
+    },
+    []
+  )
 
-  const handleRejectPlan = useCallback(async (approvalId: string, notes?: string): Promise<void> => {
-    await window.projectAPI.rejectPlan(approvalId, notes)
-    setPendingApproval(null)
-    setApprovalCard(null)
-  }, [])
+  const handleRejectPlan = useCallback(
+    async (approvalId: string, notes?: string): Promise<void> => {
+      await window.projectAPI.rejectPlan(approvalId, notes)
+      setPendingApproval(null)
+      setApprovalCard(null)
+    },
+    []
+  )
 
   const handleSkipApproval = useCallback(async (approvalId: string): Promise<void> => {
     await window.projectAPI.skipPlanApproval(approvalId)
     setPendingApproval(null)
     setApprovalCard(null)
   }, [])
+
+  const handleMigrate = useCallback(async (): Promise<void> => {
+    if (!projectInfo) return
+    setIsMigrating(true)
+    try {
+      const result = await window.projectAPI.migrateProjectToLocal({ projectId: projectInfo.projectId })
+      if (result.success) {
+        toast.success(result.isReMigration ? 'Project re-migrated to local storage' : 'Project migrated to local storage')
+        // Re-check migration status after migration to see if there's still central data
+        // (for re-migration support, data might still exist in central DB)
+        const checkResult = await window.projectAPI.checkMigrationNeeded({ projectId: projectInfo.projectId })
+        if (checkResult.needsMigration) {
+          const countsResult = await window.projectAPI.getCentralDataCounts({ projectId: projectInfo.projectId })
+          setMigrationState({
+            needed: true,
+            showPrompt: false, // Don't auto-show prompt after manual migration
+            counts: countsResult.counts || {}
+          })
+        } else {
+          setMigrationState({ needed: false, showPrompt: false, counts: {} })
+        }
+      } else {
+        toast.error(`Migration failed: ${result.error}`)
+      }
+    } catch (error) {
+      console.error('Migration failed:', error)
+      toast.error('Migration failed')
+    } finally {
+      setIsMigrating(false)
+    }
+  }, [projectInfo])
 
   if (!projectInfo) {
     return (
@@ -601,32 +944,96 @@ export default function App(): React.JSX.Element {
             <span className="text-sm text-muted-foreground">Worker</span>
             <Switch checked={workerEnabled} onCheckedChange={handleToggleWorker} />
             {workerEnabled && (
-              <Badge
-                variant={activeWorkerJob ? 'secondary' : hasWorkerError ? 'destructive' : 'default'}
-                className="ml-1"
-              >
-                {activeWorkerJob ? (
-                  <>
-                    <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                    Processing...
-                  </>
-                ) : hasWorkerError ? (
-                  <>
-                    <AlertCircle className="h-3 w-3 mr-1" />
-                    Error
-                  </>
-                ) : readyCards.length > 0 ? (
-                  <>
-                    <Play className="h-3 w-3 mr-1" />
-                    {readyCards.length} ready
-                  </>
+              <>
+                {hasWorkerError ? (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Badge variant="destructive" className="ml-1 cursor-help">
+                          <AlertCircle className="h-3 w-3 mr-1" />
+                          Error
+                        </Badge>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom" className="max-w-xs">
+                        <p className="font-medium">Worker Error</p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {unifiedWorkerStatus?.lastError || 'Unknown error'}
+                        </p>
+                        {unifiedWorkerStatus?.activeCardTitle && (
+                          <p className="text-xs mt-1">Card: {unifiedWorkerStatus.activeCardTitle}</p>
+                        )}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 ) : (
+                  <Badge
+                    variant={isWorkerProcessing ? 'secondary' : 'default'}
+                    className="ml-1"
+                  >
+                    {isWorkerProcessing ? (
+                      <>
+                        <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                        {unifiedWorkerStatus?.state === 'paused' ? 'Paused' : 'Processing...'}
+                      </>
+                    ) : readyCards.length > 0 ? (
+                      <>
+                        <Play className="h-3 w-3 mr-1" />
+                        {readyCards.length} ready
+                      </>
+                    ) : (
+                      <>
+                        <Pause className="h-3 w-3 mr-1" />
+                        Idle
+                      </>
+                    )}
+                  </Badge>
+                )}
+                {hasWorkerError && (
                   <>
-                    <Pause className="h-3 w-3 mr-1" />
-                    Idle
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2 ml-1"
+                      onClick={async () => {
+                        if (!projectInfo) return
+                        const result = await window.projectAPI.retryLastFailedCard(projectInfo.projectId)
+                        if (result.success) {
+                          toast.success('Retrying card...')
+                        } else {
+                          toast.error(result.error || 'Failed to retry')
+                        }
+                      }}
+                      title="Retry last failed card"
+                    >
+                      <RotateCcw className="h-3 w-3" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2"
+                      onClick={() => {
+                        if (projectInfo) {
+                          window.projectAPI.clearWorkerErrorStatus(projectInfo.projectId)
+                        }
+                      }}
+                      title="Clear error status"
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
                   </>
                 )}
-              </Badge>
+                {isWorkerProcessing && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 ml-1"
+                    onClick={() => setResetWorkerStateConfirmOpen(true)}
+                    title="Reset worker state (cancel running jobs and release slots)"
+                  >
+                    <RotateCcw className="h-3 w-3" />
+                  </Button>
+                )}
+              </>
             )}
           </div>
 
@@ -706,6 +1113,7 @@ export default function App(): React.JSX.Element {
             Workspace
           </Button>
 
+
           <Button
             variant="outline"
             size="sm"
@@ -715,6 +1123,21 @@ export default function App(): React.JSX.Element {
           >
             <Terminal className="mr-2 h-4 w-4" />
             Logs
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setErrorHistoryOpen(true)}
+            title="View error history"
+          >
+            <History className="mr-2 h-4 w-4" />
+            Errors
+            {(unifiedWorkerStatus?.errorHistory?.length ?? 0) > 0 && (
+              <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-xs">
+                {unifiedWorkerStatus?.errorHistory?.length}
+              </Badge>
+            )}
           </Button>
 
           <Button
@@ -773,11 +1196,16 @@ export default function App(): React.JSX.Element {
             cards={visibleCards}
             cardLinksByCardId={cardLinksByCardId}
             selectedCardId={selectedCardId}
+            hasRemote={!!project?.remote_repo_key}
+            remoteProvider={remoteProvider ?? undefined}
             onSelectCard={setSelectedCardId}
             onMoveCard={handleMoveCard}
             onAddCard={handleOpenAddCard}
             onGenerateCards={handleGenerateCards}
+            onSortDraftByPriority={handleSortDraftByPriority}
+            onSortReadyByPriority={handleSortReadyByPriority}
             onSplitCard={handleOpenSplitDialog}
+            onPushToRemote={(card) => handlePushToRemote(card.id)}
             devServerStatusByCardId={devServerStatusByCardId}
           />
         </div>
@@ -785,13 +1213,17 @@ export default function App(): React.JSX.Element {
         {/* Card Dialog */}
         <CardDialog
           card={selectedCard}
-          linkedPRs={selectedCard ? cardLinksByCardId[selectedCard.id] ?? [] : []}
-          events={[]} // TODO: Load events for card
+          linkedPRs={selectedCard ? (cardLinksByCardId[selectedCard.id] ?? []) : []}
+          events={events}
           projectId={projectInfo?.projectId ?? null}
+          hasRemote={!!project?.remote_repo_key}
+          remoteProvider={remoteProvider ?? undefined}
           onClose={handleCloseDrawer}
           onMoveCard={handleMoveCard}
           onRunWorker={(cardId) => window.projectAPI.runWorker(cardId)}
           onSplitCard={handleOpenSplitDialog}
+          onPushToRemote={handlePushToRemote}
+          onOpenWorkerLogsForJob={handleOpenWorkerLogsForJob}
         />
       </div>
 
@@ -817,11 +1249,29 @@ export default function App(): React.JSX.Element {
 
       <WorkerLogDialog
         open={workerLogsOpen}
-        onOpenChange={setWorkerLogsOpen}
+        onOpenChange={(open) => {
+          setWorkerLogsOpen(open)
+          if (!open) {
+            // Clear override when dialog closes
+            setLogsJobOverrideId(null)
+          }
+        }}
         job={jobForLogs ?? null}
         card={cardForLogs}
         liveLogs={jobForLogs ? (workerLogsByJobId[jobForLogs.id] ?? []) : []}
         onClearLogs={clearWorkerLogs}
+      />
+
+      <WorkerErrorHistoryDialog
+        open={errorHistoryOpen}
+        onOpenChange={setErrorHistoryOpen}
+        errors={errorHistory}
+        onClearHistory={async () => {
+          if (projectInfo) {
+            await window.projectAPI.clearWorkerErrorHistory(projectInfo.projectId)
+            setErrorHistory([])
+          }
+        }}
       />
 
       <FollowUpInstructionDialog
@@ -870,6 +1320,55 @@ export default function App(): React.JSX.Element {
         onRefreshStatus={loadWorkspaceStatus}
       />
 
+      {/* Reset Worker State Confirmation Dialog */}
+      <Dialog open={resetWorkerStateConfirmOpen} onOpenChange={setResetWorkerStateConfirmOpen}>
+        <DialogContent className="sm:max-w-[450px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <RotateCcw className="h-5 w-5 text-destructive" />
+              Reset Worker State
+            </DialogTitle>
+            <DialogDescription className="space-y-2">
+              <p>
+                This will cancel all running/queued worker jobs and release all running worker slots
+                back to idle.
+              </p>
+              <p className="text-sm font-medium text-foreground">
+                Worker progress history will be preserved (iterations, checkpoints, etc.).
+              </p>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setResetWorkerStateConfirmOpen(false)}
+              disabled={isResettingWorkerState}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={handleResetWorkerState}
+              disabled={isResettingWorkerState}
+            >
+              {isResettingWorkerState ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Resetting...
+                </>
+              ) : (
+                <>
+                  <RotateCcw className="mr-2 h-4 w-4" />
+                  Reset Worker State
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Onboarding Dialogs */}
       {project && (
         <LabelSetupDialog
@@ -905,6 +1404,19 @@ export default function App(): React.JSX.Element {
           setGraphViewOpen(false)
         }}
       />
+
+      {/* Migration Prompt Dialog */}
+      {projectInfo && (
+        <MigrationPromptDialog
+          open={migrationState.showPrompt}
+          projectId={projectInfo.projectId}
+          projectName={project?.name || 'Project'}
+          centralCounts={migrationState.counts}
+          onConfirm={handleMigrate}
+          onDismiss={() => setMigrationState(prev => ({ ...prev, showPrompt: false }))}
+          disabled={isMigrating}
+        />
+      )}
 
       <Toaster />
     </div>

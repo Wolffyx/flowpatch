@@ -13,7 +13,15 @@
  * - 'project:{projectKey}:{key}' for project overrides
  */
 
+import { app } from 'electron'
 import { deleteAppSetting, getAppSetting, setAppSetting } from './db'
+import { getProjectPath } from './db/db-resolver'
+import {
+  readFlowPatchConfig,
+  updateProjectSettings,
+  deleteProjectSetting,
+  type FlowPatchSettingsConfig
+} from './services/flowpatch-config'
 
 // ============================================================================
 // App Defaults (Hardcoded)
@@ -38,6 +46,9 @@ export const APP_DEFAULTS: Record<string, string> = {
   'worker.planFirst': 'true',
   'worker.enableTestMode': 'false',
 
+  // Storage settings
+  'storage.useLocalDb': 'true',
+
   // UI settings
   'ui.showPullRequestsSection': 'false',
   'ui.logsMaxLines': '500',
@@ -45,7 +56,29 @@ export const APP_DEFAULTS: Record<string, string> = {
   // Log settings
   'logs.maxEntries': '5000',
   'logs.persistEnabled': 'false',
-  'logs.exportIncludeDiskWhenEnabled': 'true'
+  'logs.exportIncludeDiskWhenEnabled': 'true',
+  'logs.aiDebugEnabled': app.isPackaged ? 'false' : 'true'
+}
+
+// ============================================================================
+// Settings Key Mapping (settingsStore key → config.yml key)
+// ============================================================================
+
+/**
+ * Maps settingsStore keys to FlowPatchSettingsConfig keys.
+ * Used for reading/writing project overrides from/to .flowpatch/config.yml.
+ */
+const SETTING_TO_CONFIG_KEY: Partial<Record<string, keyof FlowPatchSettingsConfig>> = {
+  'sync.autoSync': 'autoSync',
+  'sync.pollIntervalMinutes': 'pollIntervalMinutes',
+  'worker.enabled': 'workerEnabled',
+  'worker.maxMinutes': 'workerMaxMinutes',
+  'worker.planFirst': 'workerPlanFirst',
+  'worker.toolPreference': 'workerToolPreference',
+  'worker.enableTestMode': 'workerEnableTestMode',
+  'index.autoIndexingEnabled': 'autoIndexingEnabled',
+  'ui.showPullRequestsSection': 'showPullRequestsSection',
+  'ui.logsMaxLines': 'logsMaxLines'
 }
 
 // ============================================================================
@@ -101,22 +134,98 @@ function projectKey(projectKey: string, settingKey: string): string {
 /**
  * Get a project-specific override.
  * Returns null if not set.
+ *
+ * Now reads from .flowpatch/config.yml instead of central DB.
+ * Falls back to central DB for backward compatibility.
  */
 export function getProjectOverride(projKey: string, key: string): string | null {
+  // projKey is actually projectId - get the project path
+  const projectPath = getProjectPath(projKey)
+  if (!projectPath) {
+    // Fall back to central DB if project not found
+    return getAppSetting(projectKey(projKey, key))
+  }
+
+  // Check if setting maps to config.yml
+  const configKey = SETTING_TO_CONFIG_KEY[key]
+  if (configKey) {
+    try {
+      const { config } = readFlowPatchConfig(projectPath)
+      const value = config.settings?.[configKey]
+      if (value !== undefined) {
+        return String(value)
+      }
+    } catch {
+      // If config.yml doesn't exist or can't be read, fall back to central DB
+    }
+  }
+
+  // Fall back to central DB for backward compatibility
   return getAppSetting(projectKey(projKey, key))
 }
 
 /**
  * Set a project-specific override.
+ *
+ * Now writes to .flowpatch/config.yml instead of central DB.
+ * Falls back to central DB if project not found or setting not mappable.
  */
 export function setProjectOverride(projKey: string, key: string, value: string): void {
+  // projKey is actually projectId - get the project path
+  const projectPath = getProjectPath(projKey)
+  if (!projectPath) {
+    // Fall back to central DB if project not found
+    setAppSetting(projectKey(projKey, key), value)
+    return
+  }
+
+  // Check if setting maps to config.yml
+  const configKey = SETTING_TO_CONFIG_KEY[key]
+  if (configKey) {
+    try {
+      // Convert string value to proper type based on schema
+      const valueType = SETTINGS_SCHEMA[key]
+      const typedValue =
+        valueType === 'boolean'
+          ? value === 'true'
+          : valueType === 'number'
+            ? Number(value)
+            : value
+
+      updateProjectSettings(projectPath, { [configKey]: typedValue } as Partial<
+        FlowPatchSettingsConfig
+      >)
+      return
+    } catch {
+      // If config.yml write fails, fall back to central DB
+    }
+  }
+
+  // Fall back to central DB for unmapped settings
   setAppSetting(projectKey(projKey, key), value)
 }
 
 /**
  * Clear a project-specific override.
+ *
+ * Now deletes from .flowpatch/config.yml instead of central DB.
+ * Also cleans up central DB for backward compatibility.
  */
 export function clearProjectOverride(projKey: string, key: string): void {
+  // projKey is actually projectId - get the project path
+  const projectPath = getProjectPath(projKey)
+
+  // Check if setting maps to config.yml
+  const configKey = SETTING_TO_CONFIG_KEY[key]
+  if (configKey && projectPath) {
+    try {
+      deleteProjectSetting(projectPath, configKey)
+    } catch {
+      // Ignore errors if config doesn't exist
+    }
+  }
+
+  // Also delete from central DB for backward compatibility
   deleteAppSetting(projectKey(projKey, key))
 }
 
@@ -234,7 +343,8 @@ export const SETTINGS_SCHEMA: Record<string, 'string' | 'boolean' | 'number'> = 
   'ui.logsMaxLines': 'number',
   'logs.maxEntries': 'number',
   'logs.persistEnabled': 'boolean',
-  'logs.exportIncludeDiskWhenEnabled': 'boolean'
+  'logs.exportIncludeDiskWhenEnabled': 'boolean',
+  'logs.aiDebugEnabled': 'boolean'
 }
 
 /**

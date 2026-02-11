@@ -91,17 +91,24 @@ export function DependencyManager({ card }: DependencyManagerProps): React.JSX.E
       }
 
       // Get dependents (what depends on this card)
-      const dependentsResult = await window.projectAPI.getDependentsOfCard(card.id)
+      const dependentsResult = await window.projectAPI.getDependentsOfCardWithCards(card.id)
       if (dependentsResult.error) {
         toast.error('Failed to load dependents', { description: dependentsResult.error })
       } else {
-        // For dependents, we need to enrich with card info
-        setDependents(dependentsResult.dependencies as CardDependencyWithCard[])
+        setDependents(dependentsResult.dependencies)
       }
+      console.log('DependencyManager:loadDependencies', {
+        cardId: card.id,
+        cardTitle: card.title,
+        dependencies: depsResult.dependencies,
+        dependents: dependentsResult.dependencies
+      })
+
     } catch (err) {
       toast.error('Failed to load dependencies', {
         description: err instanceof Error ? err.message : 'Unknown error'
       })
+
     } finally {
       setLoading(false)
     }
@@ -110,11 +117,11 @@ export function DependencyManager({ card }: DependencyManagerProps): React.JSX.E
   const loadAvailableCards = useCallback(async () => {
     try {
       const cards = await window.projectAPI.getCards()
+      console.log(cards);
       // Filter out current card and cards that are already dependencies
       const existingDepIds = dependencies.map((d) => d.depends_on_card_id)
-      const filtered = cards.filter(
-        (c: Card) => c.id !== card.id && !existingDepIds.includes(c.id)
-      )
+      console.log(existingDepIds);
+      const filtered = cards.filter((c: Card) => c.id !== card.id && !existingDepIds.includes(c.id))
       setAvailableCards(filtered)
     } catch (err) {
       toast.error('Failed to load cards')
@@ -247,7 +254,9 @@ export function DependencyManager({ card }: DependencyManagerProps): React.JSX.E
                       className={cn(
                         'flex items-center gap-2 p-2 rounded-md border',
                         !isActive && 'opacity-50',
-                        isMet ? 'border-green-500/30 bg-green-500/5' : 'border-yellow-500/30 bg-yellow-500/5'
+                        isMet
+                          ? 'border-green-500/30 bg-green-500/5'
+                          : 'border-yellow-500/30 bg-yellow-500/5'
                       )}
                     >
                       {isMet ? (
@@ -305,9 +314,7 @@ export function DependencyManager({ card }: DependencyManagerProps): React.JSX.E
               </div>
             </div>
           ) : (
-            <div className="text-sm text-muted-foreground text-center py-2">
-              No dependencies
-            </div>
+            <div className="text-sm text-muted-foreground text-center py-2">No dependencies</div>
           )}
 
           {/* What depends on this card */}
@@ -372,12 +379,7 @@ export function DependencyManager({ card }: DependencyManagerProps): React.JSX.E
                     >
                       <div className="font-medium text-sm truncate">{c.title}</div>
                       <div className="flex items-center gap-2 mt-1">
-                        <div
-                          className={cn(
-                            'h-2 w-2 rounded-full',
-                            STATUS_COLORS[c.status]
-                          )}
-                        />
+                        <div className={cn('h-2 w-2 rounded-full', STATUS_COLORS[c.status])} />
                         <span className="text-xs text-muted-foreground">
                           {STATUS_LABELS[c.status]}
                         </span>
@@ -393,10 +395,7 @@ export function DependencyManager({ card }: DependencyManagerProps): React.JSX.E
             <Button variant="outline" onClick={() => setShowAddDialog(false)}>
               Cancel
             </Button>
-            <Button
-              onClick={handleAddDependency}
-              disabled={!selectedCardId || saving}
-            >
+            <Button onClick={handleAddDependency} disabled={!selectedCardId || saving}>
               {saving ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />

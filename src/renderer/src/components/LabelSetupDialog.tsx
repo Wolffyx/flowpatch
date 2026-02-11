@@ -40,6 +40,7 @@ function readInitialMapping(project: Project): {
       policy.sync?.statusLabels?.inProgress || DEFAULT_POLICY.sync!.statusLabels!.inProgress!,
     inReview: policy.sync?.statusLabels?.inReview || DEFAULT_POLICY.sync!.statusLabels!.inReview!,
     testing: policy.sync?.statusLabels?.testing || DEFAULT_POLICY.sync!.statusLabels!.testing!,
+    failed: policy.sync?.statusLabels?.failed || DEFAULT_POLICY.sync!.statusLabels!.failed!,
     done: policy.sync?.statusLabels?.done || DEFAULT_POLICY.sync!.statusLabels!.done!
   }
   return { readyLabel, statusLabels }
@@ -109,7 +110,16 @@ export function LabelSetupDialog({
 
       const ready = mapping.readyLabel.trim()
       const s = mapping.statusLabels
-      if (!ready || !s.draft || !s.ready || !s.inProgress || !s.inReview || !s.testing || !s.done) {
+      if (
+        !ready ||
+        !s.draft ||
+        !s.ready ||
+        !s.inProgress ||
+        !s.inReview ||
+        !s.testing ||
+        !s.failed ||
+        !s.done
+      ) {
         toast.error('Please fill all label mappings')
         return
       }
@@ -258,7 +268,9 @@ export function LabelSetupDialog({
                             ? statusLabels.inReview
                             : key === 'testing'
                               ? statusLabels.testing
-                              : statusLabels.done
+                              : key === 'failed'
+                                ? statusLabels.failed
+                                : statusLabels.done
 
                   return (
                     <div key={col.id} className="grid gap-2">

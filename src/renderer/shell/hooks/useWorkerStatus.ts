@@ -1,24 +1,13 @@
 /**
  * Worker Status Hook
  *
- * Computes worker status for projects and enriches tabs with status indicators
+ * Consumes unified worker status from main process and enriches tabs with status indicators.
+ * This replaces the previous multi-source computation approach.
  */
 
-import { useMemo } from 'react'
-import type { Project, Job } from '@shared/types'
+import { useState, useEffect, useMemo } from 'react'
+import type { Project, WorkerStatus } from '@shared/types'
 import type { TabData } from '../components/TabBar'
-
-interface ProjectWorkerStatus {
-  workerEnabled: boolean
-  activeRuns: number
-  lastJobState: 'running' | 'completed' | 'failed' | null
-}
-
-interface ComputedWorkerStatus {
-  workerEnabled: boolean
-  activeRuns: number
-  lastJobState: 'running' | 'completed' | 'failed' | null
-}
 
 export interface TabDataWithStatus extends TabData {
   workerStatus: 'idle' | 'running' | 'ready' | 'error' | null
@@ -26,95 +15,82 @@ export interface TabDataWithStatus extends TabData {
 }
 
 interface UseWorkerStatusReturn {
-  /** Computed worker status per project */
-  computedWorkerStatus: Record<string, ComputedWorkerStatus>
   /** Tabs enriched with worker status */
   tabsWithStatus: TabDataWithStatus[]
 }
 
-export function useWorkerStatus(
-  projects: Project[],
-  recentJobs: Job[],
-  projectWorkerStatus: Record<string, ProjectWorkerStatus>,
-  tabs: TabData[]
-): UseWorkerStatusReturn {
-  // Compute per-project worker status from projects and jobs
-  const computedWorkerStatus = useMemo(() => {
-    const statusMap: Record<string, ComputedWorkerStatus> = {}
+/**
+ * Hook to get worker status for tabs using the unified status from main process.
+ */
+export function useWorkerStatus(projects: Project[], tabs: TabData[]): UseWorkerStatusReturn {
+  const [statusByProject, setStatusByProject] = useState<Record<string, WorkerStatus>>({})
 
-    // Initialize from projects (worker_enabled field)
-    for (const project of projects) {
-      const workerJobs = recentJobs.filter(
-        j => j.project_id === project.id && j.type === 'worker_run'
-      )
-      const activeWorkerJobs = workerJobs.filter(
-        j => j.state === 'running' || j.state === 'queued'
-      )
-      const latestWorkerJob = workerJobs.length > 0
-        ? workerJobs.reduce((latest, job) => {
-            const latestTime = latest.updated_at || latest.created_at
-            const jobTime = job.updated_at || job.created_at
-            return jobTime > latestTime ? job : latest
-          })
-        : null
-
-      let lastJobState: 'running' | 'completed' | 'failed' | null = null
-      if (activeWorkerJobs.length > 0) {
-        lastJobState = 'running'
-      } else if (latestWorkerJob?.state === 'succeeded') {
-        lastJobState = 'completed'
-      } else if (latestWorkerJob?.state === 'failed') {
-        lastJobState = 'failed'
-      }
-
-      statusMap[project.id] = {
-        workerEnabled: project.worker_enabled === 1,
-        activeRuns: activeWorkerJobs.length,
-        lastJobState
-      }
-    }
-
-    // Merge with activity updates (they take precedence for active runs)
-    for (const [projectId, status] of Object.entries(projectWorkerStatus)) {
-      if (statusMap[projectId]) {
-        // Activity updates override for activeRuns
-        if (status.activeRuns > 0) {
-          statusMap[projectId].activeRuns = status.activeRuns
-          statusMap[projectId].lastJobState = 'running'
+  // Subscribe to unified status changes
+  useEffect(() => {
+    // Load initial status for all projects
+    const loadInitialStatus = async () => {
+      const initial: Record<string, WorkerStatus> = {}
+      for (const project of projects) {
+        try {
+          const result = await window.shellAPI.getWorkerStatus(project.id)
+          if (result?.status) {
+            initial[project.id] = result.status
+          }
+        } catch {
+          // Ignore errors for individual projects
         }
       }
+      setStatusByProject(initial)
     }
 
-    return statusMap
-  }, [projects, recentJobs, projectWorkerStatus])
+    loadInitialStatus()
 
-  // Enrich tabs with worker status for tab indicators
-  const tabsWithStatus = useMemo(() =>
-    tabs.map(tab => {
-      const status = computedWorkerStatus[tab.projectId]
-      let workerStatus: 'idle' | 'running' | 'ready' | 'error' | null = null
+    // Subscribe to changes
+    const unsubscribe = window.shellAPI.onWorkerStatusChanged((data) => {
+      setStatusByProject((prev) => ({
+        ...prev,
+        [data.projectId]: data.status
+      }))
+    })
 
-      if (status?.activeRuns > 0) {
-        workerStatus = 'running'
-      } else if (status?.lastJobState === 'failed') {
-        workerStatus = 'error'
-      } else if (status?.lastJobState === 'completed') {
-        workerStatus = 'ready'
-      } else if (status?.workerEnabled) {
-        workerStatus = 'idle'
-      }
+    return unsubscribe
+  }, [projects])
 
-      return {
-        ...tab,
-        workerStatus,
-        activeRuns: status?.activeRuns ?? 0
-      }
-    }),
-    [tabs, computedWorkerStatus]
+  // Map unified status to tab display status
+  const tabsWithStatus = useMemo(
+    () =>
+      tabs.map((tab) => {
+        const project = projects.find((p) => p.id === tab.projectId)
+        const status = statusByProject[tab.projectId]
+        let workerStatus: 'idle' | 'running' | 'ready' | 'error' | null = null
+
+        if (!project?.worker_enabled) {
+          workerStatus = null
+        } else if (!status) {
+          workerStatus = 'idle'
+        } else if (
+          ['processing', 'testing', 'pushing', 'queued', 'paused'].includes(status.state)
+        ) {
+          workerStatus = 'running'
+        } else if (status.state === 'failed') {
+          workerStatus = 'error'
+        } else if (status.state === 'succeeded') {
+          workerStatus = 'ready'
+        } else {
+          workerStatus = 'idle'
+        }
+
+        const isActive = ['processing', 'testing', 'pushing', 'queued'].includes(
+          status?.state ?? ''
+        )
+        return {
+          ...tab,
+          workerStatus,
+          activeRuns: isActive ? 1 : 0
+        }
+      }),
+    [tabs, projects, statusByProject]
   )
 
-  return {
-    computedWorkerStatus,
-    tabsWithStatus
-  }
+  return { tabsWithStatus }
 }

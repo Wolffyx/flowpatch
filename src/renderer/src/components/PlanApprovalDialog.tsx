@@ -114,31 +114,21 @@ export function PlanApprovalDialog({
         {approval && (
           <div className="flex flex-col gap-4">
             <div className="flex items-center gap-2 flex-wrap">
-              <Badge variant="outline">
-                {getPlanningModeLabel(approval.planning_mode)} Plan
-              </Badge>
-              {card && (
-                <span className="text-sm text-muted-foreground truncate">
-                  {card.title}
-                </span>
-              )}
+              <Badge variant="outline">{getPlanningModeLabel(approval.planning_mode)} Plan</Badge>
+              {card && <span className="text-sm text-muted-foreground truncate">{card.title}</span>}
             </div>
 
             <div className="space-y-2">
               <div className="text-sm font-medium">Implementation Plan</div>
               <ScrollArea className="h-[40vh] rounded-md border bg-muted/20 p-4">
                 <div className="prose prose-sm dark:prose-invert max-w-none">
-                  <pre className="whitespace-pre-wrap text-xs font-mono">
-                    {approval.plan}
-                  </pre>
+                  <pre className="whitespace-pre-wrap text-xs font-mono">{approval.plan}</pre>
                 </div>
               </ScrollArea>
             </div>
 
             <div className="space-y-2">
-              <div className="text-sm font-medium">
-                Reviewer Notes (Optional)
-              </div>
+              <div className="text-sm font-medium">Reviewer Notes (Optional)</div>
               <Textarea
                 id="reviewer-notes"
                 value={notes}

@@ -1,7 +1,7 @@
 /**
  * IPC handlers for AI-assisted drafting.
  * Handles: generateCardDescription, generateCardList
- * 
+ *
  * Security: All AI handlers verify IPC origin to prevent unauthorized command execution.
  */
 
@@ -12,7 +12,9 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { getCard, getProject } from '../../db'
 import { verifySecureRequest } from '../../security'
-import { logAction } from '@shared/utils'
+import { parsePolicyJson } from '@shared/utils'
+import { logAction } from '../../utils/main-logger'
+import { CLIProviderRegistry } from '../../cli-providers/registry'
 
 type DraftToolPreference = 'auto' | 'claude' | 'codex'
 
@@ -136,7 +138,10 @@ function extractLikelyJson(raw: string): string {
   return text
 }
 
-function parseCardListJson(raw: string, expectedCount: number): Array<{ title: string; body: string }> {
+function parseCardListJson(
+  raw: string,
+  expectedCount: number
+): Array<{ title: string; body: string }> {
   const extracted = extractLikelyJson(raw)
   let parsed: unknown
   try {
@@ -155,7 +160,8 @@ function parseCardListJson(raw: string, expectedCount: number): Array<{ title: s
     if (!item || typeof item !== 'object') throw new Error(`Card ${idx + 1} must be an object`)
     const title = (item as { title?: unknown }).title
     const body = (item as { body?: unknown }).body
-    if (typeof title !== 'string' || !title.trim()) throw new Error(`Card ${idx + 1} missing valid "title"`)
+    if (typeof title !== 'string' || !title.trim())
+      throw new Error(`Card ${idx + 1} missing valid "title"`)
     if (typeof body !== 'string') throw new Error(`Card ${idx + 1} missing valid "body"`)
     return { title: title.trim(), body: body.trim() }
   })
@@ -187,7 +193,8 @@ async function checkCommand(cmd: string): Promise<boolean> {
 }
 
 function resolveWindowsSpawnCommand(command: string): string {
-  if (command.includes('\\') || command.includes('/') || /\.[A-Za-z0-9]+$/.test(command)) return command
+  if (command.includes('\\') || command.includes('/') || /\.[A-Za-z0-9]+$/.test(command))
+    return command
 
   try {
     const raw = execFileSync('where', [command], { encoding: 'utf-8', windowsHide: true })
@@ -354,11 +361,44 @@ function verifyAIRequest(event: IpcMainInvokeEvent, channel: string): string | n
   return null
 }
 
+function getDraftAiTimeoutMs(project: { policy_json: string | null }): number {
+  const policy = parsePolicyJson(project.policy_json)
+  const secondsRaw = policy.worker?.draftAiTimeoutSeconds ?? 300
+  const clampedSeconds = Math.max(60, Math.min(1800, secondsRaw))
+  return clampedSeconds * 1000
+}
+
 // ============================================================================
 // Handler Registration
 // ============================================================================
 
 export function registerAIHandlers(): void {
+  // Get provider availability status
+  ipcMain.handle('providers:getAvailability', async () => {
+    logAction('providers:getAvailability')
+
+    try {
+      const availability = await CLIProviderRegistry.getAvailabilityStatus()
+      const providers = CLIProviderRegistry.getAll()
+
+      return {
+        providers: providers.map((p) => ({
+          key: p.metadata.key,
+          displayName: p.metadata.displayName,
+          command: p.metadata.command,
+          documentationUrl: p.metadata.documentationUrl,
+          available: availability[p.metadata.key] || false
+        }))
+      }
+    } catch (error) {
+      logAction('providers:getAvailability:error', { error })
+      return {
+        providers: [],
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
   ipcMain.handle(
     'generateCardDescription',
     async (
@@ -396,7 +436,7 @@ export function registerAIHandlers(): void {
         if (!tool) return { error: `Selected tool not available: ${toolPreference}` }
 
         const prompt = buildDraftPrompt(payload.title, messages)
-        const timeoutMs = 90_000
+        const timeoutMs = getDraftAiTimeoutMs(project)
 
         if (tool === 'claude') {
           const response = await runClaudePlan(prompt, project.local_path, timeoutMs)
@@ -406,7 +446,14 @@ export function registerAIHandlers(): void {
         const response = await runCodexPlan(prompt, project.local_path, timeoutMs)
         return { success: true, toolUsed: tool, response }
       } catch (error) {
-        return { error: error instanceof Error ? error.message : String(error) }
+        const message = error instanceof Error ? error.message : String(error)
+        const isTimeout = /timed out after \d+s/i.test(message)
+        if (isTimeout) {
+          return {
+            error: `TIMEOUT: ${message}`
+          }
+        }
+        return { error: message }
       }
     }
   )
@@ -453,7 +500,7 @@ export function registerAIHandlers(): void {
         if (!tool) return { error: `Selected tool not available: ${toolPreference}` }
 
         const prompt = buildCardListPrompt(description, count)
-        const timeoutMs = 120_000
+        const timeoutMs = getDraftAiTimeoutMs(project)
 
         const raw =
           tool === 'claude'
@@ -463,7 +510,14 @@ export function registerAIHandlers(): void {
         const cards = parseCardListJson(raw, count)
         return { success: true, toolUsed: tool, cards }
       } catch (error) {
-        return { error: error instanceof Error ? error.message : String(error) }
+        const message = error instanceof Error ? error.message : String(error)
+        const isTimeout = /timed out after \d+s/i.test(message)
+        if (isTimeout) {
+          return {
+            error: `TIMEOUT: ${message}`
+          }
+        }
+        return { error: message }
       }
     }
   )
@@ -516,7 +570,7 @@ export function registerAIHandlers(): void {
           count,
           payload.guidance
         )
-        const timeoutMs = 120_000
+        const timeoutMs = getDraftAiTimeoutMs(project)
 
         const raw =
           tool === 'claude'
@@ -526,7 +580,14 @@ export function registerAIHandlers(): void {
         const cards = parseCardListJson(raw, count)
         return { success: true, toolUsed: tool, cards }
       } catch (error) {
-        return { error: error instanceof Error ? error.message : String(error) }
+        const message = error instanceof Error ? error.message : String(error)
+        const isTimeout = /timed out after \d+s/i.test(message)
+        if (isTimeout) {
+          return {
+            error: `TIMEOUT: ${message}`
+          }
+        }
+        return { error: message }
       }
     }
   )

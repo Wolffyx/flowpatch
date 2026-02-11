@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from 'fs'
-import { join } from 'path'
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { join, dirname } from 'path'
 import YAML from 'yaml'
 import type {
   ThinkingMode,
@@ -135,6 +135,30 @@ export interface FlowPatchSyncConfig {
   watchFileChanges?: boolean
 }
 
+/**
+ * Project-specific settings (migrated from central DB).
+ * These settings override user defaults for this specific project.
+ */
+export interface FlowPatchSettingsConfig {
+  // Sync settings
+  autoSync?: boolean
+  pollIntervalMinutes?: number
+
+  // Worker settings
+  workerEnabled?: boolean
+  workerMaxMinutes?: number
+  workerPlanFirst?: boolean
+  workerToolPreference?: string
+  workerEnableTestMode?: boolean
+
+  // Indexing settings
+  autoIndexingEnabled?: boolean
+
+  // UI settings
+  showPullRequestsSection?: boolean
+  logsMaxLines?: number
+}
+
 export interface FlowPatchFeaturesConfig {
   thinking?: FlowPatchThinkingConfig
   planning?: FlowPatchPlanningConfig
@@ -169,6 +193,7 @@ export interface FlowPatchConfig {
   e2e?: FlowPatchE2EConfig
   sync?: FlowPatchSyncConfig
   features?: FlowPatchFeaturesConfig
+  settings?: FlowPatchSettingsConfig
 }
 
 export interface FlowPatchConfigDiagnostics {
@@ -320,8 +345,7 @@ export function readFlowPatchConfig(repoRoot: string): {
         typeof parsed.e2e.createTestsIfMissing === 'boolean'
           ? parsed.e2e.createTestsIfMissing
           : undefined,
-      testCommand:
-        typeof parsed.e2e.testCommand === 'string' ? parsed.e2e.testCommand : undefined,
+      testCommand: typeof parsed.e2e.testCommand === 'string' ? parsed.e2e.testCommand : undefined,
       testDirectories: Array.isArray(parsed.e2e.testDirectories)
         ? parsed.e2e.testDirectories.map(String).filter(Boolean)
         : undefined
@@ -333,8 +357,7 @@ export function readFlowPatchConfig(repoRoot: string): {
   if (parsed?.sync && typeof parsed.sync === 'object') {
     const priority = parsed.sync.configPriority
     sync = {
-      configPriority:
-        priority === 'database' || priority === 'file' ? priority : undefined,
+      configPriority: priority === 'database' || priority === 'file' ? priority : undefined,
       syncOnStartup:
         typeof parsed.sync.syncOnStartup === 'boolean' ? parsed.sync.syncOnStartup : undefined,
       watchFileChanges:
@@ -348,6 +371,12 @@ export function readFlowPatchConfig(repoRoot: string): {
     features = parseFeatures(parsed.features, warnings)
   }
 
+  // Parse settings configuration (project-specific overrides)
+  let settings: FlowPatchSettingsConfig | undefined
+  if (parsed?.settings && typeof parsed.settings === 'object') {
+    settings = parseSettings(parsed.settings)
+  }
+
   return {
     config: {
       schemaVersion: Number.isFinite(schemaVersion) && schemaVersion >= 1 ? schemaVersion : 1,
@@ -358,7 +387,8 @@ export function readFlowPatchConfig(repoRoot: string): {
       approval,
       e2e,
       sync,
-      features
+      features,
+      settings
     },
     diagnostics: { errors, warnings }
   }
@@ -375,7 +405,9 @@ function parseFeatures(raw: any, warnings: string[]): FlowPatchFeaturesConfig {
     const mode = raw.thinking.defaultMode
     const validModes = ['none', 'medium', 'deep', 'ultra']
     if (mode && !validModes.includes(mode)) {
-      warnings.push(`features.thinking.defaultMode must be one of ${validModes.join('|')}; ignoring`)
+      warnings.push(
+        `features.thinking.defaultMode must be one of ${validModes.join('|')}; ignoring`
+      )
     }
     features.thinking = {
       enabled: typeof raw.thinking.enabled === 'boolean' ? raw.thinking.enabled : undefined,
@@ -393,7 +425,9 @@ function parseFeatures(raw: any, warnings: string[]): FlowPatchFeaturesConfig {
     const mode = raw.planning.defaultMode
     const validModes = ['skip', 'lite', 'spec', 'full']
     if (mode && !validModes.includes(mode)) {
-      warnings.push(`features.planning.defaultMode must be one of ${validModes.join('|')}; ignoring`)
+      warnings.push(
+        `features.planning.defaultMode must be one of ${validModes.join('|')}; ignoring`
+      )
     }
     features.planning = {
       enabled: typeof raw.planning.enabled === 'boolean' ? raw.planning.enabled : undefined,
@@ -448,7 +482,9 @@ function parseFeatures(raw: any, warnings: string[]): FlowPatchFeaturesConfig {
       enabled:
         typeof raw.notifications.enabled === 'boolean' ? raw.notifications.enabled : undefined,
       showToasts:
-        typeof raw.notifications.showToasts === 'boolean' ? raw.notifications.showToasts : undefined,
+        typeof raw.notifications.showToasts === 'boolean'
+          ? raw.notifications.showToasts
+          : undefined,
       soundEnabled:
         typeof raw.notifications.soundEnabled === 'boolean'
           ? raw.notifications.soundEnabled
@@ -499,7 +535,9 @@ function parseFeatures(raw: any, warnings: string[]): FlowPatchFeaturesConfig {
           ? raw.usageTracking.trackTokens
           : undefined,
       trackCosts:
-        typeof raw.usageTracking.trackCosts === 'boolean' ? raw.usageTracking.trackCosts : undefined,
+        typeof raw.usageTracking.trackCosts === 'boolean'
+          ? raw.usageTracking.trackCosts
+          : undefined,
       exportFormat: format === 'csv' || format === 'json' ? format : undefined,
       retentionDays:
         typeof raw.usageTracking.retentionDays === 'number' && raw.usageTracking.retentionDays > 0
@@ -565,8 +603,7 @@ function parseFeatures(raw: any, warnings: string[]): FlowPatchFeaturesConfig {
   // Parse dependencies config
   if (raw.dependencies && typeof raw.dependencies === 'object') {
     features.dependencies = {
-      enabled:
-        typeof raw.dependencies.enabled === 'boolean' ? raw.dependencies.enabled : undefined,
+      enabled: typeof raw.dependencies.enabled === 'boolean' ? raw.dependencies.enabled : undefined,
       autoDetect:
         typeof raw.dependencies.autoDetect === 'boolean' ? raw.dependencies.autoDetect : undefined,
       showOutdated:
@@ -596,4 +633,147 @@ function parseFeatures(raw: any, warnings: string[]): FlowPatchFeaturesConfig {
   }
 
   return features
+}
+
+/**
+ * Parse settings configuration from YAML.
+ * These are project-specific settings that override user defaults.
+ */
+function parseSettings(raw: any): FlowPatchSettingsConfig {
+  const settings: FlowPatchSettingsConfig = {}
+
+  // Sync settings
+  if (typeof raw.autoSync === 'boolean') {
+    settings.autoSync = raw.autoSync
+  }
+  if (typeof raw.pollIntervalMinutes === 'number' && raw.pollIntervalMinutes > 0) {
+    settings.pollIntervalMinutes = raw.pollIntervalMinutes
+  }
+
+  // Worker settings
+  if (typeof raw.workerEnabled === 'boolean') {
+    settings.workerEnabled = raw.workerEnabled
+  }
+  if (typeof raw.workerMaxMinutes === 'number' && raw.workerMaxMinutes > 0) {
+    settings.workerMaxMinutes = raw.workerMaxMinutes
+  }
+  if (typeof raw.workerPlanFirst === 'boolean') {
+    settings.workerPlanFirst = raw.workerPlanFirst
+  }
+  if (typeof raw.workerToolPreference === 'string') {
+    settings.workerToolPreference = raw.workerToolPreference
+  }
+  if (typeof raw.workerEnableTestMode === 'boolean') {
+    settings.workerEnableTestMode = raw.workerEnableTestMode
+  }
+
+  // Indexing settings
+  if (typeof raw.autoIndexingEnabled === 'boolean') {
+    settings.autoIndexingEnabled = raw.autoIndexingEnabled
+  }
+
+  // UI settings
+  if (typeof raw.showPullRequestsSection === 'boolean') {
+    settings.showPullRequestsSection = raw.showPullRequestsSection
+  }
+  if (typeof raw.logsMaxLines === 'number' && raw.logsMaxLines > 0) {
+    settings.logsMaxLines = raw.logsMaxLines
+  }
+
+  return settings
+}
+
+/**
+ * Write FlowPatch configuration to .flowpatch/config.yml
+ *
+ * @param repoRoot - The root directory of the repository
+ * @param config - Partial configuration to write (merges with existing)
+ */
+export function writeFlowPatchConfig(
+  repoRoot: string,
+  config: Partial<FlowPatchConfig>
+): void {
+  const configPath = join(repoRoot, '.flowpatch', 'config.yml')
+  const configDir = dirname(configPath)
+
+  // Ensure .flowpatch directory exists
+  if (!existsSync(configDir)) {
+    mkdirSync(configDir, { recursive: true })
+  }
+
+  // Read existing config or use defaults
+  const existing = existsSync(configPath)
+    ? readFlowPatchConfig(repoRoot).config
+    : { schemaVersion: 1, budgets: { ...DEFAULT_BUDGETS } }
+
+  // Deep merge configuration
+  const merged: FlowPatchConfig = {
+    ...existing,
+    ...config,
+    // Deep merge budgets if provided
+    budgets: config.budgets ? { ...existing.budgets, ...config.budgets } : existing.budgets,
+    // Deep merge privacy if provided
+    privacy: config.privacy ? { ...existing.privacy, ...config.privacy } : existing.privacy,
+    // Deep merge approval if provided
+    approval: config.approval ? { ...existing.approval, ...config.approval } : existing.approval,
+    // Deep merge e2e if provided
+    e2e: config.e2e ? { ...existing.e2e, ...config.e2e } : existing.e2e,
+    // Deep merge sync if provided
+    sync: config.sync ? { ...existing.sync, ...config.sync } : existing.sync,
+    // Deep merge features if provided
+    features: config.features ? { ...existing.features, ...config.features } : existing.features,
+    // Deep merge settings if provided
+    settings: config.settings ? { ...existing.settings, ...config.settings } : existing.settings
+  }
+
+  // Write to YAML
+  const yaml = YAML.stringify(merged)
+  writeFileSync(configPath, yaml, 'utf-8')
+}
+
+/**
+ * Update project-specific settings in .flowpatch/config.yml
+ *
+ * This is a convenience function for updating just the settings section
+ * without affecting other parts of the configuration.
+ *
+ * @param repoRoot - The root directory of the repository
+ * @param settings - Partial settings to update
+ */
+export function updateProjectSettings(
+  repoRoot: string,
+  settings: Partial<FlowPatchSettingsConfig>
+): void {
+  const { config } = readFlowPatchConfig(repoRoot)
+
+  writeFlowPatchConfig(repoRoot, {
+    settings: {
+      ...config.settings,
+      ...settings
+    }
+  })
+}
+
+/**
+ * Delete a project setting from .flowpatch/config.yml
+ *
+ * @param repoRoot - The root directory of the repository
+ * @param key - The setting key to delete
+ */
+export function deleteProjectSetting(
+  repoRoot: string,
+  key: keyof FlowPatchSettingsConfig
+): void {
+  const { config } = readFlowPatchConfig(repoRoot)
+
+  if (!config.settings || !(key in config.settings)) {
+    return // Setting doesn't exist, nothing to delete
+  }
+
+  const newSettings = { ...config.settings }
+  delete newSettings[key]
+
+  writeFlowPatchConfig(repoRoot, {
+    settings: newSettings
+  })
 }

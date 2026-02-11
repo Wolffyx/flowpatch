@@ -26,11 +26,7 @@ import {
 } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { AIDescriptionDialog } from './AIDescriptionDialog'
-import type {
-  FeatureSuggestion,
-  FeatureSuggestionCategory,
-  Provider
-} from '../../../shared/types'
+import type { FeatureSuggestion, FeatureSuggestionCategory, Provider } from '../../../shared/types'
 
 export type CreateCardType = 'local' | 'repo_issue'
 
@@ -139,7 +135,8 @@ export function CreateCardFromSuggestionDialog({
     [isSubmitting, onOpenChange]
   )
 
-  const canCreateRepoIssue = hasRemote && (remoteProvider === 'github' || remoteProvider === 'gitlab')
+  const canCreateRepoIssue =
+    hasRemote && (remoteProvider === 'github' || remoteProvider === 'gitlab')
   const aiButtonTitle = !title.trim()
     ? 'Add a title first'
     : !projectId
@@ -168,14 +165,16 @@ export function CreateCardFromSuggestionDialog({
                   <CategoryIcon className="h-3 w-3" />
                   {CATEGORY_LABELS[suggestion.category]}
                 </Badge>
-                <span className={cn(
-                  'flex items-center gap-1 text-xs',
-                  suggestion.vote_count > 0
-                    ? 'text-green-600 dark:text-green-400'
-                    : suggestion.vote_count < 0
-                      ? 'text-red-600 dark:text-red-400'
-                      : ''
-                )}>
+                <span
+                  className={cn(
+                    'flex items-center gap-1 text-xs',
+                    suggestion.vote_count > 0
+                      ? 'text-green-600 dark:text-green-400'
+                      : suggestion.vote_count < 0
+                        ? 'text-red-600 dark:text-red-400'
+                        : ''
+                  )}
+                >
                   <ThumbsUp className="h-3 w-3" />
                   {suggestion.vote_count}
                 </span>

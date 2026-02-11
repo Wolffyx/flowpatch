@@ -6,12 +6,7 @@
  */
 
 import { useState, useEffect, useMemo, useRef } from 'react'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle
-} from '../../src/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../src/components/ui/dialog'
 import { Button } from '../../src/components/ui/button'
 import { Badge } from '../../src/components/ui/badge'
 import { ScrollArea } from '../../src/components/ui/scroll-area'
@@ -259,7 +254,9 @@ export function SessionHistoryDialog({
                     <History className="h-12 w-12 mx-auto mb-3 opacity-30" />
                     <p>No sessions found</p>
                     <p className="text-sm mt-1">
-                      {searchQuery ? 'Try a different search term' : 'Run a worker on a card to create a session'}
+                      {searchQuery
+                        ? 'Try a different search term'
+                        : 'Run a worker on a card to create a session'}
                     </p>
                   </div>
                 ) : (
@@ -274,7 +271,8 @@ export function SessionHistoryDialog({
                       <div className="space-y-2">
                         {dateJobs.map((job) => {
                           const result = parseResult(job)
-                          const summary = result?.summary || job.last_error || 'No summary available'
+                          const summary =
+                            result?.summary || job.last_error || 'No summary available'
                           const projectName = projectNameById[job.project_id] || 'Unknown Project'
 
                           return (
@@ -287,12 +285,16 @@ export function SessionHistoryDialog({
                                 <div className="mt-0.5">{getSessionStateIcon(job.state)}</div>
                                 <div className="flex-1 min-w-0">
                                   <div className="flex items-center justify-between gap-2 mb-1">
-                                    <span className="font-medium text-sm truncate">{projectName}</span>
+                                    <span className="font-medium text-sm truncate">
+                                      {projectName}
+                                    </span>
                                     <span className="text-xs text-muted-foreground shrink-0">
                                       {formatDateTime(job.created_at)}
                                     </span>
                                   </div>
-                                  <p className="text-sm text-muted-foreground line-clamp-2">{summary}</p>
+                                  <p className="text-sm text-muted-foreground line-clamp-2">
+                                    {summary}
+                                  </p>
                                   <div className="flex items-center gap-2 mt-2">
                                     <Badge
                                       variant={
@@ -351,7 +353,9 @@ export function SessionHistoryDialog({
                 </div>
               </div>
               {parseResult(selectedJob)?.summary && (
-                <p className="text-sm text-muted-foreground mt-2">{parseResult(selectedJob)?.summary}</p>
+                <p className="text-sm text-muted-foreground mt-2">
+                  {parseResult(selectedJob)?.summary}
+                </p>
               )}
               {selectedJob.last_error && (
                 <p className="text-sm text-destructive mt-2">{selectedJob.last_error}</p>
@@ -369,7 +373,9 @@ export function SessionHistoryDialog({
                   <div className="text-center py-12 text-muted-foreground">
                     <MessageSquare className="h-12 w-12 mx-auto mb-3 opacity-30" />
                     <p>No chat messages in this session</p>
-                    <p className="text-sm mt-1">This session may have run without user interaction</p>
+                    <p className="text-sm mt-1">
+                      This session may have run without user interaction
+                    </p>
                   </div>
                 ) : (
                   messages.map((msg) => (
@@ -395,7 +401,9 @@ export function SessionHistoryDialog({
                           <AlertCircle className="h-4 w-4" />
                         )}
                       </div>
-                      <div className={cn('flex-1 max-w-[80%]', msg.role === 'user' && 'text-right')}>
+                      <div
+                        className={cn('flex-1 max-w-[80%]', msg.role === 'user' && 'text-right')}
+                      >
                         <div
                           className={cn(
                             'inline-block rounded-lg px-3 py-2 text-sm',

@@ -12,8 +12,9 @@ import { Textarea } from './ui/textarea'
 import { ScrollArea } from './ui/scroll-area'
 import { Loader2 } from 'lucide-react'
 import { cn } from '../lib/utils'
+import { useProviderAvailability } from '../../shell/components/settings/hooks/useProviderAvailability'
 
-type ToolPreference = 'auto' | 'claude' | 'codex'
+type ToolPreference = 'auto' | 'claude' | 'codex' | 'opencode'
 
 type ChatMessage = { role: 'user' | 'assistant'; content: string }
 
@@ -54,6 +55,7 @@ export function AIDescriptionDialog({
   currentDescription,
   onApplyDescription
 }: AIDescriptionDialogProps): React.JSX.Element {
+  const { isAvailable } = useProviderAvailability()
   const [toolPreference, setToolPreference] = useState<ToolPreference>('auto')
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
@@ -83,7 +85,16 @@ export function AIDescriptionDialog({
         messages: nextMessages
       })) as { success?: boolean; response?: string; error?: string }
 
-      if (result?.error) throw new Error(result.error)
+      if (result?.error) {
+        const msg = result.error
+        if (msg.startsWith('TIMEOUT:')) {
+          setError(
+            'AI request timed out. You can increase the draft AI timeout in Settings → Features → Worker Pipeline Settings → Draft AI timeout.'
+          )
+          return
+        }
+        throw new Error(msg)
+      }
 
       const response = (result?.response || '').trim()
       if (!response) throw new Error('No response from agent')
@@ -144,21 +155,41 @@ export function AIDescriptionDialog({
         <div className="flex items-center gap-2">
           <span className="text-sm text-muted-foreground">Tool:</span>
           <div className="flex gap-2">
-            {(['auto', 'claude', 'codex'] as const).map((t) => (
-              <Button
-                key={t}
-                type="button"
-                size="sm"
-                variant={toolPreference === t ? 'default' : 'outline'}
-                onClick={() => setToolPreference(t)}
-                disabled={isRunning}
-              >
-                {t === 'auto' ? 'Auto' : t === 'claude' ? 'Claude' : 'Codex'}
-              </Button>
-            ))}
+            {(['auto', 'claude', 'codex', 'opencode'] as const).map((t) => {
+              const isDisabled =
+                t !== 'auto' && !isAvailable(t) ? !isAvailable(t) : isRunning
+              const toolLabel =
+                t === 'auto'
+                  ? 'Auto'
+                  : t === 'claude'
+                    ? 'Claude'
+                    : t === 'codex'
+                      ? 'Codex'
+                      : 'OpenCode'
+
+              return (
+                <Button
+                  key={t}
+                  type="button"
+                  size="sm"
+                  variant={toolPreference === t ? 'default' : 'outline'}
+                  onClick={() => setToolPreference(t)}
+                  disabled={isDisabled}
+                  title={t !== 'auto' && !isAvailable(t) ? `${toolLabel} CLI not installed` : undefined}
+                >
+                  {toolLabel}
+                </Button>
+              )
+            })}
           </div>
           <div className="flex-1" />
-          <Button type="button" size="sm" variant="outline" onClick={handleSeed} disabled={isRunning}>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={handleSeed}
+            disabled={isRunning}
+          >
             Seed prompt
           </Button>
         </div>
@@ -234,4 +265,3 @@ export function AIDescriptionDialog({
     </Dialog>
   )
 }
-

@@ -32,13 +32,17 @@ export {
   getStatusLabelFromPolicy,
   getAllStatusLabelsFromPolicy,
   updateCardSyncState,
+  updateCardTimestamp,
   updateCardConflictStatus,
   clearCardConflictStatus,
   deleteCard,
   getNextReadyCard,
-  getNextReadyCards
+  getNextReadyCards,
+  isCardBlockedByDependencies,
+  getCardEligibilityDiagnostic,
+  getReadyCardsNotProcessing
 } from './cards'
-export type { Card, CardStatus } from './cards'
+export type { Card, CardStatus, CardEligibilityDiagnostic } from './cards'
 
 // Jobs
 export {
@@ -56,7 +60,8 @@ export {
   getActiveWorkerJob,
   getActiveWorkerJobForCard,
   cancelJob,
-  getActiveWorkerJobCount
+  getActiveWorkerJobCount,
+  deleteFailedWorkerRunJobsForCard
 } from './jobs'
 export type { Job, JobState, JobType } from './jobs'
 
@@ -117,7 +122,8 @@ export {
   updateWorkerSlot,
   releaseWorkerSlot,
   getIdleSlotCount,
-  getRunningSlotCount
+  getRunningSlotCount,
+  resetWorkerState
 } from './worker-slots'
 export type { WorkerSlot, WorkerSlotStatus } from './worker-slots'
 
@@ -169,6 +175,7 @@ export {
   createUsageRecord,
   getUsageRecords,
   getUsageRecordsByJob,
+  getUsageRecordsByCard,
   getUsageStatsByTool,
   getUsageSummary,
   getHourlyUsage,
@@ -180,6 +187,9 @@ export {
   setToolLimits,
   getUsageWithLimits,
   getResetTimes,
+  getRollingHourlyUsage,
+  getRollingDailyUsage,
+  getRollingMonthlyUsage,
   deleteOldUsageRecords
 } from './usage'
 export type { UsageRecordCreate } from './usage'
@@ -261,10 +271,31 @@ export {
   deleteDependenciesByProject,
   deleteDependencyBetweenCards
 } from './card-dependencies'
-export type {
-  CreateCardDependencyData,
-  UpdateCardDependencyData
-} from './card-dependencies'
+export type { CreateCardDependencyData, UpdateCardDependencyData } from './card-dependencies'
+
+// Card Comments
+export {
+  createCardComment,
+  upsertCommentFromRemote,
+  getCardComment,
+  getCommentsByCard,
+  getCommentsForAI,
+  getUnprocessedComments,
+  getCommentByRemoteId,
+  getCommentsPendingPush,
+  updateCardComment,
+  updateCommentPriority,
+  editCommentBody,
+  resolveComment,
+  reopenComment,
+  toggleCommentInclusion,
+  markCommentsProcessed,
+  updateCommentSyncState,
+  deleteCardComment,
+  deleteCommentsByCard,
+  deduplicateCommentsForCard,
+  deduplicateAllComments
+} from './card-comments'
 
 // Query Cache
 export {
@@ -281,6 +312,44 @@ export {
   cardKey,
   jobKey
 } from './query-cache'
+
+// Project Database (per-project local storage)
+export {
+  initProjectDb,
+  getProjectDrizzle,
+  getProjectSqlite,
+  hasProjectDb,
+  getProjectDbPath,
+  closeProjectDb,
+  closeAllProjectDbs,
+  getOpenConnectionCount,
+  getOpenProjectPaths,
+  projectSchema
+} from './project-db'
+
+// Project Migration
+export {
+  migrateProjectToLocalDb,
+  isProjectMigrated,
+  getMigrationStatus,
+  cleanupCentralData,
+  hasDataInCentralDb,
+  getCentralDataCounts
+} from './migration'
+export type { MigrationResult, MigrationStatus } from './migration'
+
+// Database Resolver (for automatic DB selection)
+export {
+  resolveProjectDb,
+  resolveProjectDbByPath,
+  getProjectPath,
+  isProjectUsingLocalDb,
+  getProjectMigrationFlag,
+  clearProjectPathCache,
+  cacheProjectPath,
+  getCachedProjectPaths
+} from './db-resolver'
+export type { ResolvedDb } from './db-resolver'
 
 // Utility re-export for backward compatibility
 export { generateId as cryptoRandomId } from '@shared/utils'

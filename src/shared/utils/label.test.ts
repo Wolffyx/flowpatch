@@ -93,13 +93,7 @@ describe('labelExists', () => {
 })
 
 describe('findMatchingLabel', () => {
-  const repoLabels = [
-    'bug',
-    'Feature',
-    'In Progress',
-    'status::ready',
-    'status::In Review'
-  ]
+  const repoLabels = ['bug', 'Feature', 'In Progress', 'status::ready', 'status::In Review']
 
   it('should find exact matches first', () => {
     expect(findMatchingLabel('bug', repoLabels)).toBe('bug')

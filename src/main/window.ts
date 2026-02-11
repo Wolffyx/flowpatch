@@ -44,6 +44,21 @@ export function createWindow(): BrowserWindow {
     return { action: 'deny' }
   })
 
+  // Suppress Autofill DevTools protocol errors (Electron doesn't implement Chrome's Autofill API)
+  mainWindow.webContents.on('devtools-opened', () => {
+    mainWindow?.webContents.devToolsWebContents?.executeJavaScript(`
+      const originalConsoleError = console.error;
+      console.error = function(...args) {
+        const message = args[0]?.toString() || '';
+        // Filter out Autofill protocol errors
+        if (message.includes('Autofill.enable') || message.includes('Autofill.setAddresses')) {
+          return;
+        }
+        originalConsoleError.apply(console, args);
+      };
+    `)
+  })
+
   // Register shell IPC handlers (includes tab manager initialization)
   registerShellHandlers(mainWindow)
 

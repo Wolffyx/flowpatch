@@ -29,6 +29,7 @@ export const projects = sqliteTable('projects', {
   policy_json: text('policy_json'),
   worker_enabled: integer('worker_enabled').notNull().default(0),
   last_sync_at: text('last_sync_at'),
+  local_db_migrated: integer('local_db_migrated').notNull().default(0),
   created_at: text('created_at').notNull(),
   updated_at: text('updated_at').notNull()
 })

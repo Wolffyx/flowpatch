@@ -8,15 +8,20 @@
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 
+export type PackageManager = 'npm' | 'yarn' | 'pnpm' | 'composer' | 'pip' | 'cargo' | 'go'
+
 export interface ProjectTypeInfo {
-  type: 'nodejs' | 'python' | 'go' | 'rust' | 'unknown'
+  type: 'nodejs' | 'python' | 'go' | 'rust' | 'php' | 'unknown'
   hasPackageJson: boolean
   devCommand?: string
   installCommand?: string
   buildCommand?: string
+  lintCommand?: string
+  testCommand?: string
   port?: number
   startCommand?: string
   detectedFiles: string[]
+  packageManager?: PackageManager
 }
 
 // Cache for project type detection (keyed by directory path)
@@ -65,9 +70,24 @@ export function detectProjectType(projectPath: string): ProjectTypeInfo {
       const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8'))
       const scripts = packageJson.scripts || {}
 
+      // Detect package manager first for consistent command generation
+      let pm: 'npm' | 'yarn' | 'pnpm' = 'npm'
+      if (existsSync(join(projectPath, 'pnpm-lock.yaml'))) {
+        pm = 'pnpm'
+        info.packageManager = 'pnpm'
+      } else if (existsSync(join(projectPath, 'yarn.lock'))) {
+        pm = 'yarn'
+        info.packageManager = 'yarn'
+      } else {
+        info.packageManager = 'npm'
+      }
+
+      // Set install command based on package manager
+      info.installCommand = `${pm} install`
+
       // Detect dev command (priority: dev > start > serve)
       if (scripts.dev) {
-        info.devCommand = 'npm run dev'
+        info.devCommand = pm === 'yarn' ? 'yarn dev' : `${pm} run dev`
         // Try to detect port from dev script
         const devScript = scripts.dev
         const portMatch = devScript.match(/--port\s+(\d+)/) || devScript.match(/port:\s*(\d+)/)
@@ -75,36 +95,38 @@ export function detectProjectType(projectPath: string): ProjectTypeInfo {
           info.port = parseInt(portMatch[1], 10)
         }
       } else if (scripts.start) {
-        info.devCommand = 'npm run start'
+        info.devCommand = pm === 'yarn' ? 'yarn start' : `${pm} run start`
         const startScript = scripts.start
         const portMatch = startScript.match(/--port\s+(\d+)/) || startScript.match(/port:\s*(\d+)/)
         if (portMatch) {
           info.port = parseInt(portMatch[1], 10)
         }
       } else if (scripts.serve) {
-        info.devCommand = 'npm run serve'
-      }
-
-      // Detect install command
-      if (existsSync(join(projectPath, 'package-lock.json'))) {
-        info.installCommand = 'npm install'
-      } else if (existsSync(join(projectPath, 'yarn.lock'))) {
-        info.installCommand = 'yarn install'
-        if (info.devCommand) {
-          info.devCommand = info.devCommand.replace('npm run', 'yarn')
-        }
-      } else if (existsSync(join(projectPath, 'pnpm-lock.yaml'))) {
-        info.installCommand = 'pnpm install'
-        if (info.devCommand) {
-          info.devCommand = info.devCommand.replace('npm run', 'pnpm')
-        }
-      } else {
-        info.installCommand = 'npm install'
+        info.devCommand = pm === 'yarn' ? 'yarn serve' : `${pm} run serve`
       }
 
       // Detect build command
       if (scripts.build) {
-        info.buildCommand = info.installCommand?.replace('install', 'run build') || 'npm run build'
+        info.buildCommand = pm === 'yarn' ? 'yarn build' : `${pm} run build`
+      }
+
+      // Detect lint command (check for lint, eslint, prettier:check scripts)
+      if (scripts.lint) {
+        info.lintCommand = pm === 'yarn' ? 'yarn lint' : `${pm} run lint`
+      } else if (scripts['lint:check']) {
+        info.lintCommand = pm === 'yarn' ? 'yarn lint:check' : `${pm} run lint:check`
+      } else if (scripts['prettier:check']) {
+        info.lintCommand = pm === 'yarn' ? 'yarn prettier:check' : `${pm} run prettier:check`
+      }
+
+      // Detect test command (check for test, vitest, jest scripts)
+      if (scripts.test) {
+        // Use the standard test script shortcut where available
+        info.testCommand = `${pm} test`
+      } else if (scripts['test:run']) {
+        info.testCommand = pm === 'yarn' ? 'yarn test:run' : `${pm} run test:run`
+      } else if (scripts.vitest) {
+        info.testCommand = pm === 'yarn' ? 'yarn vitest' : `${pm} run vitest`
       }
 
       // Default port for common frameworks
@@ -115,7 +137,10 @@ export function detectProjectType(projectPath: string): ProjectTypeInfo {
           info.port = 3000
         } else if (scripts.start?.includes('react-scripts')) {
           info.port = 3000
-        } else if (packageJson.dependencies?.express || packageJson.dependencies?.['@nestjs/core']) {
+        } else if (
+          packageJson.dependencies?.express ||
+          packageJson.dependencies?.['@nestjs/core']
+        ) {
           info.port = 3000
         }
       }
@@ -136,16 +161,19 @@ export function detectProjectType(projectPath: string): ProjectTypeInfo {
       detectedFiles.push('requirements.txt')
       info.type = 'python'
       info.installCommand = 'pip install -r requirements.txt'
+      info.packageManager = 'pip'
     } else if (existsSync(pyprojectPath)) {
       detectedFiles.push('pyproject.toml')
       info.type = 'python'
       info.installCommand = 'pip install -e .'
+      info.packageManager = 'pip'
     }
 
     if (info.type === 'python') {
       if (existsSync(managePyPath)) {
         // Django
         info.devCommand = 'python manage.py runserver'
+        info.testCommand = 'python manage.py test'
         info.port = 8000
       } else if (existsSync(mainPyPath)) {
         // FastAPI or similar
@@ -154,6 +182,22 @@ export function detectProjectType(projectPath: string): ProjectTypeInfo {
       } else {
         info.devCommand = 'python -m uvicorn main:app --reload'
         info.port = 8000
+      }
+
+      // Check for pytest (common Python test framework)
+      if (
+        existsSync(join(projectPath, 'pytest.ini')) ||
+        existsSync(join(projectPath, 'pyproject.toml'))
+      ) {
+        info.testCommand = info.testCommand ?? 'pytest'
+      }
+
+      // Check for common linters
+      if (existsSync(join(projectPath, '.flake8'))) {
+        info.lintCommand = 'flake8'
+      } else if (existsSync(join(projectPath, 'pyproject.toml'))) {
+        // ruff or black are commonly configured in pyproject.toml
+        info.lintCommand = info.lintCommand ?? 'ruff check .'
       }
     }
   }
@@ -164,8 +208,12 @@ export function detectProjectType(projectPath: string): ProjectTypeInfo {
     if (existsSync(goModPath)) {
       detectedFiles.push('go.mod')
       info.type = 'go'
+      info.packageManager = 'go'
       info.installCommand = 'go mod download'
       info.devCommand = 'go run .'
+      info.buildCommand = 'go build .'
+      info.testCommand = 'go test ./...'
+      info.lintCommand = 'go vet ./...'
       info.port = 8080
     }
   }
@@ -176,9 +224,62 @@ export function detectProjectType(projectPath: string): ProjectTypeInfo {
     if (existsSync(cargoTomlPath)) {
       detectedFiles.push('Cargo.toml')
       info.type = 'rust'
+      info.packageManager = 'cargo'
       info.installCommand = 'cargo build'
       info.devCommand = 'cargo run'
+      info.buildCommand = 'cargo build --release'
+      info.testCommand = 'cargo test'
+      info.lintCommand = 'cargo clippy'
       info.port = 8080
+    }
+  }
+
+  // Check for PHP (composer.json)
+  if (info.type === 'unknown') {
+    const composerJsonPath = join(projectPath, 'composer.json')
+    if (existsSync(composerJsonPath)) {
+      detectedFiles.push('composer.json')
+      info.type = 'php'
+      info.packageManager = 'composer'
+      info.installCommand = 'composer install'
+
+      try {
+        const composerJson = JSON.parse(readFileSync(composerJsonPath, 'utf-8'))
+        const scripts = composerJson.scripts || {}
+
+        // Detect test command
+        if (scripts.test) {
+          info.testCommand = 'composer test'
+        } else if (existsSync(join(projectPath, 'phpunit.xml')) || existsSync(join(projectPath, 'phpunit.xml.dist'))) {
+          info.testCommand = './vendor/bin/phpunit'
+        }
+
+        // Detect lint command
+        if (scripts.lint) {
+          info.lintCommand = 'composer lint'
+        } else if (scripts['cs-check'] || scripts['phpcs']) {
+          info.lintCommand = scripts['cs-check'] ? 'composer cs-check' : 'composer phpcs'
+        } else if (existsSync(join(projectPath, 'phpcs.xml')) || existsSync(join(projectPath, 'phpcs.xml.dist'))) {
+          info.lintCommand = './vendor/bin/phpcs'
+        }
+
+        // Detect build command
+        if (scripts.build) {
+          info.buildCommand = 'composer build'
+        }
+
+        // Check for Laravel
+        const artisanPath = join(projectPath, 'artisan')
+        if (existsSync(artisanPath)) {
+          detectedFiles.push('artisan')
+          info.devCommand = 'php artisan serve'
+          info.testCommand = info.testCommand ?? 'php artisan test'
+          info.port = 8000
+        }
+      } catch (error) {
+        // Invalid JSON, continue with defaults
+        console.warn(`Failed to parse composer.json: ${error}`)
+      }
     }
   }
 

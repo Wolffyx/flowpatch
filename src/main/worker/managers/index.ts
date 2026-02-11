@@ -26,3 +26,15 @@ export type { BranchManagerConfig } from './branch-manager'
 // Worktree management
 export { WorktreePipelineManager } from './worktree-pipeline-manager'
 export type { WorktreePipelineConfig } from './worktree-pipeline-manager'
+
+// Lifecycle management
+export { LifecycleManager } from './lifecycle-manager'
+export type { LifecycleConfig } from './lifecycle-manager'
+
+// Task decomposition
+export { DecompositionManager } from './decomposition-manager'
+export type { DecompositionManagerConfig } from './decomposition-manager'
+
+// Iterative AI execution
+export { IterativeAIManager } from './iterative-ai-manager'
+export type { IterativeAIConfig } from './iterative-ai-manager'

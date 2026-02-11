@@ -11,7 +11,11 @@ import { appSettings } from './schema'
  */
 export function getAppSetting(key: string): string | null {
   const db = getDrizzle()
-  const row = db.select({ value: appSettings.value }).from(appSettings).where(eq(appSettings.key, key)).get()
+  const row = db
+    .select({ value: appSettings.value })
+    .from(appSettings)
+    .where(eq(appSettings.key, key))
+    .get()
   return row?.value ?? null
 }
 

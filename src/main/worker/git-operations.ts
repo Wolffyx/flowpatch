@@ -163,10 +163,10 @@ export async function fetchOriginWithRetry(
   branch?: string,
   maxRetries = DEFAULT_MAX_RETRIES
 ): Promise<void> {
-  return retryGitOperation(
-    () => fetchOrigin(cwd, branch),
-    { maxRetries, operationName: `fetch origin${branch ? ` ${branch}` : ''}` }
-  )
+  return retryGitOperation(() => fetchOrigin(cwd, branch), {
+    maxRetries,
+    operationName: `fetch origin${branch ? ` ${branch}` : ''}`
+  })
 }
 
 /**
@@ -405,11 +405,12 @@ export async function stashList(cwd: string): Promise<string> {
 }
 
 /**
- * Apply and drop a stash.
+ * Apply and drop a stash atomically using `git stash pop`.
+ * This prevents the stash from remaining if apply succeeds but drop fails.
  */
 export async function stashApplyDrop(cwd: string, ref: string): Promise<void> {
-  await execFileAsync('git', ['stash', 'apply', ref], { cwd })
-  await execFileAsync('git', ['stash', 'drop', ref], { cwd })
+  // Use `git stash pop` which is atomic (apply + drop in one operation)
+  await execFileAsync('git', ['stash', 'pop', ref], { cwd })
 }
 
 /**
@@ -435,9 +436,31 @@ export async function createTrackingBranch(cwd: string, branch: string): Promise
 
 /**
  * Pull from remote with rebase.
+ * If rebase fails with conflicts, automatically aborts to prevent leaving repo in bad state.
  */
 export async function pullRebase(cwd: string, branch: string): Promise<void> {
-  await execFileAsync('git', ['pull', '--rebase', 'origin', branch], { cwd, env: getGitEnv() })
+  try {
+    await execFileAsync('git', ['pull', '--rebase', 'origin', branch], { cwd, env: getGitEnv() })
+  } catch (error) {
+    // Rebase might have failed due to conflicts - abort to clean up
+    try {
+      await abortRebase(cwd)
+    } catch {
+      // Abort may fail if no rebase in progress - that's ok
+    }
+    throw error
+  }
+}
+
+/**
+ * Abort an in-progress rebase.
+ */
+export async function abortRebase(cwd: string): Promise<void> {
+  try {
+    await execFileAsync('git', ['rebase', '--abort'], { cwd })
+  } catch {
+    // Rebase may not be in progress, ignore
+  }
 }
 
 /**
@@ -448,10 +471,10 @@ export async function pullRebaseWithRetry(
   branch: string,
   maxRetries = DEFAULT_MAX_RETRIES
 ): Promise<void> {
-  return retryGitOperation(
-    () => pullRebase(cwd, branch),
-    { maxRetries, operationName: `pull --rebase origin ${branch}` }
-  )
+  return retryGitOperation(() => pullRebase(cwd, branch), {
+    maxRetries,
+    operationName: `pull --rebase origin ${branch}`
+  })
 }
 
 /**
@@ -510,10 +533,81 @@ export async function pushWithRetry(
   branch: string,
   maxRetries = DEFAULT_MAX_RETRIES
 ): Promise<void> {
-  return retryGitOperation(
-    () => push(cwd, branch),
-    { maxRetries, operationName: `push -u origin ${branch}` }
-  )
+  return retryGitOperation(() => push(cwd, branch), {
+    maxRetries,
+    operationName: `push -u origin ${branch}`
+  })
+}
+
+// ==================== Worker Utilities ====================
+
+/**
+ * Ensure working tree is clean, optionally stashing changes.
+ *
+ * @param repoPath - Repository path
+ * @param autoStash - Whether to automatically stash changes
+ * @returns True if tree is clean or was successfully stashed
+ */
+export async function ensureCleanWorkingTree(
+  repoPath: string,
+  autoStash: boolean = true
+): Promise<boolean> {
+  try {
+    if (await isWorkingTreeClean(repoPath)) {
+      return true
+    }
+
+    if (!autoStash) {
+      return false
+    }
+
+    // Working tree has uncommitted changes, attempt to stash
+    try {
+      await stashPush(repoPath, 'flowpatch-worker-autostash')
+      return true
+    } catch (stashError) {
+      // Log the dirty files for debugging
+      const status = await getWorkingTreeStatus(repoPath)
+      const errorMessage = stashError instanceof Error ? stashError.message : String(stashError)
+      throw new GitOperationError(
+        `Failed to stash changes. Dirty files:\n${status}`,
+        errorMessage
+      )
+    }
+  } catch (error) {
+    if (error instanceof GitOperationError) throw error
+    return false
+  }
+}
+
+/**
+ * Restore the flowpatch-worker-autostash if it exists.
+ *
+ * @param repoPath - Repository path
+ */
+export async function restoreAutostash(repoPath: string): Promise<void> {
+  try {
+    const stashOutput = await stashList(repoPath)
+    const line = stashOutput
+      .split(/\r?\n|\n|\r/)
+      .find((l) => l.includes('flowpatch-worker-autostash'))
+    
+    if (!line) return
+
+    const m = line.match(/^(stash@\{\d+\}):/)
+    const ref = m?.[1] ?? null
+    if (!ref) return
+
+    try {
+      await stashApplyDrop(repoPath, ref)
+    } catch (error) {
+      // Don't throw, just warn - this is cleanup
+      console.warn(`Failed to restore autostash (${ref}):`, error)
+    }
+  } catch (error) {
+    // Don't throw, just warn - this is cleanup
+    console.warn('Failed to restore stash:', error)
+  }
 }
 
 /**
@@ -522,6 +616,61 @@ export async function pushWithRetry(
 export async function getDiffStat(cwd: string, baseRef: string): Promise<string> {
   const { stdout } = await execFileAsync('git', ['diff', '--stat', baseRef], { cwd })
   return stdout.toString().trim()
+}
+
+const MAX_FILES_PER_ITERATION = 10
+
+function parseNumstatLines(stdout: string, maxFiles: number): string {
+  const lines = stdout
+    .toString()
+    .trim()
+    .split('\n')
+    .filter((l) => l.trim())
+  const parts: string[] = []
+  for (let i = 0; i < Math.min(lines.length, maxFiles); i++) {
+    const line = lines[i]
+    const tab = line.indexOf('\t')
+    const secondTab = line.indexOf('\t', tab + 1)
+    if (tab === -1 || secondTab === -1) continue
+    const add = line.slice(0, tab).trim()
+    const del = line.slice(tab + 1, secondTab).trim()
+    const path = line.slice(secondTab + 1).trim()
+    parts.push(`${path} (+${add} -${del})`)
+  }
+  if (lines.length > maxFiles) {
+    parts.push(`... and ${lines.length - maxFiles} more`)
+  }
+  return parts.join(', ')
+}
+
+/**
+ * Get minimal diff summary (path + line counts) since baseRef for context carryover.
+ * Returns one line per file, e.g. "path/a.ts (+5 -2), path/b.ts (+1 -0)".
+ */
+export async function getDiffNumstatMinimal(
+  cwd: string,
+  baseRef: string,
+  maxFiles: number = MAX_FILES_PER_ITERATION
+): Promise<string> {
+  const { stdout } = await execFileAsync('git', ['diff', '--numstat', baseRef], { cwd })
+  return parseNumstatLines(stdout.toString(), maxFiles)
+}
+
+/**
+ * Get minimal diff summary between two refs (e.g. consecutive iteration checkpoints).
+ */
+export async function getDiffNumstatMinimalBetween(
+  cwd: string,
+  fromRef: string,
+  toRef: string,
+  maxFiles: number = MAX_FILES_PER_ITERATION
+): Promise<string> {
+  const { stdout } = await execFileAsync(
+    'git',
+    ['diff', '--numstat', fromRef, toRef],
+    { cwd }
+  )
+  return parseNumstatLines(stdout.toString(), maxFiles)
 }
 
 /**
@@ -656,7 +805,9 @@ export class GitOperations {
     return remoteBranchExists(this.cwd, branchName)
   }
 
-  async checkBranchExists(branchName: string): Promise<{ localExists: boolean; remoteExists: boolean }> {
+  async checkBranchExists(
+    branchName: string
+  ): Promise<{ localExists: boolean; remoteExists: boolean }> {
     return checkBranchExists(this.cwd, branchName)
   }
 
@@ -794,5 +945,15 @@ export class GitOperations {
 
   async pushWithRetry(branch: string, maxRetries?: number): Promise<void> {
     return pushWithRetry(this.cwd, branch, maxRetries)
+  }
+
+  // ==================== Worker Utilities ====================
+
+  async ensureCleanWorkingTree(autoStash: boolean = true): Promise<boolean> {
+    return ensureCleanWorkingTree(this.cwd, autoStash)
+  }
+
+  async restoreAutostash(): Promise<void> {
+    return restoreAutostash(this.cwd)
   }
 }

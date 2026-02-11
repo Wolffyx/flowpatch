@@ -31,12 +31,13 @@ export type {
   AdapterCreateOptions,
   AuthResult,
   IGithubAdapter,
+  IGitlabAdapter,
   IRepoAdapter,
   IssueResult,
   LabelResult,
   PRResult
 } from './types'
-export { isGithubAdapter } from './types'
+export { isGithubAdapter, isGitlabAdapter } from './types'
 
 // Base class
 export { BaseAdapter } from './base'

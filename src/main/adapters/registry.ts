@@ -53,7 +53,9 @@ export class AdapterRegistry {
       if (AdapterClass) {
         return new AdapterClass(repoPath, repoKey, policy)
       }
-      throw new Error(`Unknown provider: ${providerHint}. Registered: ${this.getRegisteredProviders().join(', ')}`)
+      throw new Error(
+        `Unknown provider: ${providerHint}. Registered: ${this.getRegisteredProviders().join(', ')}`
+      )
     }
 
     // 2. Auto-detect from repoKey prefix (e.g., "github:owner/repo")
@@ -66,8 +68,8 @@ export class AdapterRegistry {
 
     throw new Error(
       `No adapter found for: ${repoKey}. ` +
-      `Set provider_hint to override, or register an adapter for this prefix. ` +
-      `Registered: ${this.getRegisteredProviders().join(', ')}`
+        `Set provider_hint to override, or register an adapter for this prefix. ` +
+        `Registered: ${this.getRegisteredProviders().join(', ')}`
     )
   }
 

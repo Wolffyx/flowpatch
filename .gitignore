@@ -12,5 +12,7 @@ build
 *.plan.md
 *.md
 # Patchwork IDE-like workspace state (generated)
-.patchwork/state/
 .flowpatch/state/
+
+# FlowPatch IDE-like workspace state (generated)
+.flowpatch/

@@ -101,7 +101,10 @@ export class CLIProviderRegistry {
     let candidates: string[]
     if (toolPreference !== 'auto') {
       // Explicit preference: try that first, then fallbacks
-      candidates = [toolPreference, ...this.getRegisteredProviders().filter((k) => k !== toolPreference)]
+      candidates = [
+        toolPreference,
+        ...this.getRegisteredProviders().filter((k) => k !== toolPreference)
+      ]
     } else {
       // Auto: use default order
       candidates = this.getDefaultOrder()

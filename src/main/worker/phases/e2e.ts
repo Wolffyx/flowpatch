@@ -2,14 +2,30 @@
  * E2E Phase
  *
  * Handles Playwright E2E test creation and execution with retry loop.
+ * Supports multiple application types:
+ * - Electron: Desktop apps using _electron.launch()
+ * - Web: Web apps with dev server
+ * - Static: Static HTML/JS apps using file:// protocol
  */
 
-import { existsSync, readdirSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { runProcessStreaming, WorkerCanceledError } from '../process-runner'
 import { getWorkingDir, type PipelineContext, type LogFn } from './types'
 import { runClaudeCode, runCodex, isClaudeRetryableLimitError } from './ai'
 import { getAvailableAITools } from '../cache'
+
+import type { AppType, E2ETestConfig } from '../../../shared/types/interfaces/e2e-test'
+import type { Card, CardE2EOverride } from '../../../shared/types/interfaces/card'
+
+import { DevServerManager } from '../services/dev-server-manager'
+import { detectAppType, resolveAutoAppType } from '../services/app-type-detector'
+import { TestPersistenceManager } from '../services/test-persistence-manager'
+import {
+  buildBrowserE2ECreationPrompt,
+  buildBrowserE2EFixPrompt,
+  type BrowserPromptContext
+} from './prompts/browser-test-prompts'
 
 /**
  * E2E phase result structure.
@@ -20,6 +36,8 @@ export interface E2EResult {
   testsRun: boolean
   fixAttempts: number
   lastError?: string
+  appType?: AppType
+  devServerUrl?: string
 }
 
 /**
@@ -30,7 +48,7 @@ export async function checkPlaywrightInstalled(cwd: string): Promise<boolean> {
     const packageJsonPath = join(cwd, 'package.json')
     if (!existsSync(packageJsonPath)) return false
 
-    const packageJson = require(packageJsonPath)
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8'))
     const deps = {
       ...packageJson.dependencies,
       ...packageJson.devDependencies
@@ -43,34 +61,84 @@ export async function checkPlaywrightInstalled(cwd: string): Promise<boolean> {
 }
 
 /**
- * Detect existing E2E test files in configured directories.
+ * Get card-level E2E override configuration from card metadata.
  */
-export function detectExistingE2ETests(cwd: string, testDirs: string[]): string[] {
-  const testFiles: string[] = []
-
-  for (const dir of testDirs) {
-    const fullPath = join(cwd, dir)
-    if (!existsSync(fullPath)) continue
-
-    try {
-      const files = readdirSync(fullPath, { recursive: true, withFileTypes: true })
-      for (const file of files) {
-        if (file.isFile() && (file.name.endsWith('.spec.ts') || file.name.endsWith('.test.ts') || file.name.endsWith('.e2e.ts'))) {
-          testFiles.push(join(dir, file.name))
-        }
-      }
-    } catch {
-      // Ignore directory read errors
-    }
+function getCardE2EOverride(card: Card | null): CardE2EOverride | null {
+  if (!card?.metadata_json) {
+    return null
   }
 
-  return testFiles
+  try {
+    const metadata = JSON.parse(card.metadata_json)
+    return metadata.e2e || null
+  } catch {
+    return null
+  }
 }
 
 /**
- * Build prompt for AI to create E2E tests.
+ * Resolve the effective app type, considering card overrides and auto-detection.
  */
-export function buildE2ECreationPrompt(
+async function resolveEffectiveAppType(
+  config: E2ETestConfig,
+  cardOverride: CardE2EOverride | null,
+  cwd: string,
+  log: LogFn
+): Promise<AppType> {
+  // Card override takes priority
+  if (cardOverride?.appType) {
+    log(`Using card-level app type override: ${cardOverride.appType}`)
+    return cardOverride.appType
+  }
+
+  // Use config value or auto-detect
+  const configAppType = config.appType ?? 'auto'
+
+  if (configAppType === 'auto') {
+    const detected = await detectAppType(cwd)
+    log(`Auto-detected app type: ${detected}`)
+    return detected
+  }
+
+  return configAppType
+}
+
+/**
+ * Build prompt for AI to create E2E tests based on app type.
+ */
+function buildE2ECreationPromptForAppType(
+  ctx: PipelineContext,
+  appType: AppType,
+  baseUrl: string,
+  testDirectory: string,
+  existingTests: string[]
+): string {
+  const changedFiles = ['(files changed by AI implementation)']
+
+  if (appType === 'electron') {
+    // Use existing Electron prompt
+    return buildElectronE2ECreationPrompt(ctx, changedFiles, testDirectory)
+  }
+
+  // Use browser prompts for web and static
+  const promptCtx: BrowserPromptContext = {
+    appType,
+    baseUrl,
+    changedFiles,
+    cardTitle: ctx.card!.title,
+    cardBody: ctx.card!.body || '',
+    testDirectory,
+    existingTests,
+    framework: 'playwright'
+  }
+
+  return buildBrowserE2ECreationPrompt(promptCtx)
+}
+
+/**
+ * Build prompt for AI to create E2E tests for Electron apps.
+ */
+function buildElectronE2ECreationPrompt(
   ctx: PipelineContext,
   changedFiles: string[],
   testDirectory: string
@@ -127,7 +195,36 @@ Create the E2E tests now.`
 /**
  * Build prompt for AI to fix failing E2E tests.
  */
-export function buildE2EFixPrompt(
+function buildE2EFixPromptForAppType(
+  ctx: PipelineContext,
+  appType: AppType,
+  baseUrl: string,
+  errorOutput: string,
+  attempt: number,
+  maxAttempts: number
+): string {
+  if (appType === 'electron') {
+    return buildElectronE2EFixPrompt(ctx, errorOutput, attempt, maxAttempts)
+  }
+
+  const promptCtx: BrowserPromptContext = {
+    appType,
+    baseUrl,
+    changedFiles: [],
+    cardTitle: ctx.card!.title,
+    cardBody: ctx.card!.body || '',
+    testDirectory: '',
+    existingTests: [],
+    framework: 'playwright'
+  }
+
+  return buildBrowserE2EFixPrompt(promptCtx, errorOutput, attempt, maxAttempts)
+}
+
+/**
+ * Build prompt for AI to fix failing Electron E2E tests.
+ */
+function buildElectronE2EFixPrompt(
   ctx: PipelineContext,
   errorOutput: string,
   attempt: number,
@@ -164,14 +261,15 @@ Fix the failing tests now.`
 async function runE2ETests(
   ctx: PipelineContext,
   log: LogFn,
-  isCanceled: () => boolean
+  isCanceled: () => boolean,
+  testCommand?: string
 ): Promise<{ success: boolean; output: string }> {
   const config = ctx.policy.worker?.e2e
   const cwd = getWorkingDir(ctx)
-  const testCommand = config?.testCommand || 'npx playwright test'
+  const effectiveTestCommand = testCommand || config?.testCommand || 'npx playwright test'
   const timeoutMs = (config?.timeoutMinutes || 10) * 60 * 1000
 
-  const [command, ...args] = testCommand.split(' ')
+  const [command, ...args] = effectiveTestCommand.split(' ')
   const outputLines: string[] = []
 
   try {
@@ -195,7 +293,8 @@ async function runE2ETests(
     }
     return {
       success: false,
-      output: outputLines.join('\n') + '\n' + (error instanceof Error ? error.message : String(error))
+      output:
+        outputLines.join('\n') + '\n' + (error instanceof Error ? error.message : String(error))
     }
   }
 }
@@ -205,6 +304,8 @@ async function runE2ETests(
  */
 async function attemptE2EFix(
   ctx: PipelineContext,
+  appType: AppType,
+  baseUrl: string,
   errorOutput: string,
   attempt: number,
   maxAttempts: number,
@@ -215,8 +316,8 @@ async function attemptE2EFix(
   const cwd = getWorkingDir(ctx)
   const timeoutMs = (config?.timeoutMinutes || 10) * 60 * 1000
 
-  // Build fix prompt
-  const prompt = buildE2EFixPrompt(ctx, errorOutput, attempt, maxAttempts)
+  // Build fix prompt based on app type
+  const prompt = buildE2EFixPromptForAppType(ctx, appType, baseUrl, errorOutput, attempt, maxAttempts)
 
   // Always try Claude first (as per user requirement) - use cached check
   const aiTools = await getAvailableAITools()
@@ -272,20 +373,19 @@ async function attemptE2EFix(
  */
 async function createE2ETests(
   ctx: PipelineContext,
+  appType: AppType,
+  baseUrl: string,
+  testDirectory: string,
+  existingTests: string[],
   log: LogFn,
   isCanceled: () => boolean
 ): Promise<boolean> {
   const config = ctx.policy.worker?.e2e
   const cwd = getWorkingDir(ctx)
   const timeoutMs = (config?.timeoutMinutes || 10) * 60 * 1000
-  const testDirs = config?.testDirectories || ['e2e', 'tests/e2e', 'test/e2e']
-  const testDirectory = testDirs[0] // Use first directory for new tests
 
-  // Get list of changed files (simplified - just use card info)
-  const changedFiles = ['(files changed by AI implementation)']
-
-  // Build creation prompt
-  const prompt = buildE2ECreationPrompt(ctx, changedFiles, testDirectory)
+  // Build creation prompt based on app type
+  const prompt = buildE2ECreationPromptForAppType(ctx, appType, baseUrl, testDirectory, existingTests)
 
   // Always try Claude first - use cached check
   const aiTools = await getAvailableAITools()
@@ -338,6 +438,7 @@ async function createE2ETests(
 
 /**
  * Main E2E phase orchestrator with retry loop.
+ * Supports multiple application types with automatic dev server management.
  */
 export async function runE2EPhase(
   ctx: PipelineContext,
@@ -346,14 +447,20 @@ export async function runE2EPhase(
 ): Promise<E2EResult> {
   const config = ctx.policy.worker?.e2e
 
-  // Check if E2E is enabled
+  // Check if E2E is enabled at project level
   if (!config?.enabled) {
+    return { success: true, testsCreated: false, testsRun: false, fixAttempts: 0 }
+  }
+
+  // Check for card-level E2E override
+  const cardOverride = getCardE2EOverride(ctx.card)
+  if (cardOverride?.enabled === false) {
+    log('E2E testing disabled for this card via override')
     return { success: true, testsCreated: false, testsRun: false, fixAttempts: 0 }
   }
 
   const maxRetries = config.maxRetries || 3
   const cwd = getWorkingDir(ctx)
-  const testDirs = config.testDirectories || ['e2e', 'tests/e2e', 'test/e2e']
 
   // Step 1: Check Playwright is available
   const playwrightInstalled = await checkPlaywrightInstalled(cwd)
@@ -362,72 +469,183 @@ export async function runE2EPhase(
     return { success: true, testsCreated: false, testsRun: false, fixAttempts: 0 }
   }
 
-  // Step 2: Detect or create E2E tests
-  let existingTests = detectExistingE2ETests(cwd, testDirs)
-  let testsCreated = false
+  // Step 2: Determine app type
+  let appType = await resolveEffectiveAppType(config, cardOverride, cwd, log)
 
-  if (existingTests.length === 0 && config.createTestsIfMissing) {
-    log('No E2E tests found, instructing AI to create them...')
-    const creationSuccess = await createE2ETests(ctx, log, isCanceled)
-    if (!creationSuccess) {
-      log('Failed to create E2E tests, continuing without E2E validation')
-      return { success: false, testsCreated: false, testsRun: false, fixAttempts: 0, lastError: 'Failed to create E2E tests' }
-    }
-    testsCreated = true
-
-    // Re-check for tests after creation
-    existingTests = detectExistingE2ETests(cwd, testDirs)
-    if (existingTests.length === 0) {
-      log('AI did not create any E2E test files, continuing without E2E validation')
-      return { success: false, testsCreated: true, testsRun: false, fixAttempts: 0, lastError: 'No E2E test files created' }
-    }
-
-    log(`E2E tests created: ${existingTests.join(', ')}`)
-  } else if (existingTests.length === 0) {
-    log('No E2E tests found and createTestsIfMissing is disabled, skipping E2E phase')
-    return { success: true, testsCreated: false, testsRun: false, fixAttempts: 0 }
-  } else {
-    log(`Found existing E2E tests: ${existingTests.join(', ')}`)
+  // Resolve 'auto' to concrete type
+  if (appType === 'auto') {
+    appType = await resolveAutoAppType(cwd)
+    log(`Resolved auto app type to: ${appType}`)
   }
 
-  // Step 3: Run tests with retry loop
-  let fixAttempts = 0
+  // Step 3: Initialize dev server if needed
+  let devServerManager: DevServerManager | null = null
+  let baseUrl = cardOverride?.baseUrl || config.baseUrl || ''
+
+  if (appType === 'web') {
+    log('Starting dev server for web app E2E testing...')
+    devServerManager = new DevServerManager(config.devServer || {}, cwd, log)
+
+    const startResult = await devServerManager.start()
+    if (!startResult.success) {
+      log(`Dev server failed to start: ${startResult.error}`)
+      return {
+        success: false,
+        testsCreated: false,
+        testsRun: false,
+        fixAttempts: 0,
+        lastError: `Dev server failed to start: ${startResult.error}`,
+        appType
+      }
+    }
+
+    baseUrl = startResult.url || baseUrl
+    log(`Dev server running at: ${baseUrl}`)
+  } else if (appType === 'static') {
+    // For static apps, baseUrl is typically file:// protocol
+    baseUrl = baseUrl || `file://${join(cwd, 'index.html')}`
+    log(`Static app base URL: ${baseUrl}`)
+  }
+
+  // Step 4: Initialize test persistence manager
+  const testPersistenceConfig = {
+    mode: config.testPersistence || 'persistent',
+    testDirectory: config.testDirectories?.[0] || 'e2e',
+    tempDirectory: config.tempTestDirectory || '.flowpatch/temp-tests',
+    cardId: ctx.cardId,
+    jobId: ctx.jobId || '',
+    cwd
+  }
+  const persistenceManager = new TestPersistenceManager(testPersistenceConfig, log)
+  persistenceManager.ensureTestDirectory()
+
+  const testDirectory = persistenceManager.getRelativeTestDirectory()
+  let testsCreated = false
   let lastError: string | undefined
 
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    if (isCanceled()) throw new WorkerCanceledError()
+  try {
+    // Step 5: Detect or create E2E tests
+    let existingTests = persistenceManager.scanExistingTests()
 
-    log(`Running E2E tests (attempt ${attempt + 1}/${maxRetries + 1})...`)
-    const result = await runE2ETests(ctx, log, isCanceled)
+    if (existingTests.length === 0 && config.createTestsIfMissing) {
+      log(`No E2E tests found, instructing AI to create them for ${appType} app...`)
 
-    if (result.success) {
-      log('E2E tests passed!')
-      return { success: true, testsCreated, testsRun: true, fixAttempts }
+      const creationSuccess = await createE2ETests(
+        ctx,
+        appType,
+        baseUrl,
+        testDirectory,
+        existingTests,
+        log,
+        isCanceled
+      )
+
+      if (!creationSuccess) {
+        log('Failed to create E2E tests, continuing without E2E validation')
+        return {
+          success: false,
+          testsCreated: false,
+          testsRun: false,
+          fixAttempts: 0,
+          lastError: 'Failed to create E2E tests',
+          appType,
+          devServerUrl: baseUrl
+        }
+      }
+      testsCreated = true
+
+      // Re-check for tests after creation
+      existingTests = persistenceManager.scanExistingTests()
+      if (existingTests.length === 0) {
+        log('AI did not create any E2E test files, continuing without E2E validation')
+        return {
+          success: false,
+          testsCreated: true,
+          testsRun: false,
+          fixAttempts: 0,
+          lastError: 'No E2E test files created',
+          appType,
+          devServerUrl: baseUrl
+        }
+      }
+
+      // Track created files for cleanup
+      existingTests.forEach((file) => persistenceManager.trackCreatedFile(file))
+      log(`E2E tests created: ${existingTests.join(', ')}`)
+    } else if (existingTests.length === 0) {
+      log('No E2E tests found and createTestsIfMissing is disabled, skipping E2E phase')
+      return { success: true, testsCreated: false, testsRun: false, fixAttempts: 0, appType }
+    } else {
+      log(`Found existing E2E tests: ${existingTests.join(', ')}`)
     }
 
-    lastError = result.output
+    // Step 6: Run tests with retry loop
+    let fixAttempts = 0
+    const testCommand = cardOverride?.testCommand || config.testCommand
 
-    // Don't attempt fix on last iteration
-    if (attempt >= maxRetries) {
-      log(`E2E tests failed after ${maxRetries + 1} attempts`)
-      break
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      if (isCanceled()) throw new WorkerCanceledError()
+
+      log(`Running E2E tests (attempt ${attempt + 1}/${maxRetries + 1})...`)
+      const result = await runE2ETests(ctx, log, isCanceled, testCommand)
+
+      if (result.success) {
+        log('E2E tests passed!')
+        return {
+          success: true,
+          testsCreated,
+          testsRun: true,
+          fixAttempts,
+          appType,
+          devServerUrl: baseUrl
+        }
+      }
+
+      lastError = result.output
+
+      // Don't attempt fix on last iteration
+      if (attempt >= maxRetries) {
+        log(`E2E tests failed after ${maxRetries + 1} attempts`)
+        break
+      }
+
+      // Attempt fix using AI
+      fixAttempts++
+      log(`E2E tests failed, attempting fix ${fixAttempts}/${maxRetries}...`)
+
+      const fixSuccess = await attemptE2EFix(
+        ctx,
+        appType,
+        baseUrl,
+        lastError,
+        fixAttempts,
+        maxRetries,
+        log,
+        isCanceled
+      )
+      if (!fixSuccess) {
+        log('Fix attempt failed, continuing to next attempt...')
+      }
     }
 
-    // Attempt fix using AI
-    fixAttempts++
-    log(`E2E tests failed, attempting fix ${fixAttempts}/${maxRetries}...`)
-
-    const fixSuccess = await attemptE2EFix(ctx, lastError, fixAttempts, maxRetries, log, isCanceled)
-    if (!fixSuccess) {
-      log('Fix attempt failed, continuing to next attempt...')
+    return {
+      success: false,
+      testsCreated,
+      testsRun: true,
+      fixAttempts,
+      lastError,
+      appType,
+      devServerUrl: baseUrl
     }
-  }
+  } finally {
+    // Cleanup: stop dev server
+    if (devServerManager) {
+      log('Stopping dev server...')
+      await devServerManager.stop()
+    }
 
-  return {
-    success: false,
-    testsCreated,
-    testsRun: true,
-    fixAttempts,
-    lastError
+    // Cleanup: remove temporary tests if configured
+    const e2eSuccess = !lastError
+    await persistenceManager.cleanup(e2eSuccess)
   }
 }

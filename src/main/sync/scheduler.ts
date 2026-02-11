@@ -11,7 +11,7 @@
 import { runSync } from './engine'
 import { getProject } from '../db'
 import { broadcastToRenderers } from '../ipc/broadcast'
-import { logAction } from '../../shared/utils'
+import { logAction } from '../utils/main-logger'
 import type { PolicyConfig } from '../../shared/types'
 import { withSyncLock, canSyncNow, getSyncLockStats } from './sync-lock'
 
@@ -223,7 +223,10 @@ export function getSyncSchedulerConfigFromPolicy(policy: PolicyConfig | null): S
   }
 }
 
-export function updateSyncSchedulerConfig(projectId: string, config: Partial<SyncSchedulerConfig>): void {
+export function updateSyncSchedulerConfig(
+  projectId: string,
+  config: Partial<SyncSchedulerConfig>
+): void {
   const scheduler = activeSchedulers.get(projectId)
   scheduler?.updateConfig(config)
 }

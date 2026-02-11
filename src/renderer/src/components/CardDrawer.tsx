@@ -25,16 +25,19 @@ import { GitDiffDialog } from './GitDiffDialog'
 import { AgentChatDialog } from './AgentChatDialog'
 import { DependencyManager } from './DependencyManager'
 import { TestModificationsDialog } from './TestModificationsDialog'
+import { CommentsSection } from './CommentsSection'
 import { cn } from '../lib/utils'
 import { formatRelativeTime, parseLabels, parseAssignees } from '../lib/utils'
 import {
   KANBAN_COLUMNS,
+  TESTABLE_STATUSES,
   type Card,
   type CardLink,
   type Event,
   type CardStatus,
   type Worktree,
-  type Job
+  type Job,
+  type ManualTestInfo
 } from '../../../shared/types'
 
 interface CardDrawerProps {
@@ -71,16 +74,7 @@ export function CardDrawer({
   const [isDeletingCard, setIsDeletingCard] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [testDialogOpen, setTestDialogOpen] = useState(false)
-  const [testInfo, setTestInfo] = useState<{
-    success: boolean
-    hasWorktree?: boolean
-    worktreePath?: string
-    branchName?: string | null
-    repoPath?: string
-    projectType?: { type: string; hasPackageJson: boolean; port?: number }
-    commands?: { install?: string; dev?: string; build?: string }
-    error?: string
-  } | null>(null)
+  const [testInfo, setTestInfo] = useState<ManualTestInfo | null>(null)
   const [checkingTestInfo, setCheckingTestInfo] = useState(false)
 
   // Load worktree and latest job info for this card
@@ -108,7 +102,9 @@ export function CardDrawer({
         const cardJobs = jobs.filter((j) => j.card_id === card.id)
         if (cardJobs.length > 0) {
           // Sort by created_at descending and get the most recent
-          cardJobs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+          cardJobs.sort(
+            (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          )
           setLatestJob(cardJobs[0])
         } else {
           setLatestJob(null)
@@ -166,7 +162,8 @@ export function CardDrawer({
 
     setCheckingTestInfo(true)
     try {
-      const info = (await window.projectAPI.getCardTestInfo(projectId, card.id)) as typeof testInfo
+      const result = await window.projectAPI.getCardTestInfo(projectId, card.id)
+      const info = result as ManualTestInfo
       setTestInfo(info)
       if (info && info.success) {
         setTestDialogOpen(true)
@@ -181,8 +178,9 @@ export function CardDrawer({
     }
   }
 
-  // Check if test button should be shown - show if card has worktree or is in progress/ready
-  const showTestButton = worktree || (card && (card.status === 'in_progress' || card.status === 'ready'))
+  // Check if test button should be shown - show if card has worktree or is in a testable status
+  const showTestButton =
+    worktree || (card && TESTABLE_STATUSES.includes(card.status))
 
   // Reset edit state when card changes
   useEffect(() => {
@@ -362,11 +360,7 @@ export function CardDrawer({
                   autoFocus
                 />
                 <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    onClick={handleSaveDescription}
-                    disabled={isSavingDescription}
-                  >
+                  <Button size="sm" onClick={handleSaveDescription} disabled={isSavingDescription}>
                     <Save className="h-3 w-3 mr-1" />
                     {isSavingDescription ? 'Saving...' : 'Save'}
                   </Button>
@@ -411,6 +405,17 @@ export function CardDrawer({
           <div className="rounded-md bg-muted p-3">
             <DependencyManager card={card} />
           </div>
+
+          {/* Comments / Feedback */}
+          {projectId && (
+            <div className="rounded-md bg-muted p-3">
+              <CommentsSection
+                cardId={card.id}
+                projectId={projectId}
+                cardStatus={card.status}
+              />
+            </div>
+          )}
 
           {/* Status controls */}
           <div>
@@ -615,7 +620,6 @@ export function CardDrawer({
               cardTitle={card.title}
             />
           )}
-
 
           {/* Timeline */}
           <div>

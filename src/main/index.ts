@@ -13,6 +13,7 @@ import { initDb, listProjects } from './db'
 import { createWindow } from './window'
 import { registerAllHandlers } from './ipc/handlers'
 import { startEnabledWorkerLoops, stopAllWorkerLoops } from './worker/loop'
+import { recoverStuckCards } from './worker/recovery'
 import { startCleanupScheduler, stopCleanupScheduler } from './services/worktree-cleanup-scheduler'
 import { startIndexScheduler, stopIndexScheduler } from './services/flowpatch-index-scheduler'
 import { stopAllSyncSchedulers } from './sync/scheduler'
@@ -67,6 +68,11 @@ app.whenReady().then(() => {
   // Reconcile worktrees on startup
   reconcileAllProjects(listProjects()).catch((err) => {
     console.error('Failed to reconcile worktrees on startup:', err)
+  })
+
+  // Recover any cards stuck in worker states from previous crashes
+  recoverStuckCards().catch((err) => {
+    console.error('Failed to recover stuck cards on startup:', err)
   })
 
   // Initialize auto-updater (checks for updates on startup and periodically)

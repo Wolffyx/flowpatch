@@ -19,7 +19,7 @@ import {
   createEvent
 } from '../../db'
 import type { FollowUpInstructionType } from '@shared/types'
-import { logAction } from '@shared/utils'
+import { logAction } from '../../utils/main-logger'
 
 // ============================================================================
 // Handler Registration
@@ -29,7 +29,16 @@ export function registerFollowUpInstructionHandlers(notifyRenderer: () => void):
   // Get follow-up instructions (by job, project, card, or specific ID)
   ipcMain.handle(
     'getFollowUpInstructions',
-    (_e, payload: { id?: string; jobId?: string; projectId?: string; cardId?: string; pendingOnly?: boolean }) => {
+    (
+      _e,
+      payload: {
+        id?: string
+        jobId?: string
+        projectId?: string
+        cardId?: string
+        pendingOnly?: boolean
+      }
+    ) => {
       logAction('getFollowUpInstructions', payload)
 
       if (payload.id) {

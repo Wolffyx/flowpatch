@@ -170,10 +170,9 @@ export function useAIProfiles(): UseAIProfilesReturn {
 
   const handleDeleteProfile = useCallback(async (profileId: string) => {
     try {
-      const result = (await window.electron.ipcRenderer.invoke(
-        'aiProfiles:delete',
-        profileId
-      )) as { error?: string }
+      const result = (await window.electron.ipcRenderer.invoke('aiProfiles:delete', profileId)) as {
+        error?: string
+      }
       if (result.error) {
         toast.error('Failed to delete profile', { description: result.error })
       } else {

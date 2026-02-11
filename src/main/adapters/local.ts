@@ -7,7 +7,7 @@
 
 import type { Card, CardStatus, Provider, RepoLabel } from '../../shared/types'
 import { BaseAdapter } from './base'
-import type { AuthResult, IssueResult, LabelResult, PRResult } from './types'
+import type { AuthResult, IssueResult, LabelResult, PRResult, RemoteComment } from './types'
 
 /**
  * LocalAdapter handles projects without a linked git remote.
@@ -138,10 +138,17 @@ export class LocalAdapter extends BaseAdapter {
   // ──────────────────────────────────────────────────────────────────────────
 
   /**
+   * No remote comments to fetch for local projects.
+   */
+  async listIssueComments(_issueNumber: number): Promise<RemoteComment[]> {
+    return []
+  }
+
+  /**
    * Cannot add comments to remote issues for local projects.
    */
-  async commentOnIssue(_issueId: number, _comment: string): Promise<boolean> {
-    return false
+  async commentOnIssue(_issueId: number, _comment: string): Promise<string | null> {
+    return null
   }
 
   // ──────────────────────────────────────────────────────────────────────────

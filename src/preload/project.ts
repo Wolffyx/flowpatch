@@ -1,541 +1,27 @@
-/**
- * Project Preload Script
- *
- * Exposes project-specific APIs to the project renderer:
- * - Cards (list, move, create)
- * - Sync operations
- * - Worker control
- * - State updates
- */
-
-import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
-import type {
-  AIToolType,
-  Card,
-  CardLink,
-  CardStatus,
-  Event,
-  FollowUpInstructionStatus,
-  FollowUpInstructionType,
-  Job,
-  PlanApproval,
-  PlanningMode,
-  PolicyConfig,
-  Project,
-  WorkerLogMessage
-} from '../shared/types'
-
-// ============================================================================
-// Types
-// ============================================================================
-
-export interface ProjectAPI {
-  // Project info (received from shell via IPC)
-  onProjectOpened: (
-    callback: (info: { projectId: string; projectKey: string; projectPath: string }) => void
-  ) => () => void
-  onProjectClosing: (callback: () => void) => () => void
-
-  // Project data
-  getProject: (projectId: string) => Promise<Project | null>
-  getRepoOnboardingState: (projectId: string) => Promise<{
-    shouldShowLabelWizard?: boolean
-    shouldPromptGithubProject?: boolean
-    shouldShowStarterCardsWizard?: boolean
-  }>
-
-  // Cards
-  getCards: () => Promise<Card[]>
-  getCardLinks: () => Promise<CardLink[]>
-  moveCard: (cardId: string, status: CardStatus) => Promise<void>
-  ensureProjectRemote: (projectId: string) => Promise<{ project?: Project; error?: string }>
-  createCard: (data: {
-    title: string
-    body?: string
-    createType: 'local' | 'repo_issue' | 'github_issue' | 'gitlab_issue'
-  }) => Promise<Card>
-  splitCard: (data: {
-    cardId: string
-    items: Array<{ title: string; body?: string }>
-  }) => Promise<{ cards: Card[]; error?: string }>
-  editCardBody: (cardId: string, body: string | null) => Promise<{ card?: Card; error?: string }>
-  deleteCard: (cardId: string) => Promise<{ success: boolean; error?: string }>
-
-  // Sync
-  sync: () => Promise<void>
-  onSyncComplete: (callback: () => void) => () => void
-
-  // Worker
-  isWorkerEnabled: () => Promise<boolean>
-  toggleWorker: (enabled: boolean) => Promise<void>
-  runWorker: (cardId?: string) => Promise<void>
-  cancelWorker: (jobId: string) => Promise<void>
-
-  // Dev Server (Test Mode)
-  getCardTestInfo: (projectId: string, cardId: string) => Promise<{
-    success: boolean
-    hasWorktree?: boolean
-    worktreePath?: string
-    branchName?: string | null
-    repoPath?: string
-    projectType?: { type: string; hasPackageJson: boolean; port?: number }
-    commands?: { install?: string; dev?: string; build?: string }
-    error?: string
-  }>
-  startDevServer: (params: {
-    projectId: string
-    cardId: string
-    workingDir: string
-    command: string
-    args: string[]
-    env?: Record<string, string>
-  }) => Promise<{ success: boolean; status?: string; port?: number; error?: string }>
-  stopDevServer: (cardId: string) => Promise<{ success: boolean; error?: string }>
-  getDevServerStatus: (cardId: string) => Promise<{
-    success: boolean
-    status?: string | null
-    port?: number
-    startedAt?: string
-    error?: string
-    output?: string[]
-  }>
-  onDevServerOutput: (callback: (data: { cardId: string; line: string; stream: 'stdout' | 'stderr'; timestamp: string }) => void) => () => void
-  onDevServerStatus: (callback: (data: { cardId: string; status: string; timestamp: string }) => void) => () => void
-  onDevServerPort: (callback: (data: { cardId: string; port: number; url: string; timestamp: string }) => void) => () => void
-
-  // Plan Approval
-  getPendingApprovals: () => Promise<{ approvals: PlanApproval[] }>
-  getPlanApproval: (params: { approvalId?: string; jobId?: string }) => Promise<{ approval?: PlanApproval; error?: string }>
-  approvePlan: (approvalId: string, notes?: string) => Promise<{ success: boolean; error?: string }>
-  rejectPlan: (approvalId: string, notes?: string) => Promise<{ success: boolean; error?: string }>
-  skipPlanApproval: (approvalId: string) => Promise<{ success: boolean; error?: string }>
-  onPlanApprovalRequired: (callback: (data: { projectId: string; cardId: string; jobId: string; approvalId: string }) => void) => () => void
-
-  // Follow-up Instructions
-  getFollowUpInstructions: (params: { jobId?: string; cardId?: string; pendingOnly?: boolean }) => Promise<{ instructions: FollowUpInstruction[]; error?: string }>
-  createFollowUpInstruction: (data: {
-    jobId: string
-    cardId: string
-    instructionType: FollowUpInstructionType
-    content: string
-    priority?: number
-  }) => Promise<{ success: boolean; instruction?: FollowUpInstruction; error?: string }>
-  deleteFollowUpInstruction: (instructionId: string) => Promise<{ success: boolean; error?: string }>
-  countPendingInstructions: (jobId: string) => Promise<{ count: number; error?: string }>
-
-  // Usage Tracking
-  getTotalUsage: () => Promise<{ usage: { tokens: number; cost: number } }>
-  getUsageWithLimits: () => Promise<{ usageWithLimits: UsageWithLimits[]; resetTimes: UsageResetTimes }>
-  setToolLimits: (
-    toolType: AIToolType,
-    limits: {
-      hourlyTokenLimit?: number | null
-      dailyTokenLimit?: number | null
-      monthlyTokenLimit?: number | null
-      hourlyCostLimitUsd?: number | null
-      dailyCostLimitUsd?: number | null
-      monthlyCostLimitUsd?: number | null
-    }
-  ) => Promise<{ success: boolean; limits: AIToolLimits; error?: string }>
-
-  // Diff Viewer
-  getDiffFiles: (worktreeId: string) => Promise<{ files: DiffFile[]; error?: string }>
-  getDiffStats: (worktreeId: string) => Promise<{ stats: DiffStats | null; error?: string }>
-  getFileDiff: (worktreeId: string, filePath: string) => Promise<{ diff: FileDiff | null; error?: string }>
-  getUnifiedDiff: (worktreeId: string, filePath?: string) => Promise<{ patch: string; error?: string }>
-
-  // Agent Chat
-  sendChatMessage: (params: {
-    jobId: string
-    cardId: string
-    content: string
-    metadata?: Record<string, unknown>
-  }) => Promise<{ message: AgentChatMessage; error?: string }>
-  getChatMessages: (jobId: string, limit?: number) => Promise<{ messages: AgentChatMessage[]; error?: string }>
-  getChatMessagesByCard: (cardId: string, limit?: number) => Promise<{ messages: AgentChatMessage[]; error?: string }>
-  getChatSummary: (jobId: string) => Promise<{ summary: AgentChatSummary; error?: string }>
-  getChatUnreadCount: (jobId: string) => Promise<{ count: number; error?: string }>
-  markChatAsRead: (jobId: string) => Promise<{ success: boolean; error?: string }>
-  clearChatHistory: (jobId: string) => Promise<{ success: boolean; count: number; error?: string }>
-  onChatMessage: (callback: (data: { type: string; message: AgentChatMessage; jobId: string }) => void) => () => void
-
-  // AI Profiles
-  getAIProfiles: () => Promise<{ profiles: AIProfile[]; error?: string }>
-  getAIProfile: (profileId: string) => Promise<{ profile: AIProfile | null; error?: string }>
-  getDefaultAIProfile: () => Promise<{ profile: AIProfile | null; error?: string }>
-  createAIProfile: (data: CreateAIProfileData) => Promise<{ profile: AIProfile | null; error?: string }>
-  updateAIProfile: (profileId: string, data: UpdateAIProfileData) => Promise<{ profile: AIProfile | null; error?: string }>
-  deleteAIProfile: (profileId: string) => Promise<{ success: boolean; error?: string }>
-  setDefaultAIProfile: (profileId: string) => Promise<{ success: boolean; error?: string }>
-  duplicateAIProfile: (profileId: string, newName: string) => Promise<{ profile: AIProfile | null; error?: string }>
-
-  // Feature Suggestions
-  getFeatureSuggestions: (options?: {
-    status?: FeatureSuggestionStatus
-    category?: FeatureSuggestionCategory
-    sortBy?: 'vote_count' | 'created_at' | 'priority' | 'updated_at'
-    sortOrder?: 'asc' | 'desc'
-    limit?: number
-    offset?: number
-  }) => Promise<{ suggestions: FeatureSuggestion[]; error?: string }>
-  getFeatureSuggestion: (suggestionId: string) => Promise<{ suggestion: FeatureSuggestion | null; error?: string }>
-  createFeatureSuggestion: (data: {
-    title: string
-    description: string
-    category?: FeatureSuggestionCategory
-    priority?: number
-    createdBy?: string
-  }) => Promise<{ suggestion: FeatureSuggestion | null; error?: string }>
-  updateFeatureSuggestion: (suggestionId: string, data: UpdateFeatureSuggestionData) => Promise<{ suggestion: FeatureSuggestion | null; error?: string }>
-  updateFeatureSuggestionStatus: (suggestionId: string, status: FeatureSuggestionStatus) => Promise<{ success: boolean; error?: string }>
-  deleteFeatureSuggestion: (suggestionId: string) => Promise<{ success: boolean; error?: string }>
-  voteOnSuggestion: (suggestionId: string, voteType: 'up' | 'down', voterId?: string) => Promise<{ voteCount: number; userVote: 'up' | 'down' | null; error?: string }>
-  getUserVote: (suggestionId: string, voterId?: string) => Promise<{ voteType: 'up' | 'down' | null; error?: string }>
-
-  // Card Dependencies
-  createDependency: (data: {
-    cardId: string
-    dependsOnCardId: string
-    blockingStatuses?: CardStatus[]
-    requiredStatus?: CardStatus
-  }) => Promise<{ dependency: CardDependency | null; error?: string }>
-  getDependency: (dependencyId: string) => Promise<{ dependency: CardDependency | null; error?: string }>
-  getDependenciesForCard: (cardId: string) => Promise<{ dependencies: CardDependency[]; error?: string }>
-  getDependenciesForCardWithCards: (cardId: string) => Promise<{ dependencies: CardDependencyWithCard[]; error?: string }>
-  getDependentsOfCard: (cardId: string) => Promise<{ dependencies: CardDependency[]; error?: string }>
-  getDependenciesByProject: () => Promise<{ dependencies: CardDependency[]; error?: string }>
-  countDependenciesForCard: (cardId: string) => Promise<{ count: number; dependentsCount: number; error?: string }>
-  checkCanMoveToStatus: (cardId: string, targetStatus: CardStatus) => Promise<DependencyCheckResult>
-  checkWouldCreateCycle: (cardId: string, dependsOnCardId: string) => Promise<{ wouldCreateCycle: boolean; error?: string }>
-  updateDependency: (dependencyId: string, data: {
-    blockingStatuses?: CardStatus[]
-    requiredStatus?: CardStatus
-    isActive?: boolean
-  }) => Promise<{ dependency: CardDependency | null; error?: string }>
-  toggleDependency: (dependencyId: string, isActive: boolean) => Promise<{ success: boolean; error?: string }>
-  deleteDependency: (dependencyId: string) => Promise<{ success: boolean; error?: string }>
-  deleteDependencyBetween: (cardId: string, dependsOnCardId: string) => Promise<{ success: boolean; error?: string }>
-
-  // State updates
-  onStateUpdate: (callback: () => void) => () => void
-  onWorkerLog: (callback: (log: WorkerLogMessage) => void) => () => void
-
-  // Jobs
-  getJobs: () => Promise<Job[]>
-
-  // Events
-  getEvents: (limit?: number) => Promise<Event[]>
-
-  // FlowPatch workspace (.flowpatch)
-  getWorkspaceStatus: () => Promise<import('../shared/types').FlowPatchWorkspaceStatus | null>
-  ensureWorkspace: () => Promise<unknown>
-  indexBuild: () => Promise<unknown>
-  indexRefresh: () => Promise<unknown>
-  indexWatchStart: () => Promise<unknown>
-  indexWatchStop: () => Promise<unknown>
-  validateConfig: () => Promise<unknown>
-  docsRefresh: () => Promise<unknown>
-  contextPreview: (task: string) => Promise<unknown>
-  repairWorkspace: () => Promise<unknown>
-  migrateWorkspace: () => Promise<unknown>
-  openWorkspaceFolder: () => Promise<unknown>
-  retrieve: (kind: 'symbol' | 'text', query: string, limit?: number) => Promise<unknown>
-  getFlowPatchConfig: () => Promise<unknown>
-  createPlanFile: () => Promise<{
-    success: boolean
-    created?: boolean
-    path?: string
-    error?: string
-    message?: string
-  }>
-
-  // Configuration sync
-  syncConfig: (priorityOverride?: 'database' | 'file') => Promise<{
-    success: boolean
-    source?: 'database' | 'file' | 'merged'
-    policy?: PolicyConfig
-    errors?: string[]
-    warnings?: string[]
-  }>
-  getConfig: () => Promise<PolicyConfig>
-  updateFeatureConfig: (
-    featureKey: string,
-    config: Record<string, unknown>
-  ) => Promise<{
-    success: boolean
-    policy?: PolicyConfig
-    errors?: string[]
-    warnings?: string[]
-  }>
-  getConfigSyncPriority: () => Promise<'database' | 'file'>
-  setConfigSyncPriority: (priority: 'database' | 'file') => Promise<{
-    success: boolean
-    policy?: PolicyConfig
-    errors?: string[]
-    warnings?: string[]
-  }>
-  startConfigWatcher: () => Promise<{ success: boolean }>
-  stopConfigWatcher: () => Promise<{ success: boolean }>
-  onConfigChanged: (
-    callback: (data: { policy: PolicyConfig; source: 'database' | 'file' | 'merged' }) => void
-  ) => () => void
-}
-
-// Local types not in @shared/types
-interface FollowUpInstruction {
-  id: string
-  job_id: string
-  card_id: string
-  project_id: string
-  instruction_type: FollowUpInstructionType
-  content: string
-  status: FollowUpInstructionStatus
-  priority: number
-  created_at: string
-  processed_at?: string
-}
-
-interface AIToolLimits {
-  tool_type: AIToolType
-  hourly_token_limit: number | null
-  daily_token_limit: number | null
-  monthly_token_limit: number | null
-  hourly_cost_limit_usd: number | null
-  daily_cost_limit_usd: number | null
-  monthly_cost_limit_usd: number | null
-}
-
-interface UsageWithLimits {
-  tool_type: AIToolType
-  total_input_tokens: number
-  total_output_tokens: number
-  total_tokens: number
-  total_cost_usd: number
-  invocation_count: number
-  avg_duration_ms: number
-  limits: AIToolLimits | null
-  hourly_tokens_used: number
-  daily_tokens_used: number
-  monthly_tokens_used: number
-  hourly_cost_used: number
-  daily_cost_used: number
-  monthly_cost_used: number
-}
-
-interface UsageResetTimes {
-  hourly_resets_in: number
-  daily_resets_in: number
-  monthly_resets_in: number
-}
-
-// Diff viewer types
-interface DiffFile {
-  path: string
-  status: 'A' | 'M' | 'D' | 'R' | 'C' | 'T' | 'U'
-  additions: number
-  deletions: number
-  oldPath?: string
-}
-
-interface DiffStats {
-  filesChanged: number
-  additions: number
-  deletions: number
-}
-
-interface FileDiff {
-  filePath: string
-  oldContent: string
-  newContent: string
-  status: 'added' | 'modified' | 'deleted' | 'renamed'
-  additions: number
-  deletions: number
-}
-
-// Agent Chat types
-type AgentChatRole = 'user' | 'agent' | 'system'
-type AgentChatMessageStatus = 'sent' | 'delivered' | 'read' | 'error'
-
-interface AgentChatMessage {
-  id: string
-  job_id: string
-  card_id: string
-  project_id: string
-  role: AgentChatRole
-  content: string
-  status: AgentChatMessageStatus
-  metadata_json?: string
-  created_at: string
-  updated_at?: string
-}
-
-interface AgentChatSummary {
-  job_id: string
-  total_messages: number
-  unread_count: number
-  last_message_at?: string
-  last_agent_message?: string
-}
-
-// AI Profile types
-type AIModelProvider = 'anthropic' | 'openai' | 'auto'
-type ThinkingMode = 'none' | 'medium' | 'deep' | 'ultra'
-// PlanningMode already defined above
-
-interface AIProfile {
-  id: string
-  project_id: string
-  name: string
-  description?: string
-  is_default: boolean
-  model_provider: AIModelProvider
-  model_name?: string
-  temperature?: number
-  max_tokens?: number
-  top_p?: number
-  system_prompt?: string
-  thinking_enabled?: boolean
-  thinking_mode?: ThinkingMode
-  thinking_budget_tokens?: number
-  planning_enabled?: boolean
-  planning_mode?: PlanningMode
-  created_at: string
-  updated_at: string
-}
-
-interface CreateAIProfileData {
-  projectId: string
-  name: string
-  description?: string
-  isDefault?: boolean
-  modelProvider?: AIModelProvider
-  modelName?: string
-  temperature?: number
-  maxTokens?: number
-  topP?: number
-  systemPrompt?: string
-  thinkingEnabled?: boolean
-  thinkingMode?: ThinkingMode
-  thinkingBudgetTokens?: number
-  planningEnabled?: boolean
-  planningMode?: PlanningMode
-}
-
-interface UpdateAIProfileData {
-  name?: string
-  description?: string
-  isDefault?: boolean
-  modelProvider?: AIModelProvider
-  modelName?: string | null
-  temperature?: number | null
-  maxTokens?: number | null
-  topP?: number | null
-  systemPrompt?: string | null
-  thinkingEnabled?: boolean | null
-  thinkingMode?: ThinkingMode | null
-  thinkingBudgetTokens?: number | null
-  planningEnabled?: boolean | null
-  planningMode?: PlanningMode | null
-}
-
-// Feature Suggestion types
-type FeatureSuggestionStatus = 'open' | 'in_progress' | 'completed' | 'rejected'
-type FeatureSuggestionCategory = 'ui' | 'performance' | 'feature' | 'bug' | 'documentation' | 'other'
-
-interface FeatureSuggestion {
-  id: string
-  project_id: string
-  title: string
-  description: string
-  category: FeatureSuggestionCategory
-  priority: number
-  vote_count: number
-  status: FeatureSuggestionStatus
-  created_by?: string
-  created_at: string
-  updated_at: string
-}
-
-interface CreateFeatureSuggestionData {
-  projectId: string
-  title: string
-  description: string
-  category?: FeatureSuggestionCategory
-  priority?: number
-  createdBy?: string
-}
-
-interface UpdateFeatureSuggestionData {
-  title?: string
-  description?: string
-  category?: FeatureSuggestionCategory
-  priority?: number
-  status?: FeatureSuggestionStatus
-}
-
-// Card Dependency types
-interface CardDependency {
-  id: string
-  project_id: string
-  card_id: string
-  depends_on_card_id: string
-  blocking_statuses: CardStatus[]
-  required_status: CardStatus
-  is_active: number
-  created_at: string
-  updated_at: string
-}
-
-interface CardDependencyWithCard extends CardDependency {
-  depends_on_card?: {
-    id: string
-    project_id: string
-    title: string
-    status: CardStatus
-  }
-  card?: {
-    id: string
-    project_id: string
-    title: string
-    status: CardStatus
-  }
-}
-
-interface DependencyCheckResult {
-  canMove: boolean
-  blockedBy: CardDependencyWithCard[]
-  reason?: string
-}
-
-type ProjectInfo = { projectId: string; projectKey: string; projectPath: string }
+import { contextBridge, ipcRenderer } from 'electron'
+import type { ProjectAPI, ProjectInfo } from './interfaces/project'
+import { createListener } from './utils'
 
 const projectOpenedListeners = new Set<(info: ProjectInfo) => void>()
 const projectClosingListeners = new Set<() => void>()
 let lastProjectInfo: ProjectInfo | null = null
 
-ipcRenderer.on('projectOpened', (_event: IpcRendererEvent, info: ProjectInfo) => {
+ipcRenderer.on('projectOpened', (_event, info: ProjectInfo) => {
   lastProjectInfo = info
-  for (const listener of projectOpenedListeners) {
-    listener(info)
-  }
+  projectOpenedListeners.forEach((l) => l(info))
 })
 
 ipcRenderer.on('projectClosing', () => {
   lastProjectInfo = null
-  for (const listener of projectClosingListeners) {
-    listener()
-  }
+  projectClosingListeners.forEach((l) => l())
 })
 
-// ============================================================================
-// Project API Implementation
-// ============================================================================
+const getProjectId = (): string => {
+  if (!lastProjectInfo?.projectId) throw new Error('No active project')
+  return lastProjectInfo.projectId
+}
 
 const projectAPI: ProjectAPI = {
-  // -------------------------------------------------------------------------
-  // Project Lifecycle
-  // -------------------------------------------------------------------------
-
   onProjectOpened: (callback) => {
     projectOpenedListeners.add(callback)
     if (lastProjectInfo) {
@@ -545,265 +31,170 @@ const projectAPI: ProjectAPI = {
         }
       })
     }
-    return () => {
-      projectOpenedListeners.delete(callback)
-    }
+    return () => projectOpenedListeners.delete(callback)
   },
 
   onProjectClosing: (callback) => {
     projectClosingListeners.add(callback)
-    return () => {
-      projectClosingListeners.delete(callback)
-    }
+    return () => projectClosingListeners.delete(callback)
   },
 
-  // -------------------------------------------------------------------------
-  // Project Data
-  // -------------------------------------------------------------------------
+  getProject: (id) => ipcRenderer.invoke('getProject', { projectId: id }),
 
-  getProject: (projectId: string) => {
-    return ipcRenderer.invoke('getProject', { projectId })
-  },
+  getRepoOnboardingState: (id) => ipcRenderer.invoke('getRepoOnboardingState', { projectId: id }),
 
-  getRepoOnboardingState: (projectId: string) => {
-    return ipcRenderer.invoke('getRepoOnboardingState', { projectId })
-  },
+  getCards: () => ipcRenderer.invoke('project:getCards'),
 
-  // -------------------------------------------------------------------------
-  // Cards
-  // -------------------------------------------------------------------------
+  getCardLinks: () => ipcRenderer.invoke('project:getCardLinks'),
 
-  getCards: () => {
-    return ipcRenderer.invoke('project:getCards')
-  },
+  moveCard: (id, status) => ipcRenderer.invoke('project:moveCard', { cardId: id, status }),
 
-  getCardLinks: () => {
-    return ipcRenderer.invoke('project:getCardLinks')
-  },
+  ensureProjectRemote: (id) => ipcRenderer.invoke('ensureProjectRemote', { projectId: id }),
 
-  moveCard: (cardId: string, status: CardStatus) => {
-    return ipcRenderer.invoke('moveCard', { cardId, status })
-  },
-
-  ensureProjectRemote: (projectId: string) => {
-    return ipcRenderer.invoke('ensureProjectRemote', { projectId })
-  },
-
-  createCard: async (data: {
-    title: string
-    body?: string
-    createType: 'local' | 'repo_issue' | 'github_issue' | 'gitlab_issue'
-  }) => {
-    const projectId = lastProjectInfo?.projectId
-    if (!projectId) throw new Error('No active project')
-    const result = (await ipcRenderer.invoke('createCard', {
-      projectId,
+  createCard: async (data) => {
+    const result = await ipcRenderer.invoke('createCard', {
+      projectId: getProjectId(),
       title: data.title,
       body: data.body,
       createType: data.createType
-    })) as { card?: Card; error?: string }
-
+    })
     if (result?.error) throw new Error(result.error)
     if (!result?.card) throw new Error('Failed to create card')
     return result.card
   },
-  splitCard: (data) => {
-    return ipcRenderer.invoke('splitCard', data)
+
+  splitCard: (data) => ipcRenderer.invoke('splitCard', data),
+
+  editCardBody: (id, body) => ipcRenderer.invoke('editCardBody', { cardId: id, body }),
+
+  deleteCard: (id) => ipcRenderer.invoke('deleteCard', { cardId: id }),
+
+  pushCardToRemote: (id) => ipcRenderer.invoke('pushCardToRemote', { cardId: id }),
+
+  updateCardTimestamp: (id, timestamp) =>
+    ipcRenderer.invoke('updateCardTimestamp', { cardId: id, timestamp }),
+
+  sync: () => ipcRenderer.invoke('project:sync'),
+
+  onSyncComplete: (cb) => createListener('syncComplete', cb),
+
+  isWorkerEnabled: () => ipcRenderer.invoke('project:isWorkerEnabled'),
+
+  toggleWorker: (enabled) => ipcRenderer.invoke('project:toggleWorker', { enabled }),
+
+  runWorker: (id) => ipcRenderer.invoke('project:runWorker', { cardId: id }),
+
+  cancelWorker: (id) => ipcRenderer.invoke('project:cancelWorker', { jobId: id }),
+
+  resetWorkerState: () => ipcRenderer.invoke('project:resetWorkerState'),
+
+  // Unified worker status
+  getWorkerStatus: () => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) return Promise.resolve(null)
+    return ipcRenderer.invoke('worker:getStatus', projectId)
   },
 
-  editCardBody: (cardId: string, body: string | null) => {
-    return ipcRenderer.invoke('editCardBody', { cardId, body })
-  },
-
-  deleteCard: (cardId: string) => {
-    return ipcRenderer.invoke('deleteCard', { cardId })
-  },
-
-  // -------------------------------------------------------------------------
-  // Sync
-  // -------------------------------------------------------------------------
-
-  sync: () => {
-    return ipcRenderer.invoke('project:sync')
-  },
-
-  onSyncComplete: (callback) => {
-    const handler = () => {
-      callback()
+  onWorkerStatusChanged: (callback) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      data: { projectId: string; status: unknown }
+    ) => {
+      // Only forward events for the current project
+      if (lastProjectInfo?.projectId === data.projectId) {
+        callback(data as { projectId: string; status: import('../shared/types').WorkerStatus })
+      }
     }
-    ipcRenderer.on('syncComplete', handler)
-    return () => {
-      ipcRenderer.removeListener('syncComplete', handler)
+    ipcRenderer.on('worker:statusChanged', handler)
+    return () => ipcRenderer.removeListener('worker:statusChanged', handler)
+  },
+
+  clearWorkerErrorStatus: (projectId) => {
+    return ipcRenderer.invoke('worker:clearErrorStatus', projectId)
+  },
+
+  getWorkerErrorHistory: (projectId) => {
+    return ipcRenderer.invoke('worker:getErrorHistory', projectId)
+  },
+
+  clearWorkerErrorHistory: (projectId) => {
+    return ipcRenderer.invoke('worker:clearErrorHistory', projectId)
+  },
+
+  retryLastFailedCard: (projectId) => {
+    return ipcRenderer.invoke('worker:retryLastFailed', projectId)
+  },
+
+  getCardTestInfo: (projectId, id) =>
+    ipcRenderer.invoke('getCardTestInfo', { projectId, cardId: id }),
+
+  prepareTestEnvironment: (params) => ipcRenderer.invoke('prepareTestEnvironment', params),
+
+  onManualTestPrompt: (callback) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      data: import('../shared/types').ManualTestPromptData
+    ) => {
+      // Only forward events for the current project
+      if (lastProjectInfo?.projectId === data.projectId) {
+        callback(data)
+      }
     }
+    ipcRenderer.on('worker:manualTestPrompt', handler)
+    return () => ipcRenderer.removeListener('worker:manualTestPrompt', handler)
   },
 
-  // -------------------------------------------------------------------------
-  // Worker
-  // -------------------------------------------------------------------------
+  startDevServer: (params) => ipcRenderer.invoke('startDevServer', params),
 
-  isWorkerEnabled: () => {
-    return ipcRenderer.invoke('project:isWorkerEnabled')
-  },
+  stopDevServer: (id) => ipcRenderer.invoke('stopDevServer', { cardId: id }),
 
-  toggleWorker: (enabled: boolean) => {
-    return ipcRenderer.invoke('project:toggleWorker', { enabled })
-  },
+  getDevServerStatus: (id) => ipcRenderer.invoke('getDevServerStatus', { cardId: id }),
 
-  runWorker: (cardId?: string) => {
-    return ipcRenderer.invoke('project:runWorker', { cardId })
-  },
+  onDevServerOutput: (cb) =>
+    createListener('dev-server:output', cb as (...args: unknown[]) => void),
 
-  cancelWorker: (jobId: string) => {
-    return ipcRenderer.invoke('project:cancelWorker', { jobId })
-  },
+  onDevServerStatus: (cb) =>
+    createListener('dev-server:status', cb as (...args: unknown[]) => void),
 
-  // -------------------------------------------------------------------------
-  // Dev Server (Test Mode)
-  // -------------------------------------------------------------------------
+  onDevServerPort: (cb) => createListener('dev-server:port', cb as (...args: unknown[]) => void),
 
-  getCardTestInfo: (projectId: string, cardId: string) => {
-    return ipcRenderer.invoke('getCardTestInfo', { projectId, cardId })
-  },
-
-  startDevServer: (params: {
-    projectId: string
-    cardId: string
-    workingDir: string
-    command: string
-    args: string[]
-    env?: Record<string, string>
-  }) => {
-    return ipcRenderer.invoke('startDevServer', params)
-  },
-
-  stopDevServer: (cardId: string) => {
-    return ipcRenderer.invoke('stopDevServer', { cardId })
-  },
-
-  getDevServerStatus: (cardId: string) => {
-    return ipcRenderer.invoke('getDevServerStatus', { cardId })
-  },
-
-  onDevServerOutput: (
-    callback: (data: { cardId: string; line: string; stream: 'stdout' | 'stderr'; timestamp: string }) => void
-  ) => {
-    const handler = (_event: IpcRendererEvent, data: { cardId: string; line: string; stream: 'stdout' | 'stderr'; timestamp: string }) => {
-      callback(data)
-    }
-    ipcRenderer.on('dev-server:output', handler)
-    return () => {
-      ipcRenderer.removeListener('dev-server:output', handler)
-    }
-  },
-
-  onDevServerStatus: (callback: (data: { cardId: string; status: string; timestamp: string }) => void) => {
-    const handler = (_event: IpcRendererEvent, data: { cardId: string; status: string; timestamp: string }) => {
-      callback(data)
-    }
-    ipcRenderer.on('dev-server:status', handler)
-    return () => {
-      ipcRenderer.removeListener('dev-server:status', handler)
-    }
-  },
-
-  onDevServerPort: (callback: (data: { cardId: string; port: number; url: string; timestamp: string }) => void) => {
-    const handler = (_event: IpcRendererEvent, data: { cardId: string; port: number; url: string; timestamp: string }) => {
-      callback(data)
-    }
-    ipcRenderer.on('dev-server:port', handler)
-    return () => {
-      ipcRenderer.removeListener('dev-server:port', handler)
-    }
-  },
-
-  // -------------------------------------------------------------------------
-  // Plan Approval
-  // -------------------------------------------------------------------------
+  onInstallOutput: (cb) => createListener('installOutput', cb as (...args: unknown[]) => void),
 
   getPendingApprovals: () => {
     const projectId = lastProjectInfo?.projectId
     return ipcRenderer.invoke('getPendingApprovals', projectId ? { projectId } : undefined)
   },
 
-  getPlanApproval: (params: { approvalId?: string; jobId?: string }) => {
-    return ipcRenderer.invoke('getPlanApproval', params)
+  getPlanApproval: (params) => ipcRenderer.invoke('getPlanApproval', params),
+
+  approvePlan: (id, notes) => ipcRenderer.invoke('approvePlan', { approvalId: id, notes }),
+
+  rejectPlan: (id, notes) => ipcRenderer.invoke('rejectPlan', { approvalId: id, notes }),
+
+  skipPlanApproval: (id) => ipcRenderer.invoke('skipPlanApproval', { approvalId: id }),
+
+  onPlanApprovalRequired: (cb) =>
+    createListener('planApprovalRequired', cb as (...args: unknown[]) => void),
+
+  getFollowUpInstructions: (params) => {
+    return ipcRenderer.invoke('getFollowUpInstructions', { ...params, projectId: getProjectId() })
   },
 
-  approvePlan: (approvalId: string, notes?: string) => {
-    return ipcRenderer.invoke('approvePlan', { approvalId, notes })
+  createFollowUpInstruction: (data) => {
+    return ipcRenderer.invoke('createFollowUpInstruction', { ...data, projectId: getProjectId() })
   },
 
-  rejectPlan: (approvalId: string, notes?: string) => {
-    return ipcRenderer.invoke('rejectPlan', { approvalId, notes })
-  },
+  deleteFollowUpInstruction: (id) =>
+    ipcRenderer.invoke('deleteFollowUpInstruction', { instructionId: id }),
 
-  skipPlanApproval: (approvalId: string) => {
-    return ipcRenderer.invoke('skipPlanApproval', { approvalId })
-  },
+  countPendingInstructions: (id) => ipcRenderer.invoke('countPendingInstructions', { jobId: id }),
 
-  onPlanApprovalRequired: (callback: (data: { projectId: string; cardId: string; jobId: string; approvalId: string }) => void) => {
-    const handler = (_event: IpcRendererEvent, data: { projectId: string; cardId: string; jobId: string; approvalId: string }) => {
-      callback(data)
-    }
-    ipcRenderer.on('planApprovalRequired', handler)
-    return () => {
-      ipcRenderer.removeListener('planApprovalRequired', handler)
-    }
-  },
+  getTotalUsage: () => ipcRenderer.invoke('usage:getTotal'),
 
-  // -------------------------------------------------------------------------
-  // Follow-up Instructions
-  // -------------------------------------------------------------------------
+  getUsageWithLimits: () => ipcRenderer.invoke('usage:getWithLimits'),
 
-  getFollowUpInstructions: (params: { jobId?: string; cardId?: string; pendingOnly?: boolean }) => {
-    const projectId = lastProjectInfo?.projectId
-    return ipcRenderer.invoke('getFollowUpInstructions', { ...params, projectId })
-  },
-
-  createFollowUpInstruction: (data: {
-    jobId: string
-    cardId: string
-    instructionType: FollowUpInstructionType
-    content: string
-    priority?: number
-  }) => {
-    const projectId = lastProjectInfo?.projectId
-    if (!projectId) return Promise.reject(new Error('No active project'))
-    return ipcRenderer.invoke('createFollowUpInstruction', { ...data, projectId })
-  },
-
-  deleteFollowUpInstruction: (instructionId: string) => {
-    return ipcRenderer.invoke('deleteFollowUpInstruction', { instructionId })
-  },
-
-  countPendingInstructions: (jobId: string) => {
-    return ipcRenderer.invoke('countPendingInstructions', { jobId })
-  },
-
-  // -------------------------------------------------------------------------
-  // Usage Tracking
-  // -------------------------------------------------------------------------
-
-  getTotalUsage: () => {
-    return ipcRenderer.invoke('usage:getTotal')
-  },
-
-  getUsageWithLimits: () => {
-    return ipcRenderer.invoke('usage:getWithLimits')
-  },
-
-  setToolLimits: (
-    toolType: AIToolType,
-    limits: {
-      hourlyTokenLimit?: number | null
-      dailyTokenLimit?: number | null
-      monthlyTokenLimit?: number | null
-      hourlyCostLimitUsd?: number | null
-      dailyCostLimitUsd?: number | null
-      monthlyCostLimitUsd?: number | null
-    }
-  ) => {
-    return ipcRenderer.invoke('usage:setToolLimits', {
+  setToolLimits: (toolType, limits) =>
+    ipcRenderer.invoke('usage:setToolLimits', {
       toolType,
       hourlyTokenLimit: limits.hourlyTokenLimit,
       dailyTokenLimit: limits.dailyTokenLimit,
@@ -811,81 +202,34 @@ const projectAPI: ProjectAPI = {
       hourlyCostLimitUsd: limits.hourlyCostLimitUsd,
       dailyCostLimitUsd: limits.dailyCostLimitUsd,
       monthlyCostLimitUsd: limits.monthlyCostLimitUsd
-    })
+    }),
+
+  getDiffFiles: (id) => ipcRenderer.invoke('diff:getFiles', id),
+
+  getDiffStats: (id) => ipcRenderer.invoke('diff:getStats', id),
+
+  getFileDiff: (id, path) => ipcRenderer.invoke('diff:getFileDiff', id, path),
+
+  getUnifiedDiff: (id, path) => ipcRenderer.invoke('diff:getUnifiedDiff', id, path),
+
+  sendChatMessage: (params) => {
+    return ipcRenderer.invoke('chat:sendMessage', { ...params, projectId: getProjectId() })
   },
 
-  // -------------------------------------------------------------------------
-  // Diff Viewer
-  // -------------------------------------------------------------------------
+  getChatMessages: (id, limit) => ipcRenderer.invoke('chat:getMessages', { jobId: id, limit }),
 
-  getDiffFiles: (worktreeId: string) => {
-    return ipcRenderer.invoke('diff:getFiles', worktreeId)
-  },
+  getChatMessagesByCard: (id, limit) =>
+    ipcRenderer.invoke('chat:getMessagesByCard', { cardId: id, limit }),
 
-  getDiffStats: (worktreeId: string) => {
-    return ipcRenderer.invoke('diff:getStats', worktreeId)
-  },
+  getChatSummary: (id) => ipcRenderer.invoke('chat:getSummary', id),
 
-  getFileDiff: (worktreeId: string, filePath: string) => {
-    return ipcRenderer.invoke('diff:getFileDiff', worktreeId, filePath)
-  },
+  getChatUnreadCount: (id) => ipcRenderer.invoke('chat:getUnreadCount', id),
 
-  getUnifiedDiff: (worktreeId: string, filePath?: string) => {
-    return ipcRenderer.invoke('diff:getUnifiedDiff', worktreeId, filePath)
-  },
+  markChatAsRead: (id) => ipcRenderer.invoke('chat:markAsRead', id),
 
-  // -------------------------------------------------------------------------
-  // Agent Chat
-  // -------------------------------------------------------------------------
+  clearChatHistory: (id) => ipcRenderer.invoke('chat:clearHistory', id),
 
-  sendChatMessage: (params: {
-    jobId: string
-    cardId: string
-    content: string
-    metadata?: Record<string, unknown>
-  }) => {
-    const projectId = lastProjectInfo?.projectId
-    if (!projectId) return Promise.reject(new Error('No active project'))
-    return ipcRenderer.invoke('chat:sendMessage', { ...params, projectId })
-  },
-
-  getChatMessages: (jobId: string, limit?: number) => {
-    return ipcRenderer.invoke('chat:getMessages', { jobId, limit })
-  },
-
-  getChatMessagesByCard: (cardId: string, limit?: number) => {
-    return ipcRenderer.invoke('chat:getMessagesByCard', { cardId, limit })
-  },
-
-  getChatSummary: (jobId: string) => {
-    return ipcRenderer.invoke('chat:getSummary', jobId)
-  },
-
-  getChatUnreadCount: (jobId: string) => {
-    return ipcRenderer.invoke('chat:getUnreadCount', jobId)
-  },
-
-  markChatAsRead: (jobId: string) => {
-    return ipcRenderer.invoke('chat:markAsRead', jobId)
-  },
-
-  clearChatHistory: (jobId: string) => {
-    return ipcRenderer.invoke('chat:clearHistory', jobId)
-  },
-
-  onChatMessage: (callback: (data: { type: string; message: AgentChatMessage; jobId: string }) => void) => {
-    const handler = (_event: IpcRendererEvent, data: { type: string; message: AgentChatMessage; jobId: string }) => {
-      callback(data)
-    }
-    ipcRenderer.on('agentChatMessage', handler)
-    return () => {
-      ipcRenderer.removeListener('agentChatMessage', handler)
-    }
-  },
-
-  // -------------------------------------------------------------------------
-  // AI Profiles
-  // -------------------------------------------------------------------------
+  onChatMessage: (cb) => createListener('agentChatMessage', cb as (...args: unknown[]) => void),
 
   getAIProfiles: () => {
     const projectId = lastProjectInfo?.projectId
@@ -893,9 +237,7 @@ const projectAPI: ProjectAPI = {
     return ipcRenderer.invoke('aiProfiles:list', projectId)
   },
 
-  getAIProfile: (profileId: string) => {
-    return ipcRenderer.invoke('aiProfiles:get', profileId)
-  },
+  getAIProfile: (id) => ipcRenderer.invoke('aiProfiles:get', id),
 
   getDefaultAIProfile: () => {
     const projectId = lastProjectInfo?.projectId
@@ -903,105 +245,58 @@ const projectAPI: ProjectAPI = {
     return ipcRenderer.invoke('aiProfiles:getDefault', projectId)
   },
 
-  createAIProfile: (data: Omit<CreateAIProfileData, 'projectId'>) => {
-    const projectId = lastProjectInfo?.projectId
-    if (!projectId) return Promise.reject(new Error('No active project'))
-    return ipcRenderer.invoke('aiProfiles:create', { ...data, projectId })
+  createAIProfile: (data) => {
+    return ipcRenderer.invoke('aiProfiles:create', { ...data, projectId: getProjectId() })
   },
 
-  updateAIProfile: (profileId: string, data: UpdateAIProfileData) => {
-    return ipcRenderer.invoke('aiProfiles:update', { profileId, data })
-  },
+  updateAIProfile: (id, data) => ipcRenderer.invoke('aiProfiles:update', { profileId: id, data }),
 
-  deleteAIProfile: (profileId: string) => {
-    return ipcRenderer.invoke('aiProfiles:delete', profileId)
-  },
+  deleteAIProfile: (id) => ipcRenderer.invoke('aiProfiles:delete', id),
 
-  setDefaultAIProfile: (profileId: string) => {
-    return ipcRenderer.invoke('aiProfiles:setDefault', profileId)
-  },
+  setDefaultAIProfile: (id) => ipcRenderer.invoke('aiProfiles:setDefault', id),
 
-  duplicateAIProfile: (profileId: string, newName: string) => {
-    return ipcRenderer.invoke('aiProfiles:duplicate', { profileId, newName })
-  },
+  duplicateAIProfile: (id, name) =>
+    ipcRenderer.invoke('aiProfiles:duplicate', { profileId: id, newName: name }),
 
-  // -------------------------------------------------------------------------
-  // Feature Suggestions
-  // -------------------------------------------------------------------------
-
-  getFeatureSuggestions: (options?: {
-    status?: FeatureSuggestionStatus
-    category?: FeatureSuggestionCategory
-    sortBy?: 'vote_count' | 'created_at' | 'priority' | 'updated_at'
-    sortOrder?: 'asc' | 'desc'
-    limit?: number
-    offset?: number
-  }) => {
+  getFeatureSuggestions: (options) => {
     const projectId = lastProjectInfo?.projectId
     if (!projectId) return Promise.resolve({ suggestions: [], error: 'No active project' })
     return ipcRenderer.invoke('featureSuggestions:list', { projectId, ...options })
   },
 
-  getFeatureSuggestion: (suggestionId: string) => {
-    return ipcRenderer.invoke('featureSuggestions:get', suggestionId)
+  getFeatureSuggestion: (id) => ipcRenderer.invoke('featureSuggestions:get', id),
+
+  createFeatureSuggestion: (data) => {
+    return ipcRenderer.invoke('featureSuggestions:create', { ...data, projectId: getProjectId() })
   },
 
-  createFeatureSuggestion: (data: Omit<CreateFeatureSuggestionData, 'projectId'>) => {
-    const projectId = lastProjectInfo?.projectId
-    if (!projectId) return Promise.reject(new Error('No active project'))
-    return ipcRenderer.invoke('featureSuggestions:create', { ...data, projectId })
+  updateFeatureSuggestion: (id, data) =>
+    ipcRenderer.invoke('featureSuggestions:update', { suggestionId: id, data }),
+
+  updateFeatureSuggestionStatus: (id, status) =>
+    ipcRenderer.invoke('featureSuggestions:updateStatus', { suggestionId: id, status }),
+
+  deleteFeatureSuggestion: (id) => ipcRenderer.invoke('featureSuggestions:delete', id),
+
+  voteOnSuggestion: (id, voteType, voterId) =>
+    ipcRenderer.invoke('featureSuggestions:vote', { suggestionId: id, voteType, voterId }),
+
+  getUserVote: (id, voterId) =>
+    ipcRenderer.invoke('featureSuggestions:getUserVote', { suggestionId: id, voterId }),
+
+  createDependency: (data) => {
+    return ipcRenderer.invoke('dependencies:create', { ...data, projectId: getProjectId() })
   },
 
-  updateFeatureSuggestion: (suggestionId: string, data: UpdateFeatureSuggestionData) => {
-    return ipcRenderer.invoke('featureSuggestions:update', { suggestionId, data })
-  },
+  getDependency: (id) => ipcRenderer.invoke('dependencies:get', id),
 
-  updateFeatureSuggestionStatus: (suggestionId: string, status: FeatureSuggestionStatus) => {
-    return ipcRenderer.invoke('featureSuggestions:updateStatus', { suggestionId, status })
-  },
+  getDependenciesForCard: (id) => ipcRenderer.invoke('dependencies:getForCard', id),
 
-  deleteFeatureSuggestion: (suggestionId: string) => {
-    return ipcRenderer.invoke('featureSuggestions:delete', suggestionId)
-  },
+  getDependenciesForCardWithCards: (id) =>
+    ipcRenderer.invoke('dependencies:getForCardWithCards', id),
 
-  voteOnSuggestion: (suggestionId: string, voteType: 'up' | 'down', voterId?: string) => {
-    return ipcRenderer.invoke('featureSuggestions:vote', { suggestionId, voteType, voterId })
-  },
-
-  getUserVote: (suggestionId: string, voterId?: string) => {
-    return ipcRenderer.invoke('featureSuggestions:getUserVote', { suggestionId, voterId })
-  },
-
-  // -------------------------------------------------------------------------
-  // Card Dependencies
-  // -------------------------------------------------------------------------
-
-  createDependency: (data: {
-    cardId: string
-    dependsOnCardId: string
-    blockingStatuses?: CardStatus[]
-    requiredStatus?: CardStatus
-  }) => {
-    const projectId = lastProjectInfo?.projectId
-    if (!projectId) return Promise.reject(new Error('No active project'))
-    return ipcRenderer.invoke('dependencies:create', { ...data, projectId })
-  },
-
-  getDependency: (dependencyId: string) => {
-    return ipcRenderer.invoke('dependencies:get', dependencyId)
-  },
-
-  getDependenciesForCard: (cardId: string) => {
-    return ipcRenderer.invoke('dependencies:getForCard', cardId)
-  },
-
-  getDependenciesForCardWithCards: (cardId: string) => {
-    return ipcRenderer.invoke('dependencies:getForCardWithCards', cardId)
-  },
-
-  getDependentsOfCard: (cardId: string) => {
-    return ipcRenderer.invoke('dependencies:getDependents', cardId)
-  },
+  getDependentsOfCard: (id) => ipcRenderer.invoke('dependencies:getDependents', id),
+  getDependentsOfCardWithCards: (id) => ipcRenderer.invoke('dependencies:getDependentsOfCardWithCards', id),
 
   getDependenciesByProject: () => {
     const projectId = lastProjectInfo?.projectId
@@ -1009,210 +304,185 @@ const projectAPI: ProjectAPI = {
     return ipcRenderer.invoke('dependencies:getByProject', projectId)
   },
 
-  countDependenciesForCard: (cardId: string) => {
-    return ipcRenderer.invoke('dependencies:countForCard', cardId)
+  countDependenciesForCard: (id) => ipcRenderer.invoke('dependencies:countForCard', id),
+
+  checkCanMoveToStatus: (id, status) =>
+    ipcRenderer.invoke('dependencies:checkCanMove', { cardId: id, targetStatus: status }),
+
+  checkWouldCreateCycle: (id, dependsOnId) =>
+    ipcRenderer.invoke('dependencies:checkCycle', { cardId: id, dependsOnCardId: dependsOnId }),
+
+  updateDependency: (id, data) =>
+    ipcRenderer.invoke('dependencies:update', { dependencyId: id, data }),
+
+  toggleDependency: (id, isActive) =>
+    ipcRenderer.invoke('dependencies:toggle', { dependencyId: id, isActive }),
+
+  deleteDependency: (id) => ipcRenderer.invoke('dependencies:delete', id),
+
+  deleteDependencyBetween: (id, dependsOnId) =>
+    ipcRenderer.invoke('dependencies:deleteBetween', { cardId: id, dependsOnCardId: dependsOnId }),
+
+  // Card Comments
+  getCardComments: (cardId) => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) return Promise.resolve({ comments: [] })
+    return ipcRenderer.invoke('getCardComments', { cardId, projectId })
   },
 
-  checkCanMoveToStatus: (cardId: string, targetStatus: CardStatus) => {
-    return ipcRenderer.invoke('dependencies:checkCanMove', { cardId, targetStatus })
-  },
-
-  checkWouldCreateCycle: (cardId: string, dependsOnCardId: string) => {
-    return ipcRenderer.invoke('dependencies:checkCycle', { cardId, dependsOnCardId })
-  },
-
-  updateDependency: (dependencyId: string, data: {
-    blockingStatuses?: CardStatus[]
-    requiredStatus?: CardStatus
-    isActive?: boolean
-  }) => {
-    return ipcRenderer.invoke('dependencies:update', { dependencyId, data })
-  },
-
-  toggleDependency: (dependencyId: string, isActive: boolean) => {
-    return ipcRenderer.invoke('dependencies:toggle', { dependencyId, isActive })
-  },
-
-  deleteDependency: (dependencyId: string) => {
-    return ipcRenderer.invoke('dependencies:delete', dependencyId)
-  },
-
-  deleteDependencyBetween: (cardId: string, dependsOnCardId: string) => {
-    return ipcRenderer.invoke('dependencies:deleteBetween', { cardId, dependsOnCardId })
-  },
-
-  // -------------------------------------------------------------------------
-  // State Updates
-  // -------------------------------------------------------------------------
-
-  onStateUpdate: (callback) => {
-    const handler = () => {
-      callback()
-    }
-    ipcRenderer.on('stateUpdated', handler)
-    return () => {
-      ipcRenderer.removeListener('stateUpdated', handler)
-    }
-  },
-
-  onWorkerLog: (callback) => {
-    const handler = (_event: IpcRendererEvent, log: WorkerLogMessage) => {
-      callback(log)
-    }
-    ipcRenderer.on('workerLog', handler)
-    return () => {
-      ipcRenderer.removeListener('workerLog', handler)
-    }
-  },
-
-  // -------------------------------------------------------------------------
-  // Jobs
-  // -------------------------------------------------------------------------
-
-  getJobs: () => {
-    return ipcRenderer.invoke('project:getJobs')
-  },
-
-  // -------------------------------------------------------------------------
-  // Events
-  // -------------------------------------------------------------------------
-
-  getEvents: (limit?: number) => {
-    return ipcRenderer.invoke('project:getEvents', { limit })
-  },
-
-  // -------------------------------------------------------------------------
-  // FlowPatch workspace (.flowpatch)
-  // -------------------------------------------------------------------------
-
-  getWorkspaceStatus: () => {
-    return ipcRenderer.invoke('project:getWorkspaceStatus')
-  },
-
-  ensureWorkspace: () => {
-    return ipcRenderer.invoke('project:ensureWorkspace')
-  },
-
-  indexBuild: () => {
-    return ipcRenderer.invoke('project:indexBuild')
-  },
-
-  indexRefresh: () => {
-    return ipcRenderer.invoke('project:indexRefresh')
-  },
-
-  indexWatchStart: () => {
-    return ipcRenderer.invoke('project:indexWatchStart')
-  },
-
-  indexWatchStop: () => {
-    return ipcRenderer.invoke('project:indexWatchStop')
-  },
-
-  validateConfig: () => {
-    return ipcRenderer.invoke('project:validateConfig')
-  },
-
-  docsRefresh: () => {
-    return ipcRenderer.invoke('project:docsRefresh')
-  },
-
-  contextPreview: (task: string) => {
-    return ipcRenderer.invoke('project:contextPreview', { task })
-  },
-
-  repairWorkspace: () => {
-    return ipcRenderer.invoke('project:repairWorkspace')
-  },
-
-  migrateWorkspace: () => {
-    return ipcRenderer.invoke('project:migrateWorkspace')
-  },
-
-  openWorkspaceFolder: () => {
-    return ipcRenderer.invoke('project:openWorkspaceFolder')
-  },
-
-  retrieve: (kind: 'symbol' | 'text', query: string, limit?: number) => {
-    return ipcRenderer.invoke('project:retrieve', { kind, query, limit })
-  },
-
-  getFlowPatchConfig: () => {
-    return ipcRenderer.invoke('project:getFlowPatchConfig')
-  },
-
-  createPlanFile: () => {
-    return ipcRenderer.invoke('project:createPlanFile')
-  },
-
-  // -------------------------------------------------------------------------
-  // Configuration Sync
-  // -------------------------------------------------------------------------
-
-  syncConfig: (priorityOverride?: 'database' | 'file') => {
+  createCardComment: (data) => {
     const projectId = lastProjectInfo?.projectId
     if (!projectId) return Promise.reject(new Error('No active project'))
-    return ipcRenderer.invoke('syncProjectConfig', { projectId, priorityOverride })
+    return ipcRenderer.invoke('createCardComment', {
+      cardId: data.cardId,
+      projectId,
+      body: data.body,
+      priority: data.priority
+    })
   },
 
-  getConfig: () => {
+  updateCommentPriority: (commentId, priority) => {
     const projectId = lastProjectInfo?.projectId
-    if (!projectId) return Promise.reject(new Error('No active project'))
-    return ipcRenderer.invoke('getProjectConfig', { projectId })
+    if (!projectId) return Promise.resolve({ comment: null })
+    return ipcRenderer.invoke('updateCommentPriority', { commentId, priority, projectId })
   },
 
-  updateFeatureConfig: (featureKey: string, config: Record<string, unknown>) => {
+  editCardComment: (commentId, body) => {
     const projectId = lastProjectInfo?.projectId
-    if (!projectId) return Promise.reject(new Error('No active project'))
-    return ipcRenderer.invoke('updateFeatureConfig', { projectId, featureKey, config })
+    if (!projectId) return Promise.resolve({ error: 'No project selected' })
+    return ipcRenderer.invoke('editCardComment', { commentId, body, projectId })
   },
 
-  getConfigSyncPriority: () => {
+  resolveComment: (commentId, jobId) => {
     const projectId = lastProjectInfo?.projectId
-    if (!projectId) return Promise.reject(new Error('No active project'))
-    return ipcRenderer.invoke('getConfigSyncPriority', { projectId })
+    if (!projectId) return Promise.resolve({ comment: null })
+    return ipcRenderer.invoke('resolveComment', { commentId, projectId, jobId })
   },
 
-  setConfigSyncPriority: (priority: 'database' | 'file') => {
+  reopenComment: (commentId) => {
     const projectId = lastProjectInfo?.projectId
-    if (!projectId) return Promise.reject(new Error('No active project'))
-    return ipcRenderer.invoke('setConfigSyncPriority', { projectId, priority })
+    if (!projectId) return Promise.resolve({ comment: null })
+    return ipcRenderer.invoke('reopenComment', { commentId, projectId })
   },
 
-  startConfigWatcher: () => {
+  toggleCommentInclusion: (commentId, include) => {
     const projectId = lastProjectInfo?.projectId
-    if (!projectId) return Promise.reject(new Error('No active project'))
-    return ipcRenderer.invoke('startConfigFileWatcher', { projectId })
+    if (!projectId) return Promise.resolve({ comment: null })
+    return ipcRenderer.invoke('toggleCommentInclusion', { commentId, include, projectId })
   },
 
-  stopConfigWatcher: () => {
+  deleteCardComment: (commentId) => {
     const projectId = lastProjectInfo?.projectId
-    if (!projectId) return Promise.reject(new Error('No active project'))
-    return ipcRenderer.invoke('stopConfigFileWatcher', { projectId })
+    if (!projectId) return Promise.resolve({ success: false })
+    return ipcRenderer.invoke('deleteCardComment', { commentId, projectId })
   },
 
-  onConfigChanged: (
-    callback: (data: { policy: PolicyConfig; source: 'database' | 'file' | 'merged' }) => void
-  ) => {
-    const handler = (_event: IpcRendererEvent, data: { policy: PolicyConfig; source: 'database' | 'file' | 'merged' }) => {
-      callback(data)
-    }
-    ipcRenderer.on('configChanged', handler)
-    return () => {
-      ipcRenderer.removeListener('configChanged', handler)
-    }
-  }
+  deduplicateCardComments: (cardId) => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) return Promise.resolve({ deleted: 0 })
+    return ipcRenderer.invoke('deduplicateCardComments', { cardId, projectId })
+  },
+
+  deduplicateAllComments: () => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) return Promise.resolve({ totalDeleted: 0, cardBreakdown: [] })
+    return ipcRenderer.invoke('deduplicateAllComments', { projectId })
+  },
+
+  onStateUpdate: (cb) => createListener('stateUpdated', cb),
+
+  onWorkerLog: (cb) => createListener('workerLog', cb as (...args: unknown[]) => void),
+
+  getJobs: () => ipcRenderer.invoke('project:getJobs'),
+
+  getEvents: (limit) => ipcRenderer.invoke('project:getEvents', { limit }),
+
+  getCardEvents: (cardId, limit) => ipcRenderer.invoke('project:getCardEvents', { cardId, limit }),
+
+  getCardUsage: (cardId) => ipcRenderer.invoke('project:getCardUsage', { cardId }),
+
+  getWorkspaceStatus: () => ipcRenderer.invoke('project:getWorkspaceStatus'),
+
+  ensureWorkspace: () => ipcRenderer.invoke('project:ensureWorkspace'),
+
+  indexBuild: () => ipcRenderer.invoke('project:indexBuild'),
+
+  indexRefresh: () => ipcRenderer.invoke('project:indexRefresh'),
+
+  indexWatchStart: () => ipcRenderer.invoke('project:indexWatchStart'),
+
+  indexWatchStop: () => ipcRenderer.invoke('project:indexWatchStop'),
+
+  validateConfig: () => ipcRenderer.invoke('project:validateConfig'),
+
+  docsRefresh: () => ipcRenderer.invoke('project:docsRefresh'),
+
+  contextPreview: (task) => ipcRenderer.invoke('project:contextPreview', { task }),
+
+  repairWorkspace: () => ipcRenderer.invoke('project:repairWorkspace'),
+
+  migrateWorkspace: () => ipcRenderer.invoke('project:migrateWorkspace'),
+
+  openWorkspaceFolder: () => ipcRenderer.invoke('project:openWorkspaceFolder'),
+
+  retrieve: (kind, query, limit) => ipcRenderer.invoke('project:retrieve', { kind, query, limit }),
+
+  getFlowPatchConfig: () => ipcRenderer.invoke('project:getFlowPatchConfig'),
+
+  createPlanFile: () => ipcRenderer.invoke('project:createPlanFile'),
+
+  syncConfig: (priorityOverride) => {
+    return ipcRenderer.invoke('syncProjectConfig', { projectId: getProjectId(), priorityOverride })
+  },
+
+  getConfig: () => ipcRenderer.invoke('getProjectConfig', { projectId: getProjectId() }),
+
+  updateFeatureConfig: (key, config) => {
+    return ipcRenderer.invoke('updateFeatureConfig', {
+      projectId: getProjectId(),
+      featureKey: key,
+      config
+    })
+  },
+
+  getConfigSyncPriority: () =>
+    ipcRenderer.invoke('getConfigSyncPriority', { projectId: getProjectId() }),
+
+  setConfigSyncPriority: (priority) =>
+    ipcRenderer.invoke('setConfigSyncPriority', { projectId: getProjectId(), priority }),
+
+  startConfigWatcher: () =>
+    ipcRenderer.invoke('startConfigFileWatcher', { projectId: getProjectId() }),
+
+  stopConfigWatcher: () =>
+    ipcRenderer.invoke('stopConfigFileWatcher', { projectId: getProjectId() }),
+
+  onConfigChanged: (cb) => createListener('configChanged', cb as (...args: unknown[]) => void),
+
+  // Diagnostic methods for debugging worker issues
+  getCardEligibilityDiagnostic: (cardId: string) => {
+    const projectId = lastProjectInfo?.projectId
+    return ipcRenderer.invoke('getCardEligibilityDiagnostic', { cardId, projectId })
+  },
+
+  getReadyCardsNotProcessing: () => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) return Promise.resolve({ diagnostics: [], error: 'No active project' })
+    return ipcRenderer.invoke('getReadyCardsNotProcessing', { projectId })
+  },
+
+  // Migration methods
+  checkMigrationNeeded: (params) => ipcRenderer.invoke('checkMigrationNeeded', params),
+
+  getCentralDataCounts: (params) => ipcRenderer.invoke('getCentralDataCounts', params),
+
+  migrateProjectToLocal: (params) => ipcRenderer.invoke('migrateProjectToLocal', params)
 }
-
-// ============================================================================
-// Electron API for CardDrawer compatibility
-// ============================================================================
 
 const allowedInvokeChannels = [
   'getThemePreference',
   'setThemePreference',
   'getSystemTheme',
-  // AI drafting
   'generateCardDescription',
   'generateCardList',
   'generateSplitCards',
@@ -1220,12 +490,11 @@ const allowedInvokeChannels = [
   'openWorktreeFolder',
   'removeWorktree',
   'recreateWorktree',
-  // Dev Server (Test Mode)
   'getCardTestInfo',
+  'prepareTestEnvironment',
   'startDevServer',
   'stopDevServer',
   'getDevServerStatus',
-  // Onboarding dialogs (LabelSetupDialog, GithubProjectPromptDialog)
   'getRepoOnboardingState',
   'listRepoLabels',
   'applyLabelConfig',
@@ -1236,49 +505,46 @@ const allowedInvokeChannels = [
   'createGithubProjectV2',
   'listGithubRepositoryProjects',
   'linkGithubProjectV2',
-  // Sync Scheduler
-  'getSyncSchedulerStatus'
+  'getSyncSchedulerStatus',
+  'getCardEligibilityDiagnostic',
+  'getReadyCardsNotProcessing',
+  'providers:getAvailability'
 ]
 
 const allowedSendChannels = ['openExternal']
 
-const allowedOnChannels = ['themeChanged', 'dev-server:output', 'dev-server:status', 'dev-server:port']
+const allowedOnChannels = [
+  'themeChanged',
+  'dev-server:output',
+  'dev-server:status',
+  'dev-server:port',
+  'migration-progress',
+  'worker:manualTestPrompt'
+]
 
 const electronAPI = {
   ipcRenderer: {
     invoke: (channel: string, ...args: unknown[]) => {
-      if (allowedInvokeChannels.includes(channel)) {
-        return ipcRenderer.invoke(channel, ...args)
-      }
-      throw new Error(`Channel ${channel} not allowed`)
+      if (!allowedInvokeChannels.includes(channel))
+        throw new Error(`Channel ${channel} not allowed`)
+      return ipcRenderer.invoke(channel, ...args)
     },
     send: (channel: string, ...args: unknown[]) => {
-      if (allowedSendChannels.includes(channel)) {
-        ipcRenderer.send(channel, ...args)
-        return
-      }
-      throw new Error(`Channel ${channel} not allowed`)
+      if (!allowedSendChannels.includes(channel)) throw new Error(`Channel ${channel} not allowed`)
+      ipcRenderer.send(channel, ...args)
     },
-    on: (channel: string, callback: (...args: unknown[]) => void) => {
-      if (allowedOnChannels.includes(channel)) {
-        ipcRenderer.on(channel, callback)
-        return
-      }
-      throw new Error(`Channel ${channel} not allowed for on()`)
+    on: (channel: string, cb: (...args: unknown[]) => void) => {
+      if (!allowedOnChannels.includes(channel))
+        throw new Error(`Channel ${channel} not allowed for on()`)
+      ipcRenderer.on(channel, cb)
     },
-    removeListener: (channel: string, callback: (...args: unknown[]) => void) => {
-      if (allowedOnChannels.includes(channel)) {
-        ipcRenderer.removeListener(channel, callback)
-        return
-      }
-      throw new Error(`Channel ${channel} not allowed for removeListener()`)
+    removeListener: (channel: string, cb: (...args: unknown[]) => void) => {
+      if (!allowedOnChannels.includes(channel))
+        throw new Error(`Channel ${channel} not allowed for removeListener()`)
+      ipcRenderer.removeListener(channel, cb)
     }
   }
 }
-
-// ============================================================================
-// Expose API
-// ============================================================================
 
 if (process.contextIsolated) {
   try {

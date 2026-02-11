@@ -25,6 +25,9 @@ import { registerAIProfileHandlers } from './ai-profiles'
 import { registerFeatureSuggestionHandlers } from './feature-suggestions'
 import { registerDependencyHandlers } from './dependencies'
 import { registerUpdaterHandlers } from './updater'
+import { registerMigrationHandlers } from './migration'
+import { registerGitAuthHandlers } from './git-auth'
+import { registerCommentHandlers } from './comments'
 import { sendToAllTabs } from '../../tabManager'
 
 let mainWindowRef: BrowserWindow | null = null
@@ -67,6 +70,9 @@ export function registerAllHandlers(mainWindow: BrowserWindow): void {
   registerFeatureSuggestionHandlers(notifyRenderer)
   registerDependencyHandlers(notifyRenderer)
   registerUpdaterHandlers()
+  registerMigrationHandlers(notifyRenderer)
+  registerGitAuthHandlers()
+  registerCommentHandlers(notifyRenderer)
 }
 
 // Re-export individual registrations for granular use
@@ -89,7 +95,9 @@ export {
   registerAIProfileHandlers,
   registerFeatureSuggestionHandlers,
   registerDependencyHandlers,
-  registerUpdaterHandlers
+  registerUpdaterHandlers,
+  registerMigrationHandlers,
+  registerCommentHandlers
 }
 
 // Re-export onboarding helpers used by repo handlers

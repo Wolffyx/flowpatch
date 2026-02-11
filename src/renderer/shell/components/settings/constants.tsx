@@ -20,7 +20,9 @@ import {
   Zap,
   ClipboardList,
   Users,
-  Info
+  Info,
+  Database,
+  Wrench
 } from 'lucide-react'
 import type { ThemePreference, WorkerToolPreference, SectionConfig } from './types'
 import type { ThinkingMode, PlanningMode, MergeStrategy, ConflictResolution } from '@shared/types'
@@ -32,6 +34,8 @@ export const SETTINGS_SECTIONS: SectionConfig[] = [
   { id: 'shortcuts', label: 'Shortcuts', icon: Key },
   { id: 'ai-agents', label: 'AI Agents', icon: Bot },
   { id: 'usage-limits', label: 'Usage & Limits', icon: Zap },
+  { id: 'storage', label: 'Storage', icon: Database },
+  { id: 'git-auth', label: 'Git Auth', icon: Wrench },
   { id: 'danger-zone', label: 'Danger Zone', icon: AlertTriangle },
   { id: 'about', label: 'About', icon: Info }
 ]
@@ -71,26 +75,37 @@ interface ToolOption {
   title: string
   description: string
   icon: ReactNode
+  providerKey: string | null // Maps to CLI provider key, null for 'auto'
 }
 
 export const TOOL_OPTIONS: ToolOption[] = [
   {
     id: 'auto',
     title: 'Auto',
-    description: 'Use Claude Code if available; otherwise use Codex.',
-    icon: <Sparkles className="h-4 w-4 text-foreground/70" />
+    description: 'Try Claude Code, then Codex, then OpenCode and others in order of availability.',
+    icon: <Sparkles className="h-4 w-4 text-foreground/70" />,
+    providerKey: null
   },
   {
     id: 'claude',
     title: 'Claude Code',
     description: 'Prefer the Claude Code CLI when the worker runs.',
-    icon: <Bot className="h-4 w-4 text-foreground/70" />
+    icon: <Bot className="h-4 w-4 text-foreground/70" />,
+    providerKey: 'claude'
   },
   {
     id: 'codex',
     title: 'Codex',
     description: 'Prefer the Codex CLI when the worker runs.',
-    icon: <Code className="h-4 w-4 text-foreground/70" />
+    icon: <Code className="h-4 w-4 text-foreground/70" />,
+    providerKey: 'codex'
+  },
+  {
+    id: 'opencode',
+    title: 'OpenCode',
+    description: 'Prefer the OpenCode CLI when the worker runs.',
+    icon: <Wrench className="h-4 w-4 text-foreground/70" />,
+    providerKey: 'opencode'
   }
 ]
 
@@ -220,6 +235,16 @@ export const DEFAULT_TOOL_LIMITS = {
   hourlyTokenLimit: '',
   dailyTokenLimit: '',
   monthlyTokenLimit: '',
+  hourlyCostLimit: '',
+  dailyCostLimit: '',
+  monthlyCostLimit: ''
+}
+
+// Suggested limits for typical use (hourly 200k–500k, daily 1M–2M, monthly 10M+)
+export const SUGGESTED_TOOL_LIMITS = {
+  hourlyTokenLimit: '300000',
+  dailyTokenLimit: '1500000',
+  monthlyTokenLimit: '10000000',
   hourlyCostLimit: '',
   dailyCostLimit: '',
   monthlyCostLimit: ''

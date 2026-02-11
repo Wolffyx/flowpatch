@@ -37,29 +37,35 @@ export function useShellProjects(
     }
   }, [])
 
-  const handleOpenExistingProject = useCallback(async (project: Project): Promise<void> => {
-    try {
-      await window.shellAPI.createTab(project.id, project.local_path)
-      setShowHome(false)
-    } catch (error) {
-      console.error('Failed to open project:', error)
-    }
-  }, [setShowHome])
+  const handleOpenExistingProject = useCallback(
+    async (project: Project): Promise<void> => {
+      try {
+        await window.shellAPI.createTab(project.id, project.local_path)
+        setShowHome(false)
+      } catch (error) {
+        console.error('Failed to open project:', error)
+      }
+    },
+    [setShowHome]
+  )
 
-  const handleRemoveRecentProject = useCallback(async (project: Project): Promise<void> => {
-    const confirmed = window.confirm(
-      `Remove "${project.name}" from recent projects?\n\nThis deletes FlowPatch's local data for this project (cards, jobs, settings) but does not delete files on disk.`
-    )
-    if (!confirmed) return
+  const handleRemoveRecentProject = useCallback(
+    async (project: Project): Promise<void> => {
+      const confirmed = window.confirm(
+        `Remove "${project.name}" from recent projects?\n\nThis deletes FlowPatch's local data for this project (cards, jobs, settings) but does not delete files on disk.`
+      )
+      if (!confirmed) return
 
-    try {
-      await window.shellAPI.deleteProject(project.id)
-      await loadProjects()
-      await loadTabs()
-    } catch (error) {
-      console.error('Failed to delete project:', error)
-    }
-  }, [loadProjects, loadTabs])
+      try {
+        await window.shellAPI.deleteProject(project.id)
+        await loadProjects()
+        await loadTabs()
+      } catch (error) {
+        console.error('Failed to delete project:', error)
+      }
+    },
+    [loadProjects, loadTabs]
+  )
 
   const handleOpenRepo = useCallback(async (): Promise<void> => {
     const result = await window.shellAPI.selectDirectory()
@@ -79,19 +85,22 @@ export function useShellProjects(
     }
   }, [loadProjects, setShowHome])
 
-  const handleCreateRepo = useCallback(async (payload: CreateRepoPayload): Promise<void> => {
-    // Use the existing createRepo IPC handler
-    const result = await window.electron.ipcRenderer.invoke('createRepo', payload)
-    if (result && typeof result === 'object' && 'error' in result) {
-      throw new Error(result.error as string)
-    }
-    if (result && typeof result === 'object' && 'project' in result) {
-      const project = result.project as Project
-      await window.shellAPI.createTab(project.id, project.local_path)
-      await loadProjects()
-      setShowHome(false)
-    }
-  }, [loadProjects, setShowHome])
+  const handleCreateRepo = useCallback(
+    async (payload: CreateRepoPayload): Promise<void> => {
+      // Use the existing createRepo IPC handler
+      const result = await window.electron.ipcRenderer.invoke('createRepo', payload)
+      if (result && typeof result === 'object' && 'error' in result) {
+        throw new Error(result.error as string)
+      }
+      if (result && typeof result === 'object' && 'project' in result) {
+        const project = result.project as Project
+        await window.shellAPI.createTab(project.id, project.local_path)
+        await loadProjects()
+        setShowHome(false)
+      }
+    },
+    [loadProjects, setShowHome]
+  )
 
   return {
     projects,

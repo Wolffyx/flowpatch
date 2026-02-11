@@ -241,7 +241,13 @@ export async function retry<T>(
       }
 
       // Calculate delay
-      const delay = calculateBackoffDelay(attempt, initialDelayMs, maxDelayMs, backoffMultiplier, jitter)
+      const delay = calculateBackoffDelay(
+        attempt,
+        initialDelayMs,
+        maxDelayMs,
+        backoffMultiplier,
+        jitter
+      )
       totalDelayMs += delay
 
       // Call onRetry callback

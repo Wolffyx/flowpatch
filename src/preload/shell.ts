@@ -48,6 +48,8 @@ export interface ShellAPI {
   getProjectSettings: (projectKey: string) => Promise<Record<string, string | null>>
   setProjectOverride: (projectKey: string, patch: Record<string, string | null>) => Promise<void>
   clearProjectOverrides: (projectKey: string, keys?: string[]) => Promise<void>
+  getStoragePreference: (projectId: string) => Promise<{ useLocalDb: boolean }>
+  setStoragePreference: (projectId: string, useLocalDb: boolean) => Promise<{ success: boolean }>
 
   // Activity
   getActivity: () => Promise<GlobalActivity>
@@ -57,6 +59,18 @@ export interface ShellAPI {
   // Jobs (Activity feed)
   getRecentJobs: (limit?: number) => Promise<import('../shared/types').Job[]>
   onStateUpdated: (callback: () => void) => () => void
+
+  // Unified Worker Status
+  getWorkerStatus: (projectId: string) => Promise<ProjectWorkerStatus | null>
+  onWorkerStatusChanged: (
+    callback: (data: { projectId: string; status: WorkerStatus }) => void
+  ) => () => void
+  clearWorkerErrorStatus: (projectId: string) => Promise<boolean>
+  getWorkerErrorHistory: (projectId: string) => Promise<WorkerError[]>
+  clearWorkerErrorHistory: (projectId: string) => Promise<boolean>
+  retryLastFailedCard: (
+    projectId: string
+  ) => Promise<{ success: boolean; cardId?: string; error?: string }>
 
   // Logs
   getLogs: (projectKey?: string) => Promise<LogEntry[]>
@@ -85,7 +99,10 @@ export interface ShellAPI {
   onShortcutsUpdated: (callback: () => void) => () => void
 
   // Agent Chat
-  getChatMessages: (jobId: string, limit?: number) => Promise<{ messages: AgentChatMessage[]; error?: string }>
+  getChatMessages: (
+    jobId: string,
+    limit?: number
+  ) => Promise<{ messages: AgentChatMessage[]; error?: string }>
   sendChatMessage: (params: {
     jobId: string
     cardId: string
@@ -95,7 +112,17 @@ export interface ShellAPI {
   }) => Promise<{ message: AgentChatMessage; error?: string }>
   markChatAsRead: (jobId: string) => Promise<{ success: boolean; error?: string }>
   clearChatHistory: (jobId: string) => Promise<{ success: boolean; count: number; error?: string }>
-  onChatMessage: (callback: (data: { type: string; message: AgentChatMessage; jobId: string }) => void) => () => void
+  onChatMessage: (
+    callback: (data: { type: string; message: AgentChatMessage; jobId: string }) => void
+  ) => () => void
+
+  // Git Auth
+  getGitAuthState: (
+    projectId: string
+  ) => Promise<{ success: boolean; state: any; mode: any; forceSshRewrite: boolean }>
+  setGitAuthMode: (projectId: string, payload: { mode: any; forceSshRewrite?: boolean }) => Promise<{ success: boolean }>
+  fixRemoteToSsh: (projectId: string) => Promise<{ success: boolean; error?: string; newUrl?: string }>
+  testGitAuth: (projectId: string) => Promise<{ success: boolean; state?: any; error?: string }>
 
   // App Reset (Dev only)
   resetEverything: () => Promise<{ success: boolean; error?: string }>
@@ -205,12 +232,58 @@ interface AgentChatMessage {
 
 // Auto-Updater types
 interface UpdateStatus {
-  state: 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
+  state:
+    | 'idle'
+    | 'checking'
+    | 'available'
+    | 'not-available'
+    | 'downloading'
+    | 'downloaded'
+    | 'error'
   version?: string
   releaseNotes?: string
   releaseDate?: string
   downloadProgress?: number
   error?: string
+}
+
+// Worker Status types (unified)
+type WorkerState =
+  | 'idle'
+  | 'queued'
+  | 'processing'
+  | 'testing'
+  | 'pushing'
+  | 'paused'
+  | 'failed'
+  | 'succeeded'
+
+interface WorkerError {
+  error: string
+  cardId?: string
+  cardTitle?: string
+  jobId?: string
+  phase?: string
+  timestamp: string
+}
+
+interface WorkerStatus {
+  state: WorkerState
+  activeCardId?: string
+  activeCardTitle?: string
+  activeJobId?: string
+  currentPhase?: string
+  lastError?: string
+  lastFailedCardId?: string
+  lastRunAt?: string
+  updatedAt: string
+  errorHistory?: WorkerError[]
+}
+
+interface ProjectWorkerStatus {
+  projectId: string
+  workerEnabled: boolean
+  status: WorkerStatus
 }
 
 // ============================================================================
@@ -332,6 +405,14 @@ const shellAPI: ShellAPI = {
     return ipcRenderer.invoke('settings:clearProjectOverride', { projectKey, keys })
   },
 
+  getStoragePreference: (projectId: string) => {
+    return ipcRenderer.invoke('settings:getStoragePreference', projectId)
+  },
+
+  setStoragePreference: (projectId: string, useLocalDb: boolean) => {
+    return ipcRenderer.invoke('settings:setStoragePreference', projectId, useLocalDb)
+  },
+
   // -------------------------------------------------------------------------
   // Activity
   // -------------------------------------------------------------------------
@@ -368,6 +449,45 @@ const shellAPI: ShellAPI = {
     return () => {
       ipcRenderer.removeListener('stateUpdated', handler)
     }
+  },
+
+  // -------------------------------------------------------------------------
+  // Unified Worker Status
+  // -------------------------------------------------------------------------
+
+  getWorkerStatus: (projectId: string) => {
+    return ipcRenderer.invoke('worker:getStatus', projectId)
+  },
+
+  onWorkerStatusChanged: (
+    callback: (data: { projectId: string; status: WorkerStatus }) => void
+  ) => {
+    const handler = (
+      _event: IpcRendererEvent,
+      data: { projectId: string; status: WorkerStatus }
+    ) => {
+      callback(data)
+    }
+    ipcRenderer.on('worker:statusChanged', handler)
+    return () => {
+      ipcRenderer.removeListener('worker:statusChanged', handler)
+    }
+  },
+
+  clearWorkerErrorStatus: (projectId: string) => {
+    return ipcRenderer.invoke('worker:clearErrorStatus', projectId)
+  },
+
+  getWorkerErrorHistory: (projectId: string) => {
+    return ipcRenderer.invoke('worker:getErrorHistory', projectId)
+  },
+
+  clearWorkerErrorHistory: (projectId: string) => {
+    return ipcRenderer.invoke('worker:clearErrorHistory', projectId)
+  },
+
+  retryLastFailedCard: (projectId: string) => {
+    return ipcRenderer.invoke('worker:retryLastFailed', projectId)
   },
 
   // -------------------------------------------------------------------------
@@ -488,8 +608,13 @@ const shellAPI: ShellAPI = {
     return ipcRenderer.invoke('chat:clearHistory', jobId)
   },
 
-  onChatMessage: (callback: (data: { type: string; message: AgentChatMessage; jobId: string }) => void) => {
-    const handler = (_event: IpcRendererEvent, data: { type: string; message: AgentChatMessage; jobId: string }) => {
+  onChatMessage: (
+    callback: (data: { type: string; message: AgentChatMessage; jobId: string }) => void
+  ) => {
+    const handler = (
+      _event: IpcRendererEvent,
+      data: { type: string; message: AgentChatMessage; jobId: string }
+    ) => {
       callback(data)
     }
     ipcRenderer.on('agentChatMessage', handler)
@@ -504,6 +629,26 @@ const shellAPI: ShellAPI = {
 
   resetEverything: () => {
     return ipcRenderer.invoke('app:resetEverything')
+  },
+
+  // -------------------------------------------------------------------------
+  // Git Auth
+  // -------------------------------------------------------------------------
+
+  getGitAuthState: (projectId: string) => {
+    return ipcRenderer.invoke('gitAuth:getState', { projectId })
+  },
+
+  setGitAuthMode: (projectId: string, payload: { mode: any; forceSshRewrite?: boolean }) => {
+    return ipcRenderer.invoke('gitAuth:setMode', { projectId, ...payload })
+  },
+
+  fixRemoteToSsh: (projectId: string) => {
+    return ipcRenderer.invoke('gitAuth:fixRemote', { projectId })
+  },
+
+  testGitAuth: (projectId: string) => {
+    return ipcRenderer.invoke('gitAuth:test', { projectId })
   },
 
   onDevResetTrigger: (callback: () => void) => {
@@ -583,8 +728,19 @@ const allowedInvokeChannels = [
   'runWorker',
   'setProjectRemote',
   'checkCliAgents',
+  // Provider availability
+  'providers:getAvailability',
   // Project identity (for remote selection)
-  'shell:getProjectIdentity'
+  'shell:getProjectIdentity',
+  // Migration
+  'getMigrationStatus',
+  'getCentralDataCounts',
+  'migrateProjectToLocal',
+  // Git Auth
+  'gitAuth:getState',
+  'gitAuth:setMode',
+  'gitAuth:fixRemote',
+  'gitAuth:test'
 ]
 
 const electronAPI = {

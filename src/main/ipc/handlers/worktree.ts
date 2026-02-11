@@ -7,7 +7,7 @@ import { ipcMain, shell } from 'electron'
 import { getProject, listWorktrees, getWorktree, updateWorktreeStatus } from '../../db'
 import { GitWorktreeManager } from '../../services/git-worktree-manager'
 import { WorktreeReconciler } from '../../services/worktree-reconciler'
-import { logAction } from '@shared/utils'
+import { logAction } from '../../utils/main-logger'
 import type { PolicyConfig } from '@shared/types'
 
 // ============================================================================

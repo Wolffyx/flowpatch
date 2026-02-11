@@ -29,11 +29,7 @@ function getAudioContext(): AudioContext {
 }
 
 // Generate a chord (multiple frequencies)
-function generateChord(
-  frequencies: number[],
-  duration: number,
-  volume: number = 0.2
-): AudioBuffer {
+function generateChord(frequencies: number[], duration: number, volume: number = 0.2): AudioBuffer {
   const ctx = getAudioContext()
   const sampleRate = ctx.sampleRate
   const length = sampleRate * duration

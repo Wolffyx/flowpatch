@@ -1,28 +1,34 @@
-import { Play, TestTube, ExternalLink, Scissors, Info } from 'lucide-react'
+import { Play, TestTube, ExternalLink, Scissors, Info, Upload } from 'lucide-react'
 import { Button } from '../ui/button'
 import { Tooltip } from '../ui/tooltip'
-import type { Card, Worktree } from '../../../../shared/types'
+import { TESTABLE_STATUSES, type Card, type Worktree } from '../../../../shared/types'
 
 interface QuickActionsBarProps {
   card: Card
   worktree: Worktree | null
   checkingTestInfo: boolean
+  hasRemote?: boolean
+  remoteProvider?: string
   onRunWorker: () => void
   onOpenTestDialog: () => void
   onOpenRemote: () => void
   onSplitCard?: () => void
+  onPushToRemote?: () => void
 }
 
 export function QuickActionsBar({
   card,
   worktree,
   checkingTestInfo,
+  hasRemote,
+  remoteProvider,
   onRunWorker,
   onOpenTestDialog,
   onOpenRemote,
-  onSplitCard
+  onSplitCard,
+  onPushToRemote
 }: QuickActionsBarProps): React.JSX.Element {
-  const showTestButton = worktree || card.status === 'in_progress' || card.status === 'ready'
+  const showTestButton = worktree || TESTABLE_STATUSES.includes(card.status)
 
   return (
     <div className="flex items-center gap-2 flex-wrap">
@@ -48,6 +54,12 @@ export function QuickActionsBar({
         <Button variant="outline" size="sm" onClick={onSplitCard}>
           <Scissors className="h-3 w-3 mr-1" />
           Split
+        </Button>
+      )}
+      {card.provider === 'local' && hasRemote && onPushToRemote && (
+        <Button variant="outline" size="sm" onClick={onPushToRemote}>
+          <Upload className="h-3 w-3 mr-1" />
+          Push to {remoteProvider === 'github' ? 'GitHub' : 'GitLab'}
         </Button>
       )}
       <div className="ml-auto flex items-center gap-1">

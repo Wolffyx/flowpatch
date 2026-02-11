@@ -7,6 +7,8 @@
 import { updateJobResult } from '../../db'
 import { broadcastToRenderers } from '../../ipc/broadcast'
 import type { WorkerLogMessage } from '../../../shared/types'
+import { logAiDebug } from '../../utils/ai-logger'
+import { logToFile } from '../../utils/file-logger'
 
 export interface LogManagerConfig {
   /** Number of logs to accumulate before flushing to DB */
@@ -45,11 +47,7 @@ export class LogManager {
   private phase: string = 'init'
   private lastPlan: string | undefined
 
-  constructor(
-    projectId: string,
-    cardId: string,
-    config: Partial<LogManagerConfig> = {}
-  ) {
+  constructor(projectId: string, cardId: string, config: Partial<LogManagerConfig> = {}) {
     this.projectId = projectId
     this.cardId = cardId
     this.config = { ...DEFAULT_CONFIG, ...config }
@@ -101,7 +99,10 @@ export class LogManager {
   /**
    * Log a message with optional source metadata.
    */
-  log(message: string, meta?: { source?: string; stream?: 'stdout' | 'stderr' }): void {
+  log(
+    message: string,
+    meta?: { source?: string; stream?: 'stdout' | 'stderr'; ai?: boolean }
+  ): void {
     const ts = new Date().toISOString()
     const sourcePrefix = meta?.source
       ? `[${meta.source}${meta.stream ? `:${meta.stream}` : ''}] `
@@ -110,6 +111,37 @@ export class LogManager {
     const line = `[${ts}] ${fullMessage}`
     this.logs.push(line)
     console.log(`[Worker] ${fullMessage}`)
+
+    // Write to file logger for persistence
+    logToFile({
+      id: `worker_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      ts,
+      projectKey: this.projectId,
+      projectId: this.projectId,
+      jobId: this.jobId ?? undefined,
+      cardId: this.cardId,
+      source: meta?.source ?? 'worker',
+      stream: meta?.stream ?? 'info',
+      line: fullMessage
+    })
+
+    const isAiLog =
+      meta?.ai ||
+      this.phase === 'ai' ||
+      (meta?.source ? ['ai', 'claude', 'codex', 'opencode'].includes(meta.source) : false)
+
+    if (isAiLog) {
+      logAiDebug({
+        projectKey: null,
+        projectId: this.projectId,
+        jobId: this.jobId,
+        cardId: this.cardId,
+        phase: this.phase,
+        message: fullMessage,
+        source: meta?.source,
+        stream: meta?.stream
+      })
+    }
 
     if (!this.jobId) return
 
@@ -180,9 +212,7 @@ export class LogManager {
     if (!this.jobId) return
     const now = Date.now()
 
-    const throttleMs = force
-      ? this.config.forcePersistThrottleMs
-      : this.config.persistThrottleMs
+    const throttleMs = force ? this.config.forcePersistThrottleMs : this.config.persistThrottleMs
     if (!force && now - this.lastPersistMs < throttleMs) return
     this.lastPersistMs = now
 

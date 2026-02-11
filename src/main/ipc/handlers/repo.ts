@@ -10,7 +10,8 @@ import { existsSync, readFileSync, mkdirSync, readdirSync, writeFileSync } from 
 import { execFile } from 'child_process'
 import YAML from 'yaml'
 import { upsertProject, getProject, createEvent, listProjects } from '../../db'
-import { parseRemoteUrl, detectProviderFromRemote, generateId, logAction } from '@shared/utils'
+import { parseRemoteUrl, detectProviderFromRemote, generateId } from '@shared/utils'
+import { logAction } from '../../utils/main-logger'
 import { getDefaultRemote, normalizeProjectPath } from '../../projectIdentity'
 import type {
   RemoteInfo,
@@ -181,16 +182,15 @@ async function openRepoAtPath(repoPath: string): Promise<OpenRepoResult> {
   const selectedRemoteName = existing?.selected_remote_name ?? null
   const selectedRemote =
     (selectedRemoteName
-      ? remotes.find((r) => r.name.startsWith(`${selectedRemoteName}:`)) ?? null
-      : null) ??
-    getDefaultRemote(remotes)
+      ? (remotes.find((r) => r.name.startsWith(`${selectedRemoteName}:`)) ?? null)
+      : null) ?? getDefaultRemote(remotes)
 
   const providerHint =
     existing?.provider_hint && existing.provider_hint !== 'auto'
       ? existing.provider_hint
       : selectedRemote
         ? detectProviderFromRemote(selectedRemote.url)
-        : existing?.provider_hint ?? 'auto'
+        : (existing?.provider_hint ?? 'auto')
 
   const project = upsertProject({
     id,

@@ -3,8 +3,9 @@
  */
 
 import { and, eq } from 'drizzle-orm'
-import { getDrizzle } from './drizzle'
 import { syncState } from './schema'
+import { syncState as projectSyncState } from './schema/project'
+import { resolveProjectDb } from './db-resolver'
 
 /**
  * Get a sync cursor value.
@@ -14,7 +15,19 @@ export function getSyncCursor(
   provider: string,
   cursorType: string
 ): string | null {
-  const db = getDrizzle()
+  const { db, isLocalDb } = resolveProjectDb(projectId)
+
+  if (isLocalDb) {
+    const row = db
+      .select({ cursor_value: projectSyncState.cursor_value })
+      .from(projectSyncState)
+      .where(
+        and(eq(projectSyncState.provider, provider), eq(projectSyncState.cursor_type, cursorType))
+      )
+      .get()
+    return row?.cursor_value ?? null
+  }
+
   const row = db
     .select({ cursor_value: syncState.cursor_value })
     .from(syncState)
@@ -38,21 +51,38 @@ export function setSyncCursor(
   cursorType: string,
   value: string | null
 ): void {
-  const db = getDrizzle()
+  const { db, isLocalDb } = resolveProjectDb(projectId)
   const now = new Date().toISOString()
   const id = `${projectId}:${provider}:${cursorType}`
-  db.insert(syncState)
-    .values({
-      id,
-      project_id: projectId,
-      provider,
-      cursor_type: cursorType,
-      cursor_value: value,
-      updated_at: now
-    })
-    .onConflictDoUpdate({
-      target: [syncState.project_id, syncState.provider, syncState.cursor_type],
-      set: { cursor_value: value, updated_at: now }
-    })
-    .run()
+
+  if (isLocalDb) {
+    db.insert(projectSyncState)
+      .values({
+        id,
+        provider,
+        cursor_type: cursorType,
+        cursor_value: value,
+        updated_at: now
+      })
+      .onConflictDoUpdate({
+        target: [projectSyncState.provider, projectSyncState.cursor_type],
+        set: { cursor_value: value, updated_at: now }
+      })
+      .run()
+  } else {
+    db.insert(syncState)
+      .values({
+        id,
+        project_id: projectId,
+        provider,
+        cursor_type: cursorType,
+        cursor_value: value,
+        updated_at: now
+      })
+      .onConflictDoUpdate({
+        target: [syncState.project_id, syncState.provider, syncState.cursor_type],
+        set: { cursor_value: value, updated_at: now }
+      })
+      .run()
+  }
 }

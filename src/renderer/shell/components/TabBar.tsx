@@ -138,7 +138,8 @@ export function TabBar({
                 // Dragging state
                 isDragging && 'opacity-40 scale-95',
                 // Drop target indicator
-                isDropTarget && 'ml-4 before:absolute before:left-[-8px] before:top-1 before:bottom-1 before:w-1 before:rounded-full before:bg-primary'
+                isDropTarget &&
+                  'ml-4 before:absolute before:left-[-8px] before:top-1 before:bottom-1 before:w-1 before:rounded-full before:bg-primary'
               )}
             >
               {/* Worker status indicator */}
@@ -150,12 +151,17 @@ export function TabBar({
                     <div className="flex items-center gap-0.5 shrink-0">
                       <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
                       {tab.activeRuns && tab.activeRuns > 0 && (
-                        <span className="text-[10px] font-medium text-primary">{tab.activeRuns}</span>
+                        <span className="text-[10px] font-medium text-primary">
+                          {tab.activeRuns}
+                        </span>
                       )}
                     </div>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
-                    <p>Worker running{tab.activeRuns && tab.activeRuns > 1 ? ` (${tab.activeRuns} tasks)` : ''}</p>
+                    <p>
+                      Worker running
+                      {tab.activeRuns && tab.activeRuns > 1 ? ` (${tab.activeRuns} tasks)` : ''}
+                    </p>
                   </TooltipContent>
                 </Tooltip>
               ) : tab.workerStatus === 'error' ? (
@@ -193,7 +199,9 @@ export function TabBar({
               <span
                 className={cn(
                   'truncate text-sm flex-1 transition-colors',
-                  isActive ? 'font-medium text-foreground' : 'text-muted-foreground group-hover:text-foreground'
+                  isActive
+                    ? 'font-medium text-foreground'
+                    : 'text-muted-foreground group-hover:text-foreground'
                 )}
               >
                 {tab.projectName}
@@ -216,7 +224,9 @@ export function TabBar({
               </button>
 
               {/* Active tab bottom border cover */}
-              {isActive && <div className="absolute -bottom-px left-0 right-0 h-px bg-background" />}
+              {isActive && (
+                <div className="absolute -bottom-px left-0 right-0 h-px bg-background" />
+              )}
             </div>
           )
         })}
@@ -227,7 +237,8 @@ export function TabBar({
             onDragOver={(e) => handleDragOver(e, tabs.length)}
             className={cn(
               'w-6 h-8 flex items-center justify-center transition-all',
-              dragOverIndex === tabs.length && 'ml-4 before:absolute before:left-0 before:top-1 before:bottom-1 before:w-1 before:rounded-full before:bg-primary'
+              dragOverIndex === tabs.length &&
+                'ml-4 before:absolute before:left-0 before:top-1 before:bottom-1 before:w-1 before:rounded-full before:bg-primary'
             )}
           />
         )}

@@ -45,7 +45,11 @@ export interface HealthStatus {
   timestamp: number
 }
 
-export type HealthCheckFn = () => Promise<{ status: 'pass' | 'warn' | 'fail'; message?: string; value?: number | string }>
+export type HealthCheckFn = () => Promise<{
+  status: 'pass' | 'warn' | 'fail'
+  message?: string
+  value?: number | string
+}>
 
 // ============================================================================
 // Metrics Collector
@@ -168,7 +172,18 @@ class MetricsCollectorClass {
   getHistogram(
     name: string,
     tags?: Record<string, string>
-  ): { count: number; sum: number; avg: number; min: number; max: number; p50: number; p95: number; p99: number } | undefined {
+  ):
+    | {
+        count: number
+        sum: number
+        avg: number
+        min: number
+        max: number
+        p50: number
+        p95: number
+        p99: number
+      }
+    | undefined {
     const key = this.buildKey(name, tags)
     const histogram = this.histograms.get(key)
     if (!histogram || histogram.count === 0) return undefined
@@ -195,7 +210,9 @@ class MetricsCollectorClass {
     let cumulative = 0
     let previousBucket = 0
 
-    for (const [threshold, count] of Array.from(histogram.buckets.entries()).sort((a, b) => a[0] - b[0])) {
+    for (const [threshold, count] of Array.from(histogram.buckets.entries()).sort(
+      (a, b) => a[0] - b[0]
+    )) {
       cumulative += count
       if (cumulative >= targetCount) {
         // Interpolate within bucket
@@ -355,7 +372,10 @@ class MetricsCollectorClass {
   /**
    * Start periodic flushing.
    */
-  startPeriodicFlush(callback: (snapshot: MetricsSnapshot) => void, intervalMs = METRICS_FLUSH_INTERVAL_MS): void {
+  startPeriodicFlush(
+    callback: (snapshot: MetricsSnapshot) => void,
+    intervalMs = METRICS_FLUSH_INTERVAL_MS
+  ): void {
     this.flushInterval = setInterval(() => {
       callback(this.getSnapshot())
     }, intervalMs)
@@ -485,11 +505,7 @@ export const MetricNames = {
 /**
  * Record a worker job completion.
  */
-export function recordJobCompletion(
-  success: boolean,
-  duration: number,
-  phase: string
-): void {
+export function recordJobCompletion(success: boolean, duration: number, phase: string): void {
   if (success) {
     Metrics.increment(MetricNames.WORKER_JOBS_COMPLETED)
   } else {

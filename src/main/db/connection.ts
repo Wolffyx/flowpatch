@@ -525,4 +525,9 @@ function runMigrations(database: Database.Database): void {
   } catch {
     // Column already exists
   }
+
+  // Migration: Add local_db_migrated column to projects table
+  if (!projectColumnNames.includes('local_db_migrated')) {
+    database.exec('ALTER TABLE projects ADD COLUMN local_db_migrated INTEGER NOT NULL DEFAULT 0')
+  }
 }

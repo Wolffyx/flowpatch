@@ -7,7 +7,12 @@
 import { useState, useCallback } from 'react'
 import { toast } from 'sonner'
 import type { ThemePreference, ThemeName, ThemeConfig } from '@shared/types'
-import { AVAILABLE_THEMES, DEFAULT_THEME, isValidTheme, loadTheme } from '../../../../src/lib/themes'
+import {
+  AVAILABLE_THEMES,
+  DEFAULT_THEME,
+  isValidTheme,
+  loadTheme
+} from '../../../../src/lib/themes'
 
 /** LocalStorage key for theme settings */
 const THEME_STORAGE_KEY = 'flowpatch-theme-settings'
