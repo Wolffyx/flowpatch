@@ -261,6 +261,7 @@ export function registerOnboardingHandlers(notifyRenderer: () => void): void {
       !statusLabels.inProgress ||
       !statusLabels.inReview ||
       !statusLabels.testing ||
+      !statusLabels.failed ||
       !statusLabels.done
     ) {
       return { error: 'All status labels are required' }
@@ -279,6 +280,7 @@ export function registerOnboardingHandlers(notifyRenderer: () => void): void {
         { name: statusLabels.inProgress },
         { name: statusLabels.inReview },
         { name: statusLabels.testing },
+        { name: statusLabels.failed },
         { name: statusLabels.done }
       ]
 

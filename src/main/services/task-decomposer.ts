@@ -2,7 +2,7 @@ import { spawn } from 'child_process'
 import type { Card, PolicyConfig, Subtask } from '../../shared/types'
 import { createSubtask, listSubtasks } from '../db'
 import type { IRepoAdapter } from '../adapters'
-import { logAction } from '../../shared/utils'
+import { logAction } from '../utils/main-logger'
 
 export interface DecompositionResult {
   shouldDecompose: boolean

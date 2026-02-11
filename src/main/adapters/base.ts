@@ -6,7 +6,14 @@
  */
 
 import type { Card, CardStatus, PolicyConfig, Provider, RepoLabel } from '../../shared/types'
-import type { AuthResult, IRepoAdapter, IssueResult, LabelResult, PRResult } from './types'
+import type {
+  AuthResult,
+  IRepoAdapter,
+  IssueResult,
+  LabelResult,
+  PRResult,
+  RemoteComment
+} from './types'
 
 /**
  * Abstract base adapter that implements shared functionality.
@@ -67,7 +74,8 @@ export abstract class BaseAdapter implements IRepoAdapter {
     labelsToAdd: string[],
     labelsToRemove: string[]
   ): Promise<boolean>
-  abstract commentOnIssue(issueId: number, comment: string): Promise<boolean>
+  abstract listIssueComments(issueNumber: number): Promise<RemoteComment[]>
+  abstract commentOnIssue(issueId: number, comment: string): Promise<string | null>
   abstract updateIssueBody(issueNumber: number, body: string | null): Promise<boolean>
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -90,6 +98,8 @@ export abstract class BaseAdapter implements IRepoAdapter {
         return statusLabels.inReview || 'In Review'
       case 'testing':
         return statusLabels.testing || 'Testing'
+      case 'failed':
+        return statusLabels.failed || 'Failed'
       case 'done':
         return statusLabels.done || 'Done'
       default:
@@ -108,6 +118,7 @@ export abstract class BaseAdapter implements IRepoAdapter {
       statusLabels.inProgress || 'In Progress',
       statusLabels.inReview || 'In Review',
       statusLabels.testing || 'Testing',
+      statusLabels.failed || 'Failed',
       statusLabels.done || 'Done'
     ]
   }
@@ -129,6 +140,7 @@ export abstract class BaseAdapter implements IRepoAdapter {
       inProgress: 'In Progress',
       inReview: 'In Review',
       testing: 'Testing',
+      failed: 'Failed',
       done: 'Done'
     }
 
@@ -143,6 +155,7 @@ export abstract class BaseAdapter implements IRepoAdapter {
       candidates.filter(Boolean).some((c) => normalized.includes(normalize(String(c))))
 
     if (matches([statusLabels.done, 'done', 'indone'])) return 'done'
+    if (matches([statusLabels.failed, 'failed'])) return 'failed'
     if (matches([statusLabels.testing, 'testing', 'qa'])) return 'testing'
     if (matches([statusLabels.inReview, 'inreview', 'in review', 'review'])) return 'in_review'
     if (matches([statusLabels.inProgress, 'inprogress', 'in progress', 'wip'])) return 'in_progress'
@@ -175,6 +188,7 @@ export abstract class BaseAdapter implements IRepoAdapter {
       inProgress: 'In Progress',
       inReview: 'In Review',
       testing: 'Testing',
+      failed: 'Failed',
       done: 'Done'
     }
   }

@@ -18,7 +18,7 @@ import type {
   ExecutionOrigin,
   SecurityAuditEntry
 } from '../../shared/types'
-import { logAction } from '../../shared/utils'
+import { logAction } from '../utils/main-logger'
 
 // ============================================================================
 // Validation Cache

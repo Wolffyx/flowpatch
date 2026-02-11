@@ -44,10 +44,18 @@ export class CodexProvider extends StreamingProvider {
 
   buildArgs(options: StreamOptions): string[] {
     // Codex uses stdin for input with '-' argument.
-    // Windows sandbox is experimental and broken - use danger-full-access to bypass it.
-    // On macOS/Linux, use workspace-write for proper sandboxing.
-    const sandbox = process.platform === 'win32' ? 'danger-full-access' : 'workspace-write'
-    return ['exec', '--sandbox', sandbox, '--full-auto', '--cd', options.cwd, '-']
+    // On Windows, avoid --cd (path escaping can break workspace detection).
+    // Also force a non-read-only sandbox mode to allow edits.
+    const isWindows = process.platform === 'win32'
+    const sandbox = isWindows ? 'danger-full-access' : 'workspace-write'
+    const args = ['exec', '--sandbox', sandbox, '--full-auto']
+
+    if (!isWindows) {
+      args.push('--cd', options.cwd)
+    }
+
+    args.push('-')
+    return args
   }
 
   protected getStdin(options: StreamOptions): string {

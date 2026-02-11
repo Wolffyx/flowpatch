@@ -8,9 +8,10 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import type { Card, PolicyConfig, Provider, RepoLabel } from '../../shared/types'
+import { logAction } from '../utils/main-logger'
 import { cryptoRandomId } from '../db'
 import { BaseAdapter } from './base'
-import type { AuthResult, IssueResult, LabelResult, PRResult } from './types'
+import type { AuthResult, IssueResult, LabelResult, PRResult, RemoteComment } from './types'
 
 const execFileAsync = promisify(execFile)
 
@@ -126,7 +127,7 @@ export class GitlabAdapter extends BaseAdapter {
   async createIssue(
     title: string,
     description?: string,
-    _labels?: string[]
+    labels?: string[]
   ): Promise<IssueResult | null> {
     const trimmedTitle = (title || '').trim()
     if (!trimmedTitle) return null
@@ -134,6 +135,11 @@ export class GitlabAdapter extends BaseAdapter {
     const argsJson = ['issue', 'create', '--title', trimmedTitle, '-F', 'json']
     if (description) {
       argsJson.push('--description', description)
+    }
+    if (labels && labels.length > 0) {
+      for (const label of labels) {
+        argsJson.push('--label', label)
+      }
     }
 
     try {
@@ -155,6 +161,11 @@ export class GitlabAdapter extends BaseAdapter {
       const args = ['issue', 'create', '--title', trimmedTitle]
       if (description) {
         args.push('--description', description)
+      }
+      if (labels && labels.length > 0) {
+        for (const label of labels) {
+          args.push('--label', label)
+        }
       }
 
       const { stdout } = await execFileAsync('glab', args, { cwd: this.repoPath })
@@ -188,6 +199,45 @@ export class GitlabAdapter extends BaseAdapter {
       return true
     } catch (error) {
       console.error('Failed to update GitLab issue body:', error)
+      return false
+    }
+  }
+
+  /**
+   * Add a related-issue link (child to parent) using GitLab's issue links API (relates_to).
+   * Same project only; uses IID (internal issue ID).
+   */
+  async addSubIssue(parentIssueIid: number, childIssueIid: number): Promise<boolean> {
+    try {
+      const projectIdEnc = encodeURIComponent(this.projectPath)
+      const endpoint = `projects/${projectIdEnc}/issues/${parentIssueIid}/links`
+      await execFileAsync(
+        'glab',
+        [
+          'api',
+          '--method',
+          'POST',
+          endpoint,
+          '-f',
+          `target_project_id=${projectIdEnc}`,
+          '-f',
+          `target_issue_iid=${childIssueIid}`,
+          '-f',
+          'link_type=relates_to'
+        ],
+        { cwd: this.repoPath }
+      )
+      logAction('addSubIssue (GitLab): Success', {
+        parentIssueIid,
+        childIssueIid
+      })
+      return true
+    } catch (error) {
+      logAction('addSubIssue (GitLab): Failed', {
+        parentIssueIid,
+        childIssueIid,
+        error: String(error)
+      })
       return false
     }
   }
@@ -366,15 +416,59 @@ export class GitlabAdapter extends BaseAdapter {
   // Comments
   // ──────────────────────────────────────────────────────────────────────────
 
-  async commentOnIssue(issueIid: number, comment: string): Promise<boolean> {
+  async listIssueComments(issueIid: number): Promise<RemoteComment[]> {
     try {
-      await execFileAsync('glab', ['issue', 'note', String(issueIid), '--message', comment], {
+      // Use GitLab API to list notes (comments) on an issue
+      const projectIdEnc = encodeURIComponent(this.projectPath)
+      const endpoint = `projects/${projectIdEnc}/issues/${issueIid}/notes`
+      const { stdout } = await execFileAsync('glab', ['api', endpoint, '-X', 'GET'], {
         cwd: this.repoPath
       })
-      return true
+
+      const notes = JSON.parse(stdout) as Array<{
+        id: number
+        body: string
+        created_at: string
+        author: { username: string } | null
+        system: boolean
+      }>
+
+      // Filter out system notes (like label changes, assignments, etc.)
+      return notes
+        .filter((note) => !note.system)
+        .map((note) => ({
+          id: String(note.id),
+          author: note.author?.username || 'unknown',
+          body: note.body,
+          created_at: note.created_at
+        }))
+    } catch (error) {
+      console.error('Failed to list comments on GitLab issue:', error)
+      return []
+    }
+  }
+
+  async commentOnIssue(issueIid: number, comment: string): Promise<string | null> {
+    try {
+      // Use glab api to create comment and get back the ID
+      // GitLab API: POST /projects/:id/issues/:issue_iid/notes
+      const result = await execFileAsync(
+        'glab',
+        [
+          'api',
+          `projects/:fullpath/issues/${issueIid}/notes`,
+          '-f',
+          `body=${comment}`,
+          '--jq',
+          '.id'
+        ],
+        { cwd: this.repoPath }
+      )
+      const commentId = result.stdout?.trim()
+      return commentId || null
     } catch (error) {
       console.error('Failed to comment on issue:', error)
-      return false
+      return null
     }
   }
 

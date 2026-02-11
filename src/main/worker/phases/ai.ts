@@ -30,7 +30,8 @@ import {
   getHourlyUsage,
   getDailyUsage,
   getMonthlyUsage,
-  getToolLimits
+  getToolLimits,
+  getResetTimes
 } from '../../db'
 import type {
   ThinkingMode,
@@ -115,6 +116,35 @@ export function checkLimitsExceeded(toolType: AIToolType): {
   }
 
   return { exceeded: false }
+}
+
+/** Whether the reason string indicates an app usage limit (not provider/429). */
+function isAppUsageLimitReason(reason: string): boolean {
+  const s = reason.toLowerCase()
+  return (
+    s.includes('hourly token limit') ||
+    s.includes('hourly cost limit') ||
+    s.includes('daily token limit') ||
+    s.includes('daily cost limit') ||
+    s.includes('monthly token limit') ||
+    s.includes('monthly cost limit')
+  )
+}
+
+/** Format "Resets in X min" from reset times (soonest non-zero). */
+function formatResetsIn(resetTimes: {
+  hourly_resets_in: number
+  daily_resets_in: number
+  monthly_resets_in: number
+}): string {
+  const min = Math.min(
+    resetTimes.hourly_resets_in,
+    resetTimes.daily_resets_in,
+    resetTimes.monthly_resets_in
+  )
+  if (min <= 0) return ''
+  const mins = Math.ceil(min / 60)
+  return ` Resets in ${mins} min.`
 }
 
 /**
@@ -420,23 +450,23 @@ function sleep(ms: number): Promise<void> {
 /**
  * Handle the case when all providers are exhausted.
  * Implements pause-and-wait, fail-immediately, or queue-for-later based on config.
+ * Returns { shouldRetry: true } to signal the caller should retry the main loop.
  */
 async function handleExhaustedProviders(
   ctx: PipelineContext,
   config: ProviderSwitchConfig,
-  originalPrompt: string,
   log: LogFn,
   isCanceled: () => boolean
-): Promise<boolean> {
+): Promise<{ shouldRetry: boolean }> {
   if (config.exhaustedBehavior === 'fail_immediately') {
     log('❌ All providers exhausted, failing immediately (configured behavior)')
-    return false
+    return { shouldRetry: false }
   }
 
   if (config.exhaustedBehavior === 'queue_for_later') {
     log('📋 All providers exhausted, job will be retried later')
     // Note: The job system will handle requeuing based on the return value
-    return false
+    return { shouldRetry: false }
   }
 
   // pause_and_wait behavior
@@ -464,15 +494,15 @@ async function handleExhaustedProviders(
 
     if (provider) {
       log(`✅ ${provider.metadata.displayName} is now available! Resuming...`)
-      // Return to main loop which will retry with the available provider
-      return runAI(ctx, originalPrompt, log, isCanceled)
+      // Signal caller to retry the main loop instead of recursive call
+      return { shouldRetry: true }
     }
 
     log('⏸️ No providers available yet, continuing to wait...')
   }
 
   log(`❌ Max wait time (${config.maxWaitMinutes}m) exceeded, all providers still unavailable`)
-  return false
+  return { shouldRetry: false }
 }
 
 /**
@@ -630,211 +660,282 @@ export async function runAI(
   const thinkingMode = thinkingEnabled ? thinkingConfig?.mode : undefined
   const thinkingBudget = thinkingConfig?.budgetTokens
 
-  // Track which provider keys have been tried (to avoid retrying)
-  const triedProviderKeys = new Set<string>()
-  // Track which provider keys hit rate limits (for fallback selection)
-  const rateLimitedProviderKeys = new Set<string>()
+  // Maximum retries when all providers are exhausted and we wait for availability
+  const MAX_EXHAUSTION_RETRIES = 3
 
-  // If resuming, mark the previous provider as already tried
-  if (activeHandoff) {
-    triedProviderKeys.add(activeHandoff.fromProvider)
-    rateLimitedProviderKeys.add(activeHandoff.fromProvider)
-  }
+  // Outer retry loop: handles exhausted providers with pause-and-wait behavior
+  for (let exhaustionRetry = 0; exhaustionRetry < MAX_EXHAUSTION_RETRIES; exhaustionRetry++) {
+    if (exhaustionRetry > 0) {
+      log(`🔄 Retry attempt ${exhaustionRetry}/${MAX_EXHAUSTION_RETRIES} after provider exhaustion`)
+    }
 
-  // Use registry to select initial provider
-  const { provider: initialProvider, fallbackUsed, reason } = await CLIProviderRegistry.selectProvider(
-    ctx.policy,
-    (toolType) => {
-      // Skip providers we've already tried in this session
-      const provider = CLIProviderRegistry.get(toolType)
-      if (provider && triedProviderKeys.has(provider.metadata.key)) {
-        return { exceeded: true, reason: 'Already tried' }
+    // Track which provider keys have been tried (to avoid retrying)
+    const triedProviderKeys = new Set<string>()
+    // Track which provider keys hit rate limits (for fallback selection)
+    const rateLimitedProviderKeys = new Set<string>()
+
+    // If resuming, mark the previous provider as already tried
+    if (activeHandoff) {
+      triedProviderKeys.add(activeHandoff.fromProvider)
+      rateLimitedProviderKeys.add(activeHandoff.fromProvider)
+    }
+
+    // Use registry to select initial provider
+    const { provider: initialProvider, fallbackUsed, reason } = await CLIProviderRegistry.selectProvider(
+      ctx.policy,
+      (toolType) => {
+        // Skip providers we've already tried in this session
+        const provider = CLIProviderRegistry.get(toolType)
+        if (provider && triedProviderKeys.has(provider.metadata.key)) {
+          return { exceeded: true, reason: 'Already tried' }
+        }
+        return checkLimitsExceeded(toolType)
       }
-      return checkLimitsExceeded(toolType)
-    }
-  )
+    )
 
-  if (!initialProvider) {
-    // Check if we should wait for providers
-    if (switchConfig.mode !== 'disabled' && switchConfig.exhaustedBehavior === 'pause_and_wait') {
-      return handleExhaustedProviders(ctx, switchConfig, originalPrompt, log, isCanceled)
-    }
-    log(`❌ No AI tool available: ${reason}`)
-    await createStubPlan(ctx, plan, workingDir, reason || 'No AI tool available')
-    return false
-  }
-
-  if (fallbackUsed) {
-    log(`↪️ Note: ${reason}`)
-  }
-
-  let currentProvider: ICLIProvider | null = initialProvider
-  let lastError: string | undefined
-
-  // Try providers until one succeeds or all fail
-  while (currentProvider) {
-    // Check for cancellation
-    if (isCanceled()) {
-      throw new WorkerCanceledError('Job canceled')
-    }
-
-    triedProviderKeys.add(currentProvider.metadata.key)
-
-    try {
-      log(`🤖 Running ${currentProvider.metadata.displayName} with ${maxMinutes} minute timeout`)
-
-      // Use the handoff-aware execution
-      const { result, isRateLimited, handoffContext } = await tryProviderWithHandoff(
-        currentProvider,
-        currentPrompt,
-        timeoutMs,
+    if (!initialProvider) {
+      // Check if we should wait for providers
+      if (switchConfig.mode !== 'disabled' && switchConfig.exhaustedBehavior === 'pause_and_wait') {
+        const exhaustResult = await handleExhaustedProviders(ctx, switchConfig, log, isCanceled)
+        if (exhaustResult.shouldRetry) {
+          continue // Retry the outer loop with fresh provider tracking
+        }
+      }
+      const isAppLimit = reason && isAppUsageLimitReason(reason)
+      const resetTimes = getResetTimes()
+      const resetsStr = formatResetsIn(resetTimes)
+      if (isAppLimit) {
+        log(`❌ App usage limit: ${reason}${resetsStr}`)
+      } else {
+        log(`❌ No AI tool available: ${reason}`)
+      }
+      await createStubPlan(
+        ctx,
+        plan,
         workingDir,
-        log,
-        isCanceled,
-        thinkingMode,
-        thinkingBudget
+        isAppLimit ? `${reason}${resetsStr}` : reason || 'No AI tool available'
       )
+      return false
+    }
 
-      if (result.success) {
-        // Success! Record usage, clear any handoff, and return
-        recordAIUsage(ctx, currentProvider, result, log)
-        if (ctx.jobId) {
-          clearHandoffContext(repoRoot, ctx.jobId)
-        }
-        log('✅ AI implementation completed')
-        return true
+    if (fallbackUsed) {
+      log(`↪️ Note: ${reason}`)
+    }
+
+    // Near-limit warning (e.g. 80% of hourly) before starting AI phase
+    const toolType = initialProvider.metadata.toolType
+    const limits = getToolLimits(toolType)
+    if (limits) {
+      const hourly = getHourlyUsage(toolType)
+      const daily = getDailyUsage(toolType)
+      const resetTimes = getResetTimes()
+      if (
+        limits.hourly_token_limit &&
+        limits.hourly_token_limit > 0 &&
+        hourly.tokens >= 0.8 * limits.hourly_token_limit
+      ) {
+        const pct = Math.round((100 * hourly.tokens) / limits.hourly_token_limit)
+        const mins = Math.ceil(resetTimes.hourly_resets_in / 60)
+        log(`⚠️ Approaching hourly token limit (${pct}% used). Resets in ${mins} min.`)
+      }
+      if (
+        limits.daily_token_limit &&
+        limits.daily_token_limit > 0 &&
+        daily.tokens >= 0.8 * limits.daily_token_limit
+      ) {
+        const pct = Math.round((100 * daily.tokens) / limits.daily_token_limit)
+        const mins = Math.ceil(resetTimes.daily_resets_in / 60)
+        log(`⚠️ Approaching daily token limit (${pct}% used). Resets in ${mins} min.`)
+      }
+    }
+
+    let currentProvider: ICLIProvider | null = initialProvider
+    let lastError: string | undefined
+    let shouldRetryOuterLoop = false
+
+    // Try providers until one succeeds or all fail
+    while (currentProvider) {
+      // Check for cancellation
+      if (isCanceled()) {
+        throw new WorkerCanceledError('Job canceled')
       }
 
-      // Execution failed
-      lastError = result.error || 'AI execution failed'
+      triedProviderKeys.add(currentProvider.metadata.key)
 
-      if (isRateLimited) {
-        rateLimitedProviderKeys.add(currentProvider.metadata.key)
-        log(`⚠️ ${currentProvider.metadata.displayName} hit limit: ${lastError}`)
+      try {
+        log(`🤖 Running ${currentProvider.metadata.displayName} with ${maxMinutes} minute timeout`)
 
-        // Check if provider switching is enabled
-        if (switchConfig.mode === 'disabled') {
-          log('❌ Provider switching is disabled')
-          currentProvider = null
-          continue
-        }
-
-        // Save handoff context for continuation
-        if (handoffContext && ctx.jobId) {
-          const enrichedHandoff = await enrichHandoffWithGitState(
-            { ...handoffContext, originalPrompt },
-            workingDir,
-            ctx.progress?.baseHeadSha ?? 'HEAD~10'
-          )
-          saveHandoffContext(repoRoot, ctx.jobId, enrichedHandoff)
-          log(`💾 Saved handoff context for continuation`)
-
-          if (switchConfig.notifyOnSwitch) {
-            log(`🔔 Provider ${currentProvider.metadata.displayName} hit limit, switching...`)
-          }
-        }
-
-        // Try to find another provider
-        const { provider: nextProvider } = await CLIProviderRegistry.selectProvider(
-          { ...ctx.policy, worker: { ...ctx.policy.worker, toolPreference: 'auto' } },
-          (toolType) => {
-            const provider = CLIProviderRegistry.get(toolType)
-            if (
-              provider &&
-              (triedProviderKeys.has(provider.metadata.key) ||
-                rateLimitedProviderKeys.has(provider.metadata.key))
-            ) {
-              return { exceeded: true, reason: 'Already tried or rate limited' }
-            }
-            return checkLimitsExceeded(toolType)
-          }
+        // Use the handoff-aware execution
+        const { result, isRateLimited, handoffContext } = await tryProviderWithHandoff(
+          currentProvider,
+          currentPrompt,
+          timeoutMs,
+          workingDir,
+          log,
+          isCanceled,
+          thinkingMode,
+          thinkingBudget
         )
 
-        if (nextProvider && !triedProviderKeys.has(nextProvider.metadata.key)) {
-          log(`↪️ Switching to ${nextProvider.metadata.displayName}...`)
+        if (result.success) {
+          // Success! Record usage, clear any handoff, and return
+          recordAIUsage(ctx, currentProvider, result, log)
+          if (ctx.jobId) {
+            clearHandoffContext(repoRoot, ctx.jobId)
+          }
+          log('✅ AI implementation completed')
+          return true
+        }
 
-          // Build continuation prompt from handoff
-          if (handoffContext) {
+        // Execution failed
+        lastError = result.error || 'AI execution failed'
+
+        if (isRateLimited) {
+          rateLimitedProviderKeys.add(currentProvider.metadata.key)
+          log(`⚠️ Provider rate limit (429): ${currentProvider.metadata.displayName} - ${lastError}`)
+
+          // Check if provider switching is enabled
+          if (switchConfig.mode === 'disabled') {
+            log('❌ Provider switching is disabled')
+            currentProvider = null
+            continue
+          }
+
+          // Save handoff context for continuation
+          if (handoffContext && ctx.jobId) {
             const enrichedHandoff = await enrichHandoffWithGitState(
               { ...handoffContext, originalPrompt },
               workingDir,
               ctx.progress?.baseHeadSha ?? 'HEAD~10'
             )
-            currentPrompt = sessions.buildContinuationPrompt(enrichedHandoff)
-          }
+            saveHandoffContext(repoRoot, ctx.jobId, enrichedHandoff)
+            log(`💾 Saved handoff context for continuation`)
 
-          currentProvider = nextProvider
-          continue
-        }
-
-        // No more providers to try - check exhausted behavior
-        log(`⚠️ All available AI providers have been exhausted`)
-        if (switchConfig.exhaustedBehavior === 'pause_and_wait') {
-          return handleExhaustedProviders(ctx, switchConfig, originalPrompt, log, isCanceled)
-        }
-        currentProvider = null
-      } else {
-        // Non-rate-limit error - don't try other providers for this type of failure
-        log(`❌ ${currentProvider.metadata.displayName} failed: ${lastError}`)
-        currentProvider = null
-      }
-    } catch (error) {
-      if (error instanceof WorkerCanceledError) {
-        throw error
-      }
-
-      lastError = error instanceof Error ? error.message : String(error)
-      const providerName = currentProvider?.metadata.displayName ?? 'Unknown provider'
-      const providerKey = currentProvider?.metadata.key
-      log(`❌ ${providerName} error: ${lastError}`)
-
-      // Check if this is a rate limit error from exception
-      if (currentProvider && currentProvider.isRetryableLimitError(lastError)) {
-        if (providerKey) rateLimitedProviderKeys.add(providerKey)
-
-        // Check if provider switching is enabled
-        if (switchConfig.mode === 'disabled') {
-          currentProvider = null
-          continue
-        }
-
-        // Try to find another provider
-        const { provider: nextProvider } = await CLIProviderRegistry.selectProvider(
-          { ...ctx.policy, worker: { ...ctx.policy.worker, toolPreference: 'auto' } },
-          (toolType) => {
-            const provider = CLIProviderRegistry.get(toolType)
-            if (
-              provider &&
-              (triedProviderKeys.has(provider.metadata.key) ||
-                rateLimitedProviderKeys.has(provider.metadata.key))
-            ) {
-              return { exceeded: true, reason: 'Already tried or rate limited' }
+            if (switchConfig.notifyOnSwitch) {
+              log(`🔔 Provider ${currentProvider.metadata.displayName} hit limit, switching...`)
             }
-            return checkLimitsExceeded(toolType)
           }
-        )
 
-        if (nextProvider && !triedProviderKeys.has(nextProvider.metadata.key)) {
-          log(`↪️ Switching to ${nextProvider.metadata.displayName}...`)
-          currentProvider = nextProvider
-          continue
+          // Try to find another provider
+          const { provider: nextProvider } = await CLIProviderRegistry.selectProvider(
+            { ...ctx.policy, worker: { ...ctx.policy.worker, toolPreference: 'auto' } },
+            (toolType) => {
+              const provider = CLIProviderRegistry.get(toolType)
+              if (
+                provider &&
+                (triedProviderKeys.has(provider.metadata.key) ||
+                  rateLimitedProviderKeys.has(provider.metadata.key))
+              ) {
+                return { exceeded: true, reason: 'Already tried or rate limited' }
+              }
+              return checkLimitsExceeded(toolType)
+            }
+          )
+
+          if (nextProvider && !triedProviderKeys.has(nextProvider.metadata.key)) {
+            log(`↪️ Switching to ${nextProvider.metadata.displayName}...`)
+
+            // Build continuation prompt from handoff
+            if (handoffContext) {
+              const enrichedHandoff = await enrichHandoffWithGitState(
+                { ...handoffContext, originalPrompt },
+                workingDir,
+                ctx.progress?.baseHeadSha ?? 'HEAD~10'
+              )
+              currentPrompt = sessions.buildContinuationPrompt(enrichedHandoff)
+            }
+
+            currentProvider = nextProvider
+            continue
+          }
+
+          // No more providers to try - check exhausted behavior
+          log(`⚠️ All available AI providers have been exhausted`)
+          if (switchConfig.exhaustedBehavior === 'pause_and_wait') {
+            const exhaustResult = await handleExhaustedProviders(ctx, switchConfig, log, isCanceled)
+            if (exhaustResult.shouldRetry) {
+              shouldRetryOuterLoop = true
+              break // Exit inner while loop to retry outer for loop
+            }
+          }
+          currentProvider = null
+        } else {
+          // Non-rate-limit error - don't try other providers for this type of failure
+          log(`❌ ${currentProvider.metadata.displayName} failed: ${lastError}`)
+          currentProvider = null
+        }
+      } catch (error) {
+        if (error instanceof WorkerCanceledError) {
+          throw error
         }
 
-        // No more providers - check exhausted behavior
-        if (switchConfig.exhaustedBehavior === 'pause_and_wait') {
-          return handleExhaustedProviders(ctx, switchConfig, originalPrompt, log, isCanceled)
+        lastError = error instanceof Error ? error.message : String(error)
+        const providerName = currentProvider?.metadata.displayName ?? 'Unknown provider'
+        const providerKey = currentProvider?.metadata.key
+        log(`❌ ${providerName} error: ${lastError}`)
+
+        // Check if this is a rate limit error from exception
+        if (currentProvider && currentProvider.isRetryableLimitError(lastError)) {
+          if (providerKey) rateLimitedProviderKeys.add(providerKey)
+
+          // Check if provider switching is enabled
+          if (switchConfig.mode === 'disabled') {
+            currentProvider = null
+            continue
+          }
+
+          // Try to find another provider
+          const { provider: nextProvider } = await CLIProviderRegistry.selectProvider(
+            { ...ctx.policy, worker: { ...ctx.policy.worker, toolPreference: 'auto' } },
+            (toolType) => {
+              const provider = CLIProviderRegistry.get(toolType)
+              if (
+                provider &&
+                (triedProviderKeys.has(provider.metadata.key) ||
+                  rateLimitedProviderKeys.has(provider.metadata.key))
+              ) {
+                return { exceeded: true, reason: 'Already tried or rate limited' }
+              }
+              return checkLimitsExceeded(toolType)
+            }
+          )
+
+          if (nextProvider && !triedProviderKeys.has(nextProvider.metadata.key)) {
+            log(`↪️ Switching to ${nextProvider.metadata.displayName}...`)
+            currentProvider = nextProvider
+            continue
+          }
+
+          // No more providers - check exhausted behavior
+          if (switchConfig.exhaustedBehavior === 'pause_and_wait') {
+            const exhaustResult = await handleExhaustedProviders(ctx, switchConfig, log, isCanceled)
+            if (exhaustResult.shouldRetry) {
+              shouldRetryOuterLoop = true
+              break // Exit inner while loop to retry outer for loop
+            }
+          }
         }
+
+        currentProvider = null
       }
-
-      currentProvider = null
     }
+
+    // If shouldRetryOuterLoop is set, continue to next iteration of outer loop
+    if (shouldRetryOuterLoop) {
+      continue
+    }
+
+    // All providers failed in this iteration - don't retry, exit
+    const triedList = Array.from(triedProviderKeys).join(', ')
+    const finalReason = `All AI providers failed. Tried: ${triedList}. Last error: ${lastError || 'Unknown error'}`
+    log(`❌ ${finalReason}`)
+    await createStubPlan(ctx, plan, workingDir, finalReason)
+    return false
   }
 
-  // All providers failed
-  const triedList = Array.from(triedProviderKeys).join(', ')
-  const finalReason = `All AI providers failed. Tried: ${triedList}. Last error: ${lastError || 'Unknown error'}`
-  log(`❌ ${finalReason}`)
-  await createStubPlan(ctx, plan, workingDir, finalReason)
+  // Exhausted all retry attempts
+  log(`❌ Exhausted all ${MAX_EXHAUSTION_RETRIES} retry attempts after provider exhaustion`)
+  await createStubPlan(ctx, plan, workingDir, `All retry attempts exhausted`)
   return false
 }
 

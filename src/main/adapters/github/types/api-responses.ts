@@ -5,6 +5,8 @@
 
 export interface GithubIssue {
   number: number
+  /** Global numeric id from GitHub REST API (used by sub_issues API) */
+  id?: number
   title: string
   body: string | null
   state: string
@@ -37,4 +39,13 @@ export interface GithubPullRequestIssueLink {
   prNumber: number
   prUrl: string
   issueNumbers: number[]
+}
+
+export interface GithubComment {
+  id: number
+  body: string
+  createdAt: string
+  author: {
+    login: string
+  } | null
 }

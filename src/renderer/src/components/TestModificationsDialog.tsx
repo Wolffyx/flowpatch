@@ -108,10 +108,18 @@ export function TestModificationsDialog({
       }
     })
 
+    // Listen for install output during worktree preparation
+    const unsubscribeInstall = window.projectAPI.onInstallOutput((data) => {
+      if (data.cardId === cardId) {
+        setOutput((prev) => [...prev, data.line.trim()])
+      }
+    })
+
     return () => {
       unsubscribeOutput()
       unsubscribeStatus()
       unsubscribePort()
+      unsubscribeInstall()
     }
   }, [open, cardId])
 
@@ -163,6 +171,7 @@ export function TestModificationsDialog({
       // If no worktree but can recreate or checkout, prepare the environment first
       if (!info.hasWorktree && (info.canRecreateWorktree || info.canCheckoutInMainRepo)) {
         setIsPreparing(true)
+        setShowLogs(true) // Auto-expand logs to show install progress
         toast.info(`Preparing test environment (${testLocation === 'worktree' ? 'creating worktree' : 'checking out branch'})...`)
 
         const prepareResult = await window.projectAPI.prepareTestEnvironment({
@@ -191,13 +200,22 @@ export function TestModificationsDialog({
             : null
         )
 
-        toast.success(
-          prepareResult.wasRecreated
-            ? 'Worktree created successfully'
-            : testLocation === 'worktree'
-              ? 'Worktree ready'
-              : 'Branch checked out'
-        )
+        // Show appropriate toast based on install result
+        if (prepareResult.installSkipped) {
+          toast.success('Worktree ready (dependencies already installed)')
+        } else if (prepareResult.installRan) {
+          if (prepareResult.installSuccess) {
+            toast.success('Worktree created and dependencies installed')
+          } else {
+            toast.warning(`Worktree created but install failed: ${prepareResult.installError}`)
+            setError(`Install failed: ${prepareResult.installError}. You may need to run install manually.`)
+            // Don't return - let user decide whether to continue
+          }
+        } else if (prepareResult.wasRecreated) {
+          toast.success('Worktree created successfully')
+        } else {
+          toast.success(testLocation === 'worktree' ? 'Worktree ready' : 'Branch checked out')
+        }
       }
 
       if (!workingDir) {
@@ -582,7 +600,7 @@ export function TestModificationsDialog({
           )}
 
           {/* Logs Section */}
-          <div className="border rounded-lg flex-1 min-h-0 flex flex-col">
+          <div className="border rounded-lg flex flex-col">
             <button
               type="button"
               onClick={() => setShowLogs(!showLogs)}
@@ -604,7 +622,7 @@ export function TestModificationsDialog({
               </div>
             </button>
             {showLogs && (
-              <ScrollArea className="flex-1 border-t">
+              <div className="border-t max-h-[250px] overflow-y-auto">
                 <div className="p-3 font-mono text-xs space-y-1">
                   {output.length === 0 ? (
                     <div className="text-muted-foreground text-center py-8">No output yet</div>
@@ -628,7 +646,7 @@ export function TestModificationsDialog({
                   )}
                   <div ref={endRef} />
                 </div>
-              </ScrollArea>
+              </div>
             )}
           </div>
         </div>

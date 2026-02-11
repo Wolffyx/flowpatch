@@ -17,7 +17,9 @@ import type {
   ManualTestInfo,
   TestLocation,
   PrepareTestEnvironmentResult,
-  ManualTestPromptData
+  ManualTestPromptData,
+  CardComment,
+  CommentPriority
 } from '../../shared/types'
 import type { Card } from '../../shared/types'
 
@@ -121,6 +123,9 @@ export interface ProjectAPI {
   ) => () => void
   onDevServerPort: (
     callback: (data: { cardId: string; port: number; url: string; timestamp: string }) => void
+  ) => () => void
+  onInstallOutput: (
+    callback: (data: { cardId: string; line: string; stream: 'stdout' | 'stderr' }) => void
   ) => () => void
 
   getPendingApprovals: () => Promise<{ approvals: PlanApproval[] }>
@@ -308,6 +313,37 @@ export interface ProjectAPI {
     cardId: string,
     dependsOnCardId: string
   ) => Promise<{ success: boolean; error?: string }>
+
+  // Card Comments
+  getCardComments: (cardId: string) => Promise<{ comments: CardComment[] }>
+  createCardComment: (data: {
+    cardId: string
+    body: string
+    priority?: CommentPriority
+  }) => Promise<{ comment: CardComment }>
+  updateCommentPriority: (
+    commentId: string,
+    priority: CommentPriority
+  ) => Promise<{ comment: CardComment | null }>
+  editCardComment: (
+    commentId: string,
+    body: string
+  ) => Promise<{ comment?: CardComment | null; error?: string }>
+  resolveComment: (
+    commentId: string,
+    jobId?: string
+  ) => Promise<{ comment: CardComment | null }>
+  reopenComment: (commentId: string) => Promise<{ comment: CardComment | null }>
+  toggleCommentInclusion: (
+    commentId: string,
+    include: boolean
+  ) => Promise<{ comment: CardComment | null }>
+  deleteCardComment: (commentId: string) => Promise<{ success: boolean }>
+  deduplicateCardComments: (cardId: string) => Promise<{ deleted: number }>
+  deduplicateAllComments: () => Promise<{
+    totalDeleted: number
+    cardBreakdown: Array<{ cardId: string; deleted: number }>
+  }>
 
   onStateUpdate: (callback: () => void) => () => void
   onWorkerLog: (callback: (log: WorkerLogMessage) => void) => () => void

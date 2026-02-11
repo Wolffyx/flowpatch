@@ -63,6 +63,8 @@ export interface SplitCardPayload {
 export interface SplitCardResult {
   cards?: Card[]
   error?: string
+  /** Set when child issues were created but linking to parent on remote failed */
+  warning?: string
 }
 
 // ============================================================================

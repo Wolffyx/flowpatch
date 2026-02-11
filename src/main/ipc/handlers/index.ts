@@ -27,6 +27,7 @@ import { registerDependencyHandlers } from './dependencies'
 import { registerUpdaterHandlers } from './updater'
 import { registerMigrationHandlers } from './migration'
 import { registerGitAuthHandlers } from './git-auth'
+import { registerCommentHandlers } from './comments'
 import { sendToAllTabs } from '../../tabManager'
 
 let mainWindowRef: BrowserWindow | null = null
@@ -71,6 +72,7 @@ export function registerAllHandlers(mainWindow: BrowserWindow): void {
   registerUpdaterHandlers()
   registerMigrationHandlers(notifyRenderer)
   registerGitAuthHandlers()
+  registerCommentHandlers(notifyRenderer)
 }
 
 // Re-export individual registrations for granular use
@@ -94,7 +96,8 @@ export {
   registerFeatureSuggestionHandlers,
   registerDependencyHandlers,
   registerUpdaterHandlers,
-  registerMigrationHandlers
+  registerMigrationHandlers,
+  registerCommentHandlers
 }
 
 // Re-export onboarding helpers used by repo handlers

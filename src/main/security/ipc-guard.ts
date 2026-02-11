@@ -14,7 +14,7 @@ import type {
   SecurityAuditEntry,
   SecurityConfig
 } from '../../shared/types'
-import { logAction } from '../../shared/utils'
+import { logAction } from '../utils/main-logger'
 
 // ============================================================================
 // Configuration

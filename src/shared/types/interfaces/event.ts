@@ -21,6 +21,7 @@ export type EventType =
   | 'card_updated'
   | 'card_deleted'
   | 'card_pushed_to_remote'
+  | 'comments_processed'
 
 export interface Event {
   id: string

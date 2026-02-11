@@ -14,7 +14,7 @@ import {
   getResetTimes
 } from '../../db'
 import type { AIToolType } from '@shared/types'
-import { logAction } from '@shared/utils'
+import { logAction } from '../../utils/main-logger'
 
 // ============================================================================
 // Handler Registration

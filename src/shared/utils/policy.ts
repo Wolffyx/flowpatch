@@ -179,6 +179,16 @@ export function validatePolicy(policy: PolicyConfig): PolicyValidationResult {
         errors.push('worker.pipelineTimeoutMs must be at least 60000ms (1 minute)')
       }
     }
+
+    if (policy.worker.draftAiTimeoutSeconds !== undefined) {
+      if (
+        typeof policy.worker.draftAiTimeoutSeconds !== 'number' ||
+        policy.worker.draftAiTimeoutSeconds < 60 ||
+        policy.worker.draftAiTimeoutSeconds > 1800
+      ) {
+        errors.push('worker.draftAiTimeoutSeconds must be between 60 and 1800 seconds')
+      }
+    }
   }
 
   // Validate sync config
@@ -387,7 +397,7 @@ export function mergePolicyUpdate(
       sessionMode:
         update.worker?.session?.sessionMode ?? current.worker?.session?.sessionMode ?? 'single',
       maxIterations:
-        update.worker?.session?.maxIterations ?? current.worker?.session?.maxIterations ?? 5,
+        update.worker?.session?.maxIterations ?? current.worker?.session?.maxIterations ?? 3,
       progressCheckpoint:
         update.worker?.session?.progressCheckpoint ??
         current.worker?.session?.progressCheckpoint ??
@@ -395,7 +405,11 @@ export function mergePolicyUpdate(
       contextCarryover:
         update.worker?.session?.contextCarryover ??
         current.worker?.session?.contextCarryover ??
-        'summary'
+        'summary',
+      minimalContinuationPrompt:
+        update.worker?.session?.minimalContinuationPrompt ??
+        current.worker?.session?.minimalContinuationPrompt ??
+        true
     }
 
     // Ensure e2e has required fields
@@ -430,6 +444,7 @@ export function getStatusLabelFromPolicy(status: CardStatus, policy: PolicyConfi
     in_progress: 'In Progress',
     in_review: 'In Review',
     testing: 'Testing',
+    failed: 'Failed',
     done: 'Done'
   }
   const keyMap: Record<CardStatus, keyof NonNullable<typeof statusLabels>> = {
@@ -438,6 +453,7 @@ export function getStatusLabelFromPolicy(status: CardStatus, policy: PolicyConfi
     in_progress: 'inProgress',
     in_review: 'inReview',
     testing: 'testing',
+    failed: 'failed',
     done: 'done'
   }
   return statusLabels[keyMap[status]] || defaults[status]
@@ -454,6 +470,7 @@ export function getAllStatusLabelsFromPolicy(policy: PolicyConfig): string[] {
     statusLabels.inProgress || 'In Progress',
     statusLabels.inReview || 'In Review',
     statusLabels.testing || 'Testing',
+    statusLabels.failed || 'Failed',
     statusLabels.done || 'Done'
   ]
 }

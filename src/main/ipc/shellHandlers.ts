@@ -61,7 +61,7 @@ import {
   getDefaultRemote,
   normalizeProjectPath
 } from '../projectIdentity'
-import { logAction } from '@shared/utils'
+import { logAction } from '../utils/main-logger'
 import { registerProjectHandlers } from './projectHandlers'
 import { broadcastToRenderers } from './broadcast'
 import { getAllShortcuts, setShortcuts } from '../shortcuts'

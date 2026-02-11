@@ -1,7 +1,7 @@
 import { Play, TestTube, ExternalLink, Scissors, Info, Upload } from 'lucide-react'
 import { Button } from '../ui/button'
 import { Tooltip } from '../ui/tooltip'
-import type { Card, Worktree } from '../../../../shared/types'
+import { TESTABLE_STATUSES, type Card, type Worktree } from '../../../../shared/types'
 
 interface QuickActionsBarProps {
   card: Card
@@ -28,7 +28,7 @@ export function QuickActionsBar({
   onSplitCard,
   onPushToRemote
 }: QuickActionsBarProps): React.JSX.Element {
-  const showTestButton = worktree || card.status === 'in_progress' || card.status === 'ready'
+  const showTestButton = worktree || TESTABLE_STATUSES.includes(card.status)
 
   return (
     <div className="flex items-center gap-2 flex-wrap">

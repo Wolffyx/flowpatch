@@ -4,16 +4,19 @@
  */
 
 import type { Card } from '@shared/types'
-import { logAction } from '@shared/utils'
+import { logAction } from '../../../utils/main-logger'
 import type { GithubCLIWrapper } from '../helpers/cli-wrapper'
 import type { GithubCardConverter } from '../helpers/card-converter'
-import type { GithubIssue } from '../types'
+import type { GithubIssue, GithubComment } from '../types'
 import type { ProjectStatusMap } from '../types/projects'
+import type { RemoteComment } from '../../types'
 
 export interface IssueResult {
   number: number
   url: string
   card: Card
+  /** Global issue id from GitHub (for sub_issues API) */
+  issueId?: number
 }
 
 /**
@@ -43,7 +46,7 @@ export class GithubIssueOperations {
 
       const issues: GithubIssue[] = JSON.parse(stdout)
       const projectStatusCache = this.getProjectStatusCache()
-      
+
       return issues.map((issue) => {
         const projectStatus = projectStatusCache?.get(issue.number)
         return this.cardConverter.issueToCard(issue, projectStatus)
@@ -55,23 +58,29 @@ export class GithubIssueOperations {
   }
 
   /**
-   * Get a single issue by number
+   * Fetch raw issue JSON (includes global id for sub_issues API).
    */
-  async get(issueNumber: number): Promise<Card | null> {
+  private async _fetchIssue(issueNumber: number): Promise<GithubIssue | null> {
     try {
       const stdout = await this.cli.issue([
         'view',
         String(issueNumber),
         '--json',
-        'number,title,body,state,url,labels,assignees,updatedAt,id'
+        'number,id,title,body,state,url,labels,assignees,updatedAt,node_id'
       ])
-
-      const issue: GithubIssue = JSON.parse(stdout)
-      return this.cardConverter.issueToCard(issue)
+      return JSON.parse(stdout) as GithubIssue
     } catch (error) {
-      console.error('Failed to get issue:', error)
+      console.error('Failed to fetch GitHub issue:', error)
       return null
     }
+  }
+
+  /**
+   * Get a single issue by number
+   */
+  async get(issueNumber: number): Promise<Card | null> {
+    const issue = await this._fetchIssue(issueNumber)
+    return issue ? this.cardConverter.issueToCard(issue) : null
   }
 
   /**
@@ -104,17 +113,17 @@ export class GithubIssueOperations {
       }
 
       const issueNumber = parseInt(issueNumberMatch[1], 10)
-
-      // Fetch the full issue details to get all fields
-      const card = await this.get(issueNumber)
-      if (!card) {
+      const issue = await this._fetchIssue(issueNumber)
+      if (!issue) {
         return null
       }
 
+      const card = this.cardConverter.issueToCard(issue)
       return {
         number: issueNumber,
         url,
-        card
+        card,
+        issueId: issue.id
       }
     } catch (error) {
       console.error('Failed to create GitHub issue:', error)
@@ -137,58 +146,103 @@ export class GithubIssueOperations {
   }
 
   /**
-   * Add a comment to an issue
+   * List all comments on an issue
    */
-  async comment(issueNumber: number, comment: string): Promise<boolean> {
+  async listComments(issueNumber: number): Promise<RemoteComment[]> {
     try {
-      await this.cli.issue(['comment', String(issueNumber), '--body', comment])
-      return true
+      const stdout = await this.cli.issue([
+        'view',
+        String(issueNumber),
+        '--json',
+        'comments'
+      ])
+      const data = JSON.parse(stdout) as { comments: GithubComment[] }
+      return (data.comments || []).map((c) => ({
+        id: String(c.id),
+        author: c.author?.login || 'unknown',
+        body: c.body,
+        created_at: c.createdAt
+      }))
     } catch (error) {
-      console.error('Failed to comment on issue:', error)
-      return false
+      console.error('Failed to list comments on issue:', error)
+      return []
     }
   }
 
   /**
-   * Add a sub-issue relationship using GitHub's sub-issues REST API
+   * Add a comment to an issue.
+   * Returns the created comment's ID, or null on failure.
+   */
+  async comment(issueNumber: number, comment: string): Promise<string | null> {
+    try {
+      // Use gh api to create comment and get back the ID
+      const result = await this.cli.api([
+        'repos/{owner}/{repo}/issues/' + issueNumber + '/comments',
+        '-f',
+        `body=${comment}`,
+        '--jq',
+        '.id'
+      ])
+      const commentId = result?.trim()
+      return commentId || null
+    } catch (error) {
+      console.error('Failed to comment on issue:', error)
+      return null
+    }
+  }
+
+  /**
+   * Add a sub-issue relationship using GitHub's sub-issues REST API.
+   * Sends JSON body as required by the API; uses childIssueId (global id) when provided, else childIssueNumber.
    */
   async addSubIssue(
     _parentNodeId: string,
     _childNodeId: string,
     parentIssueNumber?: number,
-    childIssueNumber?: number
+    childIssueNumber?: number,
+    childIssueId?: number
   ): Promise<boolean> {
-    // Try REST API (more reliable)
-    if (parentIssueNumber && childIssueNumber) {
-      try {
-        const stdout = await this.cli.api([
+    const subIssueId = childIssueId ?? childIssueNumber
+    if (
+      parentIssueNumber === undefined ||
+      parentIssueNumber === null ||
+      subIssueId === undefined ||
+      subIssueId === null
+    ) {
+      return false
+    }
+    try {
+      const body = JSON.stringify({ sub_issue_id: subIssueId })
+      const stdout = await this.cli.api(
+        [
           '--method',
           'POST',
-          `-H`,
+          '-H',
           'Accept: application/vnd.github+json',
-          `-H`,
+          '-H',
           'X-GitHub-Api-Version: 2022-11-28',
           `/repos/${this.cli.repoIdentifier}/issues/${parentIssueNumber}/sub_issues`,
-          '-f',
-          `sub_issue_id=${childIssueNumber}`
-        ])
+          '--input',
+          '-'
+        ],
+        body
+      )
 
-        logAction('addSubIssue (REST): Success', {
-          parentIssueNumber,
-          childIssueNumber,
-          stdout: stdout.slice(0, 200)
-        })
-        return true
-      } catch (restError) {
-        logAction('addSubIssue (REST): Failed', {
-          parentIssueNumber,
-          childIssueNumber,
-          error: String(restError)
-        })
-        return false
-      }
+      logAction('addSubIssue (REST): Success', {
+        parentIssueNumber,
+        childIssueNumber,
+        childIssueId,
+        stdout: stdout.slice(0, 200)
+      })
+      return true
+    } catch (restError) {
+      logAction('addSubIssue (REST): Failed', {
+        parentIssueNumber,
+        childIssueNumber,
+        childIssueId,
+        error: String(restError)
+      })
+      return false
     }
-
-    return false
   }
 }

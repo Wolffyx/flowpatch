@@ -18,7 +18,8 @@ import {
   getSyncSchedulerStatus,
   getSyncSchedulerConfigFromPolicy
 } from '../../sync/scheduler'
-import { logAction, parsePolicyJson } from '@shared/utils'
+import { parsePolicyJson } from '@shared/utils'
+import { logAction } from '../../utils/main-logger'
 import type { PolicyConfig } from '@shared/types'
 
 // ============================================================================

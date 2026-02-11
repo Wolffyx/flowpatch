@@ -3,7 +3,7 @@
  * Centralizes all GitHub CLI (gh) command execution
  */
 
-import { execFile } from 'child_process'
+import { execFile, spawn } from 'child_process'
 import { promisify } from 'util'
 
 const execFileAsync = promisify(execFile)
@@ -71,10 +71,36 @@ export class GithubCLIWrapper {
   }
 
   /**
-   * Execute gh api command
+   * Execute gh api command. When body is provided, sends it as stdin (e.g. for JSON request body with --input -).
    */
-  async api(args: string[]): Promise<string> {
-    return this.exec(['api', ...args])
+  async api(args: string[], body?: string): Promise<string> {
+    if (body === undefined || body === '') {
+      return this.exec(['api', ...args])
+    }
+    return new Promise((resolve, reject) => {
+      const child = spawn('gh', ['api', ...args], {
+        cwd: this.repoPath,
+        stdio: ['pipe', 'pipe', 'pipe']
+      })
+      const outChunks: Buffer[] = []
+      const errChunks: Buffer[] = []
+      child.stdout?.on('data', (chunk: Buffer) => outChunks.push(chunk))
+      child.stderr?.on('data', (chunk: Buffer) => errChunks.push(chunk))
+      child.on('error', reject)
+      child.on('close', (code, signal) => {
+        const stdout = Buffer.concat(outChunks).toString()
+        const stderr = Buffer.concat(errChunks).toString()
+        if (code !== 0) {
+          reject(new Error(signal ? `gh api exited with signal ${signal}` : `gh api exited ${code}: ${stderr || stdout}`))
+          return
+        }
+        resolve(stdout)
+      })
+      child.stdin?.write(body, 'utf8', (err) => {
+        if (err) reject(err)
+        else child.stdin?.end()
+      })
+    })
   }
 
   /**

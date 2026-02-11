@@ -3,7 +3,7 @@ import { dirname, basename, join } from 'path'
 import { getProject, updateProjectPolicyJson } from '../db'
 import { DEFAULT_POLICY, type PolicyConfig } from '../../shared/types'
 import { GitWorktreeManager } from './git-worktree-manager'
-import { logAction } from '../../shared/utils'
+import { logAction } from '../utils/main-logger'
 
 export interface WorktreeInitResult {
   configured: boolean

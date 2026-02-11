@@ -25,6 +25,8 @@ export interface IssueResult {
   number: number
   url: string
   card: Card
+  /** GitHub global issue id (for sub-issue API); only set by GitHub adapter */
+  issueId?: number
 }
 
 /**
@@ -41,6 +43,16 @@ export interface PRResult {
 export interface LabelResult {
   created: boolean
   error?: string
+}
+
+/**
+ * Remote comment from GitHub/GitLab.
+ */
+export interface RemoteComment {
+  id: string
+  author: string
+  body: string
+  created_at: string
 }
 
 // ============================================================================
@@ -198,10 +210,17 @@ export interface IRepoAdapter {
   // ──────────────────────────────────────────────────────────────────────────
 
   /**
-   * Add a comment to an issue.
-   * LocalAdapter returns false (comments not supported).
+   * List all comments on an issue.
+   * LocalAdapter returns an empty array.
    */
-  commentOnIssue(issueId: number, comment: string): Promise<boolean>
+  listIssueComments(issueNumber: number): Promise<RemoteComment[]>
+
+  /**
+   * Add a comment to an issue.
+   * Returns the created comment's ID, or null on failure.
+   * LocalAdapter returns null (comments not supported).
+   */
+  commentOnIssue(issueId: number, comment: string): Promise<string | null>
 }
 
 // ============================================================================
@@ -251,8 +270,18 @@ export interface IGithubAdapter extends IRepoAdapter {
     parentNodeId: string,
     childNodeId: string,
     parentIssueNumber?: number,
-    childIssueNumber?: number
+    childIssueNumber?: number,
+    childIssueId?: number
   ): Promise<boolean>
+}
+
+/**
+ * Extended interface for GitLab-specific functionality.
+ * Used when the adapter needs issue link (related-issues) support.
+ */
+export interface IGitlabAdapter extends IRepoAdapter {
+  /** Add a related-issue link (child) to a parent issue using GitLab's issue links API (relates_to) */
+  addSubIssue(parentIssueIid: number, childIssueIid: number): Promise<boolean>
 }
 
 /**
@@ -260,4 +289,11 @@ export interface IGithubAdapter extends IRepoAdapter {
  */
 export function isGithubAdapter(adapter: IRepoAdapter): adapter is IGithubAdapter {
   return adapter.providerKey === 'github'
+}
+
+/**
+ * Type guard to check if an adapter is a GitLab adapter with extended features.
+ */
+export function isGitlabAdapter(adapter: IRepoAdapter): adapter is IGitlabAdapter {
+  return adapter.providerKey === 'gitlab'
 }

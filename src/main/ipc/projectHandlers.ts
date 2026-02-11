@@ -33,17 +33,19 @@ import {
   checkCanMoveToStatus,
   getActiveWorkerJobForCard,
   cancelJob,
-  resetWorkerState
+  resetWorkerState,
+  deleteFailedWorkerRunJobsForCard
 } from '../db'
 import { runWorker as executeWorkerPipeline } from '../worker/pipeline'
-import { startWorkerLoop, stopWorkerLoop } from '../worker/loop'
+import { startWorkerLoop, stopWorkerLoop, wakeUpWorkerLoop } from '../worker/loop'
 import {
   getProjectIdFromWebContents,
   getTabFromWebContents,
   sendToAllTabs,
   sendToTab
 } from '../tabManager'
-import { logAction, parsePolicyJson, getStatusLabelFromPolicy, getAllStatusLabelsFromPolicy } from '@shared/utils'
+import { parsePolicyJson, getStatusLabelFromPolicy, getAllStatusLabelsFromPolicy } from '@shared/utils'
+import { logAction } from '../utils/main-logger'
 import { verifySecureRequest } from '../security'
 import { runSync, SyncEngine } from '../sync/engine'
 import { triggerProjectSync } from '../sync/scheduler'
@@ -221,6 +223,7 @@ export function registerProjectHandlers(): void {
           payload.status === 'draft' ||
           payload.status === 'in_review' ||
           payload.status === 'testing' ||
+          payload.status === 'failed' ||
           payload.status === 'done'
         ) {
           const activeJob = getActiveWorkerJobForCard(payload.cardId, projectId)
@@ -232,6 +235,12 @@ export function registerProjectHandlers(): void {
               reason: `moved_to_${payload.status}`
             })
           }
+        }
+
+        // When card moves to Ready, clear failed jobs so it is immediately eligible and wake worker pool
+        if (payload.status === 'ready') {
+          deleteFailedWorkerRunJobsForCard(payload.cardId, projectId)
+          wakeUpWorkerLoop(projectId)
         }
 
         // Queue async remote sync in background (fire-and-forget for fast UI response)
@@ -381,7 +390,7 @@ export function registerProjectHandlers(): void {
       return { error: 'No remote configured' }
     }
 
-    const job = createJob(projectId, 'worker_run', cardId)
+    const job = createJob(projectId, 'worker_run', cardId, { trigger: 'manual' })
     createEvent(projectId, 'worker_run', cardId, { jobId: job.id, trigger: 'manual' })
     notifyRendererStateUpdated()
 

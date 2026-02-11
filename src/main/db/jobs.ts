@@ -17,6 +17,30 @@ import { getProjectDrizzle, hasProjectDb } from './project-db'
 export type { Job, JobState, JobType }
 
 /**
+ * Safely stringify an object, handling circular references.
+ */
+function safeStringify(obj: unknown): string {
+  const seen = new WeakSet()
+  return JSON.stringify(obj, (_key, value) => {
+    if (typeof value === 'object' && value !== null) {
+      if (seen.has(value)) {
+        return '[Circular]'
+      }
+      seen.add(value)
+    }
+    // Handle Error objects specially
+    if (value instanceof Error) {
+      return {
+        name: value.name,
+        message: value.message,
+        stack: value.stack
+      }
+    }
+    return value
+  })
+}
+
+/**
  * List jobs for a project.
  */
 export function listJobs(projectId: string, limit = 50): Job[] {
@@ -112,7 +136,7 @@ export function createJob(
         type,
         state: 'queued',
         attempts: 0,
-        payload_json: payload ? JSON.stringify(payload) : null,
+        payload_json: payload ? safeStringify(payload) : null,
         created_at: now,
         updated_at: now
       })
@@ -130,7 +154,7 @@ export function createJob(
       type,
       state: 'queued',
       attempts: 0,
-      payload_json: payload ? JSON.stringify(payload) : null,
+      payload_json: payload ? safeStringify(payload) : null,
       created_at: now,
       updated_at: now
     })
@@ -161,7 +185,7 @@ export function updateJobState(
       db.update(projectJobs)
         .set({
           state,
-          result_json: result ? JSON.stringify(result) : null,
+          result_json: result ? safeStringify(result) : null,
           last_error: error ?? null,
           updated_at: now
         })
@@ -176,7 +200,7 @@ export function updateJobState(
   db.update(jobs)
     .set({
       state,
-      result_json: result ? JSON.stringify(result) : null,
+      result_json: result ? safeStringify(result) : null,
       last_error: error ?? null,
       updated_at: now
     })
@@ -199,7 +223,7 @@ export function updateJobResult(jobId: string, result?: unknown, projectId?: str
     if (isLocalDb) {
       db.update(projectJobs)
         .set({
-          result_json: result ? JSON.stringify(result) : null,
+          result_json: result ? safeStringify(result) : null,
           updated_at: now
         })
         .where(eq(projectJobs.id, jobId))
@@ -212,7 +236,7 @@ export function updateJobResult(jobId: string, result?: unknown, projectId?: str
   const db = getDrizzle()
   db.update(jobs)
     .set({
-      result_json: result ? JSON.stringify(result) : null,
+      result_json: result ? safeStringify(result) : null,
       updated_at: now
     })
     .where(eq(jobs.id, jobId))

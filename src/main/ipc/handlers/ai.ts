@@ -12,7 +12,8 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { getCard, getProject } from '../../db'
 import { verifySecureRequest } from '../../security'
-import { logAction } from '@shared/utils'
+import { parsePolicyJson } from '@shared/utils'
+import { logAction } from '../../utils/main-logger'
 import { CLIProviderRegistry } from '../../cli-providers/registry'
 
 type DraftToolPreference = 'auto' | 'claude' | 'codex'
@@ -360,6 +361,13 @@ function verifyAIRequest(event: IpcMainInvokeEvent, channel: string): string | n
   return null
 }
 
+function getDraftAiTimeoutMs(project: { policy_json: string | null }): number {
+  const policy = parsePolicyJson(project.policy_json)
+  const secondsRaw = policy.worker?.draftAiTimeoutSeconds ?? 300
+  const clampedSeconds = Math.max(60, Math.min(1800, secondsRaw))
+  return clampedSeconds * 1000
+}
+
 // ============================================================================
 // Handler Registration
 // ============================================================================
@@ -428,7 +436,7 @@ export function registerAIHandlers(): void {
         if (!tool) return { error: `Selected tool not available: ${toolPreference}` }
 
         const prompt = buildDraftPrompt(payload.title, messages)
-        const timeoutMs = 90_000
+        const timeoutMs = getDraftAiTimeoutMs(project)
 
         if (tool === 'claude') {
           const response = await runClaudePlan(prompt, project.local_path, timeoutMs)
@@ -438,7 +446,14 @@ export function registerAIHandlers(): void {
         const response = await runCodexPlan(prompt, project.local_path, timeoutMs)
         return { success: true, toolUsed: tool, response }
       } catch (error) {
-        return { error: error instanceof Error ? error.message : String(error) }
+        const message = error instanceof Error ? error.message : String(error)
+        const isTimeout = /timed out after \d+s/i.test(message)
+        if (isTimeout) {
+          return {
+            error: `TIMEOUT: ${message}`
+          }
+        }
+        return { error: message }
       }
     }
   )
@@ -485,7 +500,7 @@ export function registerAIHandlers(): void {
         if (!tool) return { error: `Selected tool not available: ${toolPreference}` }
 
         const prompt = buildCardListPrompt(description, count)
-        const timeoutMs = 120_000
+        const timeoutMs = getDraftAiTimeoutMs(project)
 
         const raw =
           tool === 'claude'
@@ -495,7 +510,14 @@ export function registerAIHandlers(): void {
         const cards = parseCardListJson(raw, count)
         return { success: true, toolUsed: tool, cards }
       } catch (error) {
-        return { error: error instanceof Error ? error.message : String(error) }
+        const message = error instanceof Error ? error.message : String(error)
+        const isTimeout = /timed out after \d+s/i.test(message)
+        if (isTimeout) {
+          return {
+            error: `TIMEOUT: ${message}`
+          }
+        }
+        return { error: message }
       }
     }
   )
@@ -548,7 +570,7 @@ export function registerAIHandlers(): void {
           count,
           payload.guidance
         )
-        const timeoutMs = 120_000
+        const timeoutMs = getDraftAiTimeoutMs(project)
 
         const raw =
           tool === 'claude'
@@ -558,7 +580,14 @@ export function registerAIHandlers(): void {
         const cards = parseCardListJson(raw, count)
         return { success: true, toolUsed: tool, cards }
       } catch (error) {
-        return { error: error instanceof Error ? error.message : String(error) }
+        const message = error instanceof Error ? error.message : String(error)
+        const isTimeout = /timed out after \d+s/i.test(message)
+        if (isTimeout) {
+          return {
+            error: `TIMEOUT: ${message}`
+          }
+        }
+        return { error: message }
       }
     }
   )

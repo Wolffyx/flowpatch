@@ -141,8 +141,11 @@ export class BranchManager {
       // Refresh remote refs for this branch name
       try {
         await fetchOrigin(this.repoPath, branchName)
-      } catch {
-        // ignore
+      } catch (fetchError) {
+        // Log but don't fail - we'll try to proceed with local refs
+        this.log(
+          `Warning: Failed to fetch remote branch ${branchName}: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}`
+        )
       }
 
       // If remote branch exists, create a local tracking branch

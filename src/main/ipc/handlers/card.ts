@@ -19,13 +19,14 @@ import {
   checkCanMoveToStatus,
   deleteCard,
   createCardDependency,
-  updateCardTimestamp
+  updateCardTimestamp,
+  deleteFailedWorkerRunJobsForCard
 } from '../../db'
 import { SyncEngine } from '../../sync/engine'
 import { triggerProjectSync } from '../../sync/scheduler'
 import { wakeUpWorkerLoop } from '../../worker/loop'
-import { AdapterRegistry, isGithubAdapter } from '../../adapters'
-import type { IGithubAdapter } from '../../adapters'
+import { AdapterRegistry, isGithubAdapter, isGitlabAdapter } from '../../adapters'
+import type { IGithubAdapter, IGitlabAdapter } from '../../adapters'
 import {
   parsePolicyJson,
   getStatusLabelFromPolicy,
@@ -140,8 +141,14 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
           }
         }
 
-        // Create the issue via unified interface
-        const result = await adapter.createIssue(payload.title, payload.body || undefined)
+        // Create the issue via unified interface with draft status label
+        const initialStatus: CardStatus = 'draft'
+        const statusLabel = adapter.getStatusLabel(initialStatus)
+        const result = await adapter.createIssue(
+          payload.title,
+          payload.body || undefined,
+          [statusLabel]
+        )
         if (!result) {
           const provider = createType === 'github_issue' ? 'GitHub' : 'GitLab'
           return { error: `Failed to create ${provider} issue` }
@@ -225,6 +232,7 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
 
       const createdCards: Card[] = []
       const childIssueNumbers: string[] = []
+      let subIssueLinkFailed = false
 
       for (const item of items) {
         const backlinkLines = buildParentBacklink(parent)
@@ -242,9 +250,12 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
           })
           createdCards.push(updatedCard)
         } else {
+          const initialStatus: CardStatus = 'draft'
+          const statusLabel = adapter!.getStatusLabel(initialStatus)
           const result = await adapter!.createIssue(
             item.title.trim(),
-            bodyWithBacklink || undefined
+            bodyWithBacklink || undefined,
+            [statusLabel]
           )
           if (!result) {
             const provider = adapter!.providerKey === 'gitlab' ? 'GitLab' : 'GitHub'
@@ -262,21 +273,77 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
               ? parseInt(parent.remote_number_or_iid, 10)
               : undefined
             const childIssueNumber = result.number
+            const hasValidIds =
+              parentIssueNumber !== undefined &&
+              !Number.isNaN(parentIssueNumber) &&
+              childIssueNumber !== undefined &&
+              !Number.isNaN(childIssueNumber)
 
-            try {
-              await (adapter as IGithubAdapter).addSubIssue(
-                parent.remote_node_id || '',
-                result.card.remote_node_id || '',
-                parentIssueNumber,
-                childIssueNumber
-              )
-            } catch (subIssueError) {
-              // Log but don't fail the split - markdown backlinks are still added
-              logAction('splitCard:addSubIssueFailed', {
+            if (!hasValidIds) {
+              logAction('splitCard:addSubIssueSkipped', {
                 parentIssueNumber,
                 childIssueNumber,
-                error: String(subIssueError)
+                reason: 'missing or invalid parent/child issue numbers'
               })
+            } else {
+              try {
+                const success = await (adapter as IGithubAdapter).addSubIssue(
+                  parent.remote_node_id || '',
+                  result.card.remote_node_id || '',
+                  parentIssueNumber,
+                  childIssueNumber,
+                  result.issueId
+                )
+                if (!success) subIssueLinkFailed = true
+              } catch (subIssueError) {
+                subIssueLinkFailed = true
+                logAction('splitCard:addSubIssueFailed', {
+                  parentIssueNumber,
+                  childIssueNumber,
+                  error: String(subIssueError)
+                })
+              }
+            }
+          } else if (isGitlabAdapter(adapter!)) {
+            // Add GitLab issue link (relates_to) so child appears in parent's "Linked items"
+            const parentIssueIid = parent.remote_number_or_iid
+              ? parseInt(parent.remote_number_or_iid, 10)
+              : undefined
+            const childIssueIid = result.number
+            const hasValidIds =
+              parentIssueIid !== undefined &&
+              !Number.isNaN(parentIssueIid) &&
+              childIssueIid !== undefined &&
+              !Number.isNaN(childIssueIid)
+
+            if (!hasValidIds) {
+              logAction('splitCard:addSubIssueSkipped', {
+                parentIssueIid,
+                childIssueIid,
+                reason: 'missing or invalid parent/child issue IIDs'
+              })
+            } else {
+              try {
+                const success = await (adapter as IGitlabAdapter).addSubIssue(
+                  parentIssueIid,
+                  childIssueIid
+                )
+                if (!success) {
+                  subIssueLinkFailed = true
+                  logAction('splitCard:addSubIssueFailed', {
+                    parentIssueIid,
+                    childIssueIid,
+                    error: 'addSubIssue returned false'
+                  })
+                }
+              } catch (subIssueError) {
+                subIssueLinkFailed = true
+                logAction('splitCard:addSubIssueFailed', {
+                  parentIssueIid,
+                  childIssueIid,
+                  error: String(subIssueError)
+                })
+              }
             }
           }
 
@@ -339,7 +406,12 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
       }
 
       notifyRenderer()
-      return { cards: createdCards }
+      return {
+        cards: createdCards,
+        warning: subIssueLinkFailed
+          ? 'Child issues created; linking to parent on GitHub/GitLab failed for some issues.'
+          : undefined
+      }
     }
   )
 
@@ -352,11 +424,23 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
         cardId: string
         status: CardStatus
         skipDependencyCheck?: boolean
+        projectId?: string
       }
     ) => {
+      // Get the card first to determine projectId
+      const before = getCard(payload.cardId, payload.projectId)
+      if (!before) {
+        logAction('moveCard:card_not_found', { cardId: payload.cardId })
+        return {
+          card: null,
+          error: 'Card not found'
+        }
+      }
+      const projectId = before.project_id
+
       // Check dependencies unless explicitly skipped
       if (!payload.skipDependencyCheck) {
-        const dependencyCheck = checkCanMoveToStatus(payload.cardId, payload.status)
+        const dependencyCheck = checkCanMoveToStatus(payload.cardId, payload.status, projectId)
         if (!dependencyCheck.canMove) {
           logAction('moveCard:blocked_by_dependencies', {
             cardId: payload.cardId,
@@ -371,14 +455,6 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
         }
       }
 
-      const before = getCard(payload.cardId)
-      if (!before) {
-        logAction('moveCard:card_not_found', { cardId: payload.cardId })
-        return {
-          card: null,
-          error: 'Card not found'
-        }
-      }
       logAction('moveCard:before_update', {
         cardId: payload.cardId,
         projectId: before.project_id,
@@ -418,6 +494,7 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
           payload.status === 'draft' ||
           payload.status === 'in_review' ||
           payload.status === 'testing' ||
+          payload.status === 'failed' ||
           payload.status === 'done'
         ) {
           const activeJob = getActiveWorkerJobForCard(payload.cardId)
@@ -431,8 +508,9 @@ export function registerCardHandlers(notifyRenderer: () => void): void {
           }
         }
 
-        // Wake up worker pool for instant pickup when card moves to Ready
+        // When card moves to Ready, clear failed jobs so it is immediately eligible and wake worker pool
         if (payload.status === 'ready') {
+          deleteFailedWorkerRunJobsForCard(payload.cardId, before.project_id)
           wakeUpWorkerLoop(card.project_id)
         }
 

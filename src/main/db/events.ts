@@ -75,6 +75,30 @@ export function listCardEvents(cardId: string, limit = 50, projectId?: string): 
 }
 
 /**
+ * Safely stringify an object, handling circular references.
+ */
+function safeStringify(obj: unknown): string {
+  const seen = new WeakSet()
+  return JSON.stringify(obj, (_key, value) => {
+    if (typeof value === 'object' && value !== null) {
+      if (seen.has(value)) {
+        return '[Circular]'
+      }
+      seen.add(value)
+    }
+    // Handle Error objects specially
+    if (value instanceof Error) {
+      return {
+        name: value.name,
+        message: value.message,
+        stack: value.stack
+      }
+    }
+    return value
+  })
+}
+
+/**
  * Create an event.
  */
 export function createEvent(
@@ -87,6 +111,9 @@ export function createEvent(
   const id = generateId()
   const now = new Date().toISOString()
 
+  // Use safe stringify to handle any circular references in payload
+  const payloadJson = payload ? safeStringify(payload) : null
+
   if (isLocalDb) {
     // Project DB - no project_id column
     db.insert(projectEvents)
@@ -94,7 +121,7 @@ export function createEvent(
         id,
         card_id: cardId ?? null,
         type,
-        payload_json: payload ? JSON.stringify(payload) : null,
+        payload_json: payloadJson,
         created_at: now
       })
       .run()
@@ -109,7 +136,7 @@ export function createEvent(
       project_id: projectId,
       card_id: cardId ?? null,
       type,
-      payload_json: payload ? JSON.stringify(payload) : null,
+      payload_json: payloadJson,
       created_at: now
     })
     .run()

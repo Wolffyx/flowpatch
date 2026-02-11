@@ -12,6 +12,7 @@ import { GitDiffDialog } from '../GitDiffDialog'
 import { AgentChatDialog } from '../AgentChatDialog'
 import { DependencyManager } from '../DependencyManager'
 import { TestModificationsDialog } from '../TestModificationsDialog'
+import { CommentsSection } from '../CommentsSection'
 import { CardMetadataHeader } from './CardMetadataHeader'
 import { QuickActionsBar } from './QuickActionsBar'
 import { DescriptionEditor } from './DescriptionEditor'
@@ -21,6 +22,7 @@ import { useCardDialogState } from './useCardDialogState'
 import { useKeyboardShortcuts } from './useKeyboardShortcuts'
 import {
   KANBAN_COLUMNS,
+  TESTABLE_STATUSES,
   type Card,
   type CardLink,
   type Event,
@@ -69,7 +71,7 @@ export function CardDialog({
   )
 
   const showTestButton =
-    !!state.worktree || card?.status === 'in_progress' || card?.status === 'ready'
+    !!state.worktree || (card?.status && TESTABLE_STATUSES.includes(card.status))
 
   // Keyboard shortcuts
   useKeyboardShortcuts({
@@ -245,6 +247,20 @@ export function CardDialog({
                     <DependencyManager card={card} />
                   </div>
                 </div>
+
+                {/* Comments / Feedback */}
+                {projectId && (
+                  <div>
+                    <h3 className="text-sm font-semibold mb-3">Feedback for AI</h3>
+                    <div className="rounded-md bg-muted p-3">
+                      <CommentsSection
+                        cardId={card.id}
+                        projectId={projectId}
+                        cardStatus={card.status}
+                      />
+                    </div>
+                  </div>
+                )}
 
                 {/* Delete Card */}
                 <div className="pt-4 border-t">

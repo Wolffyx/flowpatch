@@ -13,6 +13,7 @@
 export * from './cards'
 export * from './card-links'
 export * from './card-dependencies'
+export * from './card-comments'
 
 // Activity tables
 export * from './events'

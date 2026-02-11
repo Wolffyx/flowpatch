@@ -10,7 +10,7 @@
  * cause conflicts with worktrees, git operations, or card status changes.
  */
 
-import { logAction } from '../../shared/utils'
+import { logAction } from '../utils/main-logger'
 
 // ============================================================================
 // Types

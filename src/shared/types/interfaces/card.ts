@@ -1,6 +1,6 @@
 import type { AppType } from './e2e-test'
 
-export type CardStatus = 'draft' | 'ready' | 'in_progress' | 'in_review' | 'testing' | 'done'
+export type CardStatus = 'draft' | 'ready' | 'in_progress' | 'in_review' | 'testing' | 'failed' | 'done'
 export type Provider = 'github' | 'gitlab' | 'local' | 'auto'
 export type CardType = 'issue' | 'pr' | 'draft' | 'mr' | 'local'
 

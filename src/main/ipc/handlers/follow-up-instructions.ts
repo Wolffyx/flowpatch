@@ -19,7 +19,7 @@ import {
   createEvent
 } from '../../db'
 import type { FollowUpInstructionType } from '@shared/types'
-import { logAction } from '@shared/utils'
+import { logAction } from '../../utils/main-logger'
 
 // ============================================================================
 // Handler Registration

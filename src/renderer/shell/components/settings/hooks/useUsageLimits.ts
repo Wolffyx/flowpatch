@@ -1,28 +1,64 @@
 /**
  * Usage Limits Hook
  *
- * Manages usage and spending limits for AI tools
+ * Manages usage and spending limits for AI tools (claude, codex, opencode, cursor, other).
  */
 
 import { useState, useCallback } from 'react'
 import { toast } from 'sonner'
 import type { ToolLimitsState } from '../types'
 import { DEFAULT_TOOL_LIMITS } from '../constants'
+import type { AIToolType } from '@shared/types'
+
+const TOOL_TYPES: AIToolType[] = ['claude', 'codex', 'opencode', 'cursor', 'other']
+
+function limitsFromApi(limits?: {
+  hourly_token_limit: number | null
+  daily_token_limit: number | null
+  monthly_token_limit: number | null
+  hourly_cost_limit_usd: number | null
+  daily_cost_limit_usd: number | null
+  monthly_cost_limit_usd: number | null
+}): ToolLimitsState {
+  if (!limits) return DEFAULT_TOOL_LIMITS
+  return {
+    hourlyTokenLimit: limits.hourly_token_limit?.toString() ?? '',
+    dailyTokenLimit: limits.daily_token_limit?.toString() ?? '',
+    monthlyTokenLimit: limits.monthly_token_limit?.toString() ?? '',
+    hourlyCostLimit: limits.hourly_cost_limit_usd?.toString() ?? '',
+    dailyCostLimit: limits.daily_cost_limit_usd?.toString() ?? '',
+    monthlyCostLimit: limits.monthly_cost_limit_usd?.toString() ?? ''
+  }
+}
+
+const TOOL_DISPLAY_NAMES: Record<string, string> = {
+  claude: 'Claude Code',
+  codex: 'Codex (OpenAI)',
+  opencode: 'OpenCode',
+  cursor: 'Cursor',
+  other: 'Other'
+}
 
 interface UseUsageLimitsReturn {
-  claudeLimits: ToolLimitsState
-  codexLimits: ToolLimitsState
+  limitsByTool: Record<string, ToolLimitsState>
   limitsLoading: boolean
   savingLimits: boolean
-  setClaudeLimits: React.Dispatch<React.SetStateAction<ToolLimitsState>>
-  setCodexLimits: React.Dispatch<React.SetStateAction<ToolLimitsState>>
+  toolTypes: AIToolType[]
+  getLimits: (toolType: string) => ToolLimitsState
+  setLimits: (toolType: string, state: ToolLimitsState | React.SetStateAction<ToolLimitsState>) => void
   loadUsageLimits: () => Promise<void>
-  saveToolLimits: (toolType: 'claude' | 'codex', limits: ToolLimitsState) => Promise<void>
+  saveToolLimits: (toolType: AIToolType, limits: ToolLimitsState) => Promise<void>
+  getToolDisplayName: (toolType: string) => string
 }
 
 export function useUsageLimits(): UseUsageLimitsReturn {
-  const [claudeLimits, setClaudeLimits] = useState<ToolLimitsState>(DEFAULT_TOOL_LIMITS)
-  const [codexLimits, setCodexLimits] = useState<ToolLimitsState>(DEFAULT_TOOL_LIMITS)
+  const [limitsByTool, setLimitsByTool] = useState<Record<string, ToolLimitsState>>(() => {
+    const initial: Record<string, ToolLimitsState> = {}
+    for (const t of TOOL_TYPES) {
+      initial[t] = { ...DEFAULT_TOOL_LIMITS }
+    }
+    return initial
+  })
   const [limitsLoading, setLimitsLoading] = useState(false)
   const [savingLimits, setSavingLimits] = useState(false)
 
@@ -43,31 +79,14 @@ export function useUsageLimits(): UseUsageLimitsReturn {
         }[]
       }
       const usageData = result.usageWithLimits
-
-      // Find claude and codex limits
-      const claudeData = usageData.find((t: { tool_type: string }) => t.tool_type === 'claude')
-      const codexData = usageData.find((t: { tool_type: string }) => t.tool_type === 'codex')
-
-      if (claudeData?.limits) {
-        setClaudeLimits({
-          hourlyTokenLimit: claudeData.limits.hourly_token_limit?.toString() || '',
-          dailyTokenLimit: claudeData.limits.daily_token_limit?.toString() || '',
-          monthlyTokenLimit: claudeData.limits.monthly_token_limit?.toString() || '',
-          hourlyCostLimit: claudeData.limits.hourly_cost_limit_usd?.toString() || '',
-          dailyCostLimit: claudeData.limits.daily_cost_limit_usd?.toString() || '',
-          monthlyCostLimit: claudeData.limits.monthly_cost_limit_usd?.toString() || ''
-        })
-      }
-      if (codexData?.limits) {
-        setCodexLimits({
-          hourlyTokenLimit: codexData.limits.hourly_token_limit?.toString() || '',
-          dailyTokenLimit: codexData.limits.daily_token_limit?.toString() || '',
-          monthlyTokenLimit: codexData.limits.monthly_token_limit?.toString() || '',
-          hourlyCostLimit: codexData.limits.hourly_cost_limit_usd?.toString() || '',
-          dailyCostLimit: codexData.limits.daily_cost_limit_usd?.toString() || '',
-          monthlyCostLimit: codexData.limits.monthly_cost_limit_usd?.toString() || ''
-        })
-      }
+      setLimitsByTool((prev) => {
+        const next = { ...prev }
+        for (const t of TOOL_TYPES) {
+          const data = usageData.find((u: { tool_type: string }) => u.tool_type === t)
+          next[t] = limitsFromApi(data?.limits)
+        }
+        return next
+      })
     } catch (err) {
       console.error('Failed to load usage limits:', err)
     } finally {
@@ -75,8 +94,23 @@ export function useUsageLimits(): UseUsageLimitsReturn {
     }
   }, [])
 
+  const getLimits = useCallback(
+    (toolType: string) => limitsByTool[toolType] ?? DEFAULT_TOOL_LIMITS,
+    [limitsByTool]
+  )
+
+  const setLimits = useCallback(
+    (toolType: string, state: ToolLimitsState | React.SetStateAction<ToolLimitsState>) => {
+      setLimitsByTool((prev) => ({
+        ...prev,
+        [toolType]: typeof state === 'function' ? state(prev[toolType] ?? DEFAULT_TOOL_LIMITS) : state
+      }))
+    },
+    []
+  )
+
   const saveToolLimits = useCallback(
-    async (toolType: 'claude' | 'codex', limits: ToolLimitsState) => {
+    async (toolType: AIToolType, limits: ToolLimitsState) => {
       setSavingLimits(true)
       try {
         await window.electron.ipcRenderer.invoke('usage:setToolLimits', {
@@ -90,7 +124,8 @@ export function useUsageLimits(): UseUsageLimitsReturn {
           dailyCostLimitUsd: limits.dailyCostLimit ? parseFloat(limits.dailyCostLimit) : null,
           monthlyCostLimitUsd: limits.monthlyCostLimit ? parseFloat(limits.monthlyCostLimit) : null
         })
-        toast.success(`${toolType === 'claude' ? 'Claude' : 'Codex'} limits saved`)
+        const name = TOOL_DISPLAY_NAMES[toolType] ?? toolType
+        toast.success(`${name} limits saved`)
       } catch (err) {
         toast.error(`Failed to save ${toolType} limits`)
         console.error(err)
@@ -101,14 +136,17 @@ export function useUsageLimits(): UseUsageLimitsReturn {
     []
   )
 
+  const getToolDisplayName = useCallback((toolType: string) => TOOL_DISPLAY_NAMES[toolType] ?? toolType, [])
+
   return {
-    claudeLimits,
-    codexLimits,
+    limitsByTool,
     limitsLoading,
     savingLimits,
-    setClaudeLimits,
-    setCodexLimits,
+    toolTypes: TOOL_TYPES,
+    getLimits,
+    setLimits,
     loadUsageLimits,
-    saveToolLimits
+    saveToolLimits,
+    getToolDisplayName
   }
 }

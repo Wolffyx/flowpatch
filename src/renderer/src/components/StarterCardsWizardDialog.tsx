@@ -108,7 +108,16 @@ export function StarterCardsWizardDialog({
         toolPreference
       })
 
-      if (result?.error) throw new Error(result.error)
+      if (result?.error) {
+        const msg = result.error
+        if (msg.startsWith('TIMEOUT:')) {
+          setError(
+            'AI request timed out while generating cards. You can increase the draft AI timeout in Settings → Features → Worker Pipeline Settings → Draft AI timeout.'
+          )
+          return
+        }
+        throw new Error(msg)
+      }
       const nextCards = Array.isArray(result?.cards) ? result.cards : []
       if (nextCards.length === 0) throw new Error('No cards returned from agent')
 

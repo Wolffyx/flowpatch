@@ -7,7 +7,7 @@
 import type { PipelineContext } from './phases/types'
 import type { PolicyConfig, Card } from '@shared/types'
 import { detectGitAuthState } from '../utils/git-auth'
-import { stageAll, commit, push, isWorkingTreeClean } from './git-operations'
+import { stageAll, commit, pushWithRetry, isWorkingTreeClean } from './git-operations'
 import { getWorkingDir } from './phases/types'
 
 /**
@@ -74,13 +74,15 @@ export async function commitAndPush(
     if (updateFromOrigin && branchManager && !ctx.useWorktree) {
       try {
         await branchManager.updateBranchFromOrigin(branchName)
-      } catch {
-        // Let push surface the issue
+      } catch (updateErr) {
+        // Log the error but continue - let push surface the real issue
+        log?.(`Warning: Pre-push update failed: ${updateErr instanceof Error ? updateErr.message : String(updateErr)}`)
       }
     }
 
     log?.(`Pushing branch ${branchName} from ${workingDir}`)
-    await push(workingDir, branchName)
+    // Use pushWithRetry to handle transient network failures
+    await pushWithRetry(workingDir, branchName)
     log?.('Push completed successfully')
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)

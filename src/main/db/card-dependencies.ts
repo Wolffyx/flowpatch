@@ -12,7 +12,8 @@ import {
   cardDependencies as projectCardDependencies,
   cards as projectCards
 } from './schema/project'
-import { generateId, logAction } from '@shared/utils'
+import { generateId } from '@shared/utils'
+import { logAction } from '../utils/main-logger'
 import type {
   CardDependency,
   CardDependencyWithCard,
@@ -666,6 +667,7 @@ export function checkCanMoveToStatus(
           'in_progress',
           'in_review',
           'testing',
+          'failed',
           'done'
         ]
         const depCardStatusIndex = statusOrder.indexOf(depCard.status as CardStatus)
@@ -719,6 +721,7 @@ export function checkCanMoveToStatus(
       'in_progress',
       'in_review',
       'testing',
+      'failed',
       'done'
     ]
     const depCardStatusIndex = statusOrder.indexOf(depCard.status as CardStatus)
@@ -760,6 +763,17 @@ export function wouldCreateCycle(
     return true // Self-dependency is a cycle
   }
 
+  // Resolve DB once outside the loop for efficiency
+  let useProjectDb = false
+  let projectDb: ReturnType<typeof resolveProjectDb>['db'] | null = null
+  if (projectId) {
+    const resolved = resolveProjectDb(projectId)
+    if (resolved.isLocalDb) {
+      useProjectDb = true
+      projectDb = resolved.db
+    }
+  }
+
   const visited = new Set<string>()
   const stack = [dependsOnCardId]
 
@@ -776,20 +790,17 @@ export function wouldCreateCycle(
     visited.add(currentId)
 
     // Get all cards that currentId depends on
-    if (projectId) {
-      const { db, isLocalDb } = resolveProjectDb(projectId)
-      if (isLocalDb) {
-        const rows = db
-          .select({ depends_on_card_id: projectCardDependencies.depends_on_card_id })
-          .from(projectCardDependencies)
-          .where(eq(projectCardDependencies.card_id, currentId))
-          .all()
+    if (useProjectDb && projectDb) {
+      const rows = projectDb
+        .select({ depends_on_card_id: projectCardDependencies.depends_on_card_id })
+        .from(projectCardDependencies)
+        .where(eq(projectCardDependencies.card_id, currentId))
+        .all()
 
-        for (const row of rows) {
-          stack.push(row.depends_on_card_id)
-        }
-        continue
+      for (const row of rows) {
+        stack.push(row.depends_on_card_id)
       }
+      continue
     }
 
     // Central DB fallback

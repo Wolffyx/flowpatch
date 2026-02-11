@@ -21,7 +21,7 @@ export function findExistingPR(ctx: PipelineContext): PRResult | null {
 
   const linkedType = ctx.adapter.providerKey === 'github' ? 'pr' : 'mr'
   const existingLink = listCardLinks(ctx.cardId).find((link) => link.linked_type === linkedType)
-  
+
   if (existingLink?.linked_url) {
     const url = existingLink.linked_url
     const numberMatch =
@@ -66,8 +66,8 @@ ${checksPass ? 'All checks passed' : 'Some checks failed - needs review'}
 ---
 Closes #${ctx.card.remote_number_or_iid}
 
-_Automated by FlowPatch_
 `.trim()
+// _Automated by FlowPatch_
 
   // Get status label to attach to PR on creation
   const statusLabel = ctx.adapter.getStatusLabel('in_review')
@@ -113,12 +113,12 @@ export async function moveToInReview(
       allLabels.filter((l) => l !== newLabel)
     )
 
-    // Comment on issue with PR link (only for new PRs)
-    if (isNewPR) {
-      await ctx.adapter.commentOnIssue(
-        issueNumber,
-        `PR created: ${prUrl}\n\n_Automated by FlowPatch_`
-      )
-    }
+    // // Comment on issue with PR link (only for new PRs)
+    // if (isNewPR) {
+    //   await ctx.adapter.commentOnIssue(
+    //     issueNumber,
+    //     `PR created: ${prUrl}\n\n_Automated by FlowPatch_`
+    //   )
+    // }
   }
 }

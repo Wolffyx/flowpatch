@@ -24,7 +24,7 @@ import {
   type CreateCardDependencyData,
   type UpdateCardDependencyData
 } from '../../db'
-import { logAction } from '@shared/utils'
+import { logAction } from '../../utils/main-logger'
 import type {
   CardDependency,
   CardDependencyWithCard,

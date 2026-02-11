@@ -91,6 +91,36 @@ export interface WorkerPipelineSettings {
   pipelineTimeoutMs: number
   maxRetries: number
   retryDelayMs: number
+  maxIterations: number
+  lintCommand: string
+  /** When lint fails, how many times to run the AI to fix (0 = disable, 1-3). */
+  lintFixAttempts: number
+  /** Timeout for draft AI operations (description, starter cards, split cards) in seconds */
+  draftAiTimeoutSeconds: number
+
+  // Phase toggles (all default to true when undefined)
+  /** Enable/disable install dependencies phase */
+  enableInstallPhase: boolean
+  /** Enable/disable checks phase (lint, test, build) - master toggle */
+  enableChecksPhase: boolean
+  /** Enable/disable lint check (requires enableChecksPhase) */
+  enableLintCheck: boolean
+  /** Enable/disable test check (requires enableChecksPhase) */
+  enableTestCheck: boolean
+  /** Enable/disable build check (requires enableChecksPhase) */
+  enableBuildCheck: boolean
+  /** Enable/disable E2E testing phase */
+  enableE2EPhase: boolean
+  /** Enable/disable task decomposition phase */
+  enableDecompositionPhase: boolean
+  /** Enable/disable plan generation phase */
+  enablePlanPhase: boolean
+  /** Enable/disable plan approval phase */
+  enablePlanApprovalPhase: boolean
+  /** Enable/disable commit & push phase */
+  enableCommitPhase: boolean
+  /** Enable/disable PR/MR creation phase */
+  enablePrPhase: boolean
 }
 
 export interface ManualTestSettings {

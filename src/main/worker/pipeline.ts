@@ -16,6 +16,7 @@ import {
   updateJobState,
   getJob,
   acquireJobLease,
+  cancelJob,
   cryptoRandomId,
   getPlanApprovalByJob,
   deletePlanApprovalsByJob,
@@ -24,7 +25,8 @@ import {
 import type { Project, Card, PolicyConfig, Subtask, PlanningMode } from '../../shared/types'
 import { broadcastToRenderers } from '../ipc/broadcast'
 import { writeCheckpoint, readCheckpoint } from '../services/flowpatch-runs'
-import { logAction } from '@shared/utils'
+import { logAction } from '../utils/main-logger'
+import { isPhaseEnabled, getPhaseSkipReason } from '../../shared/utils/phase-utils'
 
 // Phase implementations
 import { runAI } from './phases/ai'
@@ -33,7 +35,15 @@ import { runBranchSyncPhase, type BranchSyncResult } from './phases/branch-sync'
 import { runE2EPhase as runE2EPhaseImpl, type E2EResult } from './phases/e2e'
 import { runChecks } from './phases/checks'
 import { createPR as createPRPhase, moveToInReview } from './phases/pr'
-import type { WorkerResult } from './phases/types'
+import type { WorkerResult, ChecksResult } from './phases/types'
+import {
+  LINT_OUTPUT_MAX_CHARS,
+  LINT_FIX_ATTEMPTS_DEFAULT,
+  LINT_FIX_ATTEMPTS_MAX,
+  TEST_OUTPUT_MAX_CHARS,
+  TEST_FIX_ATTEMPTS_DEFAULT,
+  TEST_FIX_ATTEMPTS_MAX
+} from '../../shared/constants'
 
 // Managers
 import {
@@ -207,7 +217,7 @@ export class WorkerPipeline {
     // Load project and card
     const [project, card] = await Promise.all([
       Promise.resolve(getProject(this.projectId)),
-      Promise.resolve(getCard(this.cardId))
+      Promise.resolve(getCard(this.cardId, this.projectId))
     ])
 
     this.project = project
@@ -222,6 +232,8 @@ export class WorkerPipeline {
       this.log('Card not found')
       return false
     }
+
+    this.log(`Card loaded: status='${this.card.status}', id='${this.card.id}'`)
 
     // Resume from checkpoint if available
     if (this.jobId && this.project) {
@@ -305,7 +317,11 @@ export class WorkerPipeline {
         adapter: this.adapter
       },
       (msg) => this.log(msg),
-      () => this.lifecycleManager?.isCanceled()
+      (reason?: string) => {
+        if (this.jobId) {
+          cancelJob(this.jobId, reason ?? 'Canceled by CardStatusManager', this.projectId)
+        }
+      }
     )
 
     // Initialize branch manager
@@ -328,7 +344,11 @@ export class WorkerPipeline {
         logs: this.logManager.getLogs()
       },
       (msg) => this.log(msg),
-      () => this.lifecycleManager?.isCanceled()
+      (reason?: string) => {
+        if (this.jobId) {
+          cancelJob(this.jobId, reason ?? 'Canceled by ApprovalManager', this.projectId)
+        }
+      }
     )
 
     // Initialize iterative AI manager
@@ -351,13 +371,18 @@ export class WorkerPipeline {
     this.setPhase('init')
     let outcome: 'succeeded' | 'failed' | 'canceled' | 'pending_approval' = 'failed'
 
+    // Get job to read trigger from payload
+    const job = getJob(this.jobId, this.projectId)
+    const jobPayload = job?.payload_json ? JSON.parse(job.payload_json) : {}
+
     // Initialize lifecycle manager
     this.lifecycleManager = new LifecycleManager({
       projectId: this.projectId,
       cardId: this.cardId,
       jobId: this.jobId,
       leaseRenewalMs: this.policy.worker?.leaseRenewalIntervalMs,
-      pipelineTimeoutMs: this.policy.worker?.pipelineTimeoutMs
+      pipelineTimeoutMs: this.policy.worker?.pipelineTimeoutMs,
+      trigger: jobPayload.trigger
     })
 
     // Acquire worker lock to prevent sync during worker operations
@@ -383,8 +408,11 @@ export class WorkerPipeline {
         }
       }
 
+      this.log('Checking lifecycle and card status before proceeding')
       this.lifecycleManager.ensureNotCanceled()
+      this.log('Lifecycle check passed, checking card status')
       this.cardStatusManager!.ensureCardStatusAllowed(['ready'], 'Canceled: card no longer Ready')
+      this.log('Card status check passed')
 
       // Phase 1: Move to In Progress
       this.setPhase('in_progress')
@@ -482,10 +510,12 @@ export class WorkerPipeline {
       }
 
       // Phase 4.5: Task Decomposition
-      if (this.decompositionManager?.shouldRunDecomposition() && this.card) {
+      if (isPhaseEnabled(this.policy, 'decomposition') && this.decompositionManager?.shouldRunDecomposition() && this.card) {
         this.setPhase('decomposition')
         await this.decompositionManager.runDecomposition(this.card, this.getWorkingDir())
         this.subtasks = this.decompositionManager.getSubtasks()
+      } else if (!isPhaseEnabled(this.policy, 'decomposition') && this.decompositionManager?.shouldRunDecomposition()) {
+        logAction('worker:phaseSkipped', { jobId: this.jobId, phase: 'decomposition', reason: 'disabled_in_settings' })
       }
 
       this.lifecycleManager.ensureNotCanceled()
@@ -493,44 +523,63 @@ export class WorkerPipeline {
 
       // Phase 5: Generate plan
       this.setPhase('plan')
-      const planningConfig = this.policy.features?.planning
-      const planningMode: PlanningMode =
-        planningConfig?.enabled !== false ? (planningConfig?.mode ?? 'lite') : 'skip'
-
       let plan: string
-      if (planningMode === 'skip') {
-        this.log('Planning skipped (mode: skip)')
+      if (!isPhaseEnabled(this.policy, 'plan')) {
+        this.log(getPhaseSkipReason('plan'))
+        logAction('worker:phaseSkipped', { jobId: this.jobId, phase: 'plan', reason: 'disabled_in_settings' })
         plan = new PlanManager(this.card!, this.policy).generatePlan('skip')
       } else {
-        this.log(`Generating implementation plan (mode: ${planningMode})`)
-        plan = new PlanManager(this.card!, this.policy).generatePlan(planningMode)
+        const planningConfig = this.policy.features?.planning
+        const planningMode: PlanningMode =
+          planningConfig?.enabled !== false ? (planningConfig?.mode ?? 'lite') : 'skip'
+
+        if (planningMode === 'skip') {
+          this.log('Planning skipped (mode: skip)')
+          plan = new PlanManager(this.card!, this.policy).generatePlan('skip')
+        } else {
+          this.log(`Generating implementation plan (mode: ${planningMode})`)
+          plan = new PlanManager(this.card!, this.policy).generatePlan(planningMode)
+        }
       }
       this.logManager.setLastPlan(plan)
 
       createEvent(this.projectId, 'worker_plan', this.cardId, { plan })
 
       // Phase 5.5: Check for plan approval
-      await this.approvalManager!.checkPlanApproval(plan, planningMode)
+      if (isPhaseEnabled(this.policy, 'planApproval')) {
+        const planningConfig = this.policy.features?.planning
+        const planningMode: PlanningMode =
+          planningConfig?.enabled !== false ? (planningConfig?.mode ?? 'lite') : 'skip'
+        await this.approvalManager!.checkPlanApproval(plan, planningMode)
+      } else if (this.policy.features?.planning?.approvalRequired) {
+        this.log(getPhaseSkipReason('planApproval'))
+        logAction('worker:phaseSkipped', { jobId: this.jobId, phase: 'planApproval', reason: 'disabled_in_settings' })
+      }
 
       this.lifecycleManager.ensureNotCanceled()
       this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
 
       // Phase 5.75: Install dependencies
       this.setPhase('install')
-      this.log('Installing dependencies')
-      const installSuccess = await this.runInstallPhase()
-      this.lifecycleManager.ensureNotCanceled()
-      this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
-      if (!installSuccess) {
-        this.log('Install failed, moving card back to Ready for retry')
-        await this.cardStatusManager!.moveToReady('install_failed')
-        outcome = 'failed'
-        return {
-          success: false,
-          phase: 'install',
-          error: 'Install failed',
-          plan,
-          logs: this.logManager.getLogs()
+      if (!isPhaseEnabled(this.policy, 'install')) {
+        this.log(getPhaseSkipReason('install'))
+        logAction('worker:phaseSkipped', { jobId: this.jobId, phase: 'install', reason: 'disabled_in_settings' })
+      } else {
+        this.log('Installing dependencies')
+        const installSuccess = await this.runInstallPhase()
+        this.lifecycleManager.ensureNotCanceled()
+        this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
+        if (!installSuccess) {
+          this.log('Install failed, moving card to Failed')
+          await this.cardStatusManager!.moveToFailed('install_failed')
+          outcome = 'failed'
+          return {
+            success: false,
+            phase: 'install',
+            error: 'Install failed',
+            plan,
+            logs: this.logManager.getLogs()
+          }
         }
       }
 
@@ -538,10 +587,13 @@ export class WorkerPipeline {
       this.setPhase('ai')
       const sessionMode = this.policy.worker?.session?.sessionMode ?? 'single'
       let aiSuccess: boolean
+      let checksAlreadyPassed = false
 
       if (sessionMode === 'iterative') {
         this.log('Running AI implementation (iterative mode)')
-        aiSuccess = await this.runIterativeAI(plan)
+        const iterativeResult = await this.runIterativeAI(plan)
+        aiSuccess = iterativeResult.success
+        checksAlreadyPassed = iterativeResult.checksAlreadyPassed
       } else {
         this.log('Running AI implementation')
         aiSuccess = await this.runAIPhase(plan)
@@ -572,8 +624,8 @@ export class WorkerPipeline {
           const reason = readOnlyPattern.test(aiLogs)
             ? 'read-only environment'
             : 'permission denied (outside workspace)'
-          this.log(`AI tool reported ${reason}; moving card back to Ready`)
-          await this.cardStatusManager!.moveToReady('ai_permission_denied')
+          this.log(`AI tool reported ${reason}; moving card to Failed`)
+          await this.cardStatusManager!.moveToFailed('ai_permission_denied')
           outcome = 'failed'
           return {
             success: false,
@@ -599,20 +651,167 @@ export class WorkerPipeline {
         })
       }
 
-      // Phase 7: Run checks
+      // Phase 7: Run checks (with optional lint-fix loop when lint fails).
+      // When lint fails and worker.lintFixAttempts > 0, we run AI with the lint
+      // output as a fix prompt and re-run checks up to that many times.
+      // Skip if iterative mode already ran checks and passed (early exit).
       this.setPhase('checks')
-      this.log('Running verification checks')
-      const checksPass = await this.runChecksPhase()
+      let checksResult: ChecksResult
+      if (!isPhaseEnabled(this.policy, 'checks')) {
+        this.log(getPhaseSkipReason('checks'))
+        logAction('worker:phaseSkipped', { jobId: this.jobId, phase: 'checks', reason: 'disabled_in_settings' })
+        checksResult = { passed: true }
+      } else if (checksAlreadyPassed) {
+        this.log('Checks already passed in iterative phase, skipping')
+        checksResult = { passed: true }
+      } else {
+        this.log('Running verification checks')
+        checksResult = await this.runChecksPhase()
+      }
       this.lifecycleManager.ensureNotCanceled()
       this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
-      if (!checksPass) {
-        this.log('Checks failed, moving card back to Ready for retry')
-        await this.cardStatusManager!.moveToReady('checks_failed')
+
+      if (
+        !checksResult.passed &&
+        checksResult.failedStep === 'lint' &&
+        checksResult.output &&
+        (this.policy.worker?.lintFixAttempts ?? LINT_FIX_ATTEMPTS_DEFAULT) > 0
+      ) {
+        const maxAttempts = Math.min(
+          Math.max(0, this.policy.worker?.lintFixAttempts ?? LINT_FIX_ATTEMPTS_DEFAULT),
+          LINT_FIX_ATTEMPTS_MAX
+        )
+        if (maxAttempts > 0) {
+          let truncatedOutput =
+            checksResult.output.length > LINT_OUTPUT_MAX_CHARS
+              ? '(output truncated)\n' + checksResult.output.slice(-LINT_OUTPUT_MAX_CHARS)
+              : checksResult.output
+          let fixPrompt =
+            plan +
+            '\n\nFix the following lint errors. Only fix these issues; do not change unrelated code. The pipeline will re-run lint after your changes.\n\nLint output:\n' +
+            truncatedOutput
+
+          for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            this.log(`Lint failed, attempting fix with AI (attempt ${attempt}/${maxAttempts})...`)
+            logAction('worker:lintFixAttempted', {
+              jobId: this.jobId,
+              attempt,
+              maxAttempts
+            })
+            this.setPhase('ai')
+            const fixAiSuccess = await this.runAIPhase(fixPrompt)
+            if (!fixAiSuccess) {
+              outcome = 'failed'
+              return {
+                success: false,
+                phase: 'ai',
+                error: 'AI implementation failed',
+                plan,
+                logs: this.logManager.getLogs()
+              }
+            }
+            this.lifecycleManager.ensureNotCanceled()
+            this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
+            this.setPhase('checks')
+            checksResult = await this.runChecksPhase()
+            this.lifecycleManager.ensureNotCanceled()
+            this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
+            if (checksResult.passed) {
+              logAction('worker:lintFixSucceeded', { jobId: this.jobId, attempt })
+              break
+            }
+            if (checksResult.failedStep !== 'lint' || !checksResult.output) break
+            truncatedOutput =
+              checksResult.output.length > LINT_OUTPUT_MAX_CHARS
+                ? '(output truncated)\n' + checksResult.output.slice(-LINT_OUTPUT_MAX_CHARS)
+                : checksResult.output
+            fixPrompt =
+              plan +
+              '\n\nFix the following lint errors. Only fix these issues; do not change unrelated code. The pipeline will re-run lint after your changes.\n\nLint output:\n' +
+              truncatedOutput
+          }
+        }
+      }
+
+      // Test fix retry loop (similar to lint fix loop)
+      if (
+        !checksResult.passed &&
+        checksResult.failedStep === 'test' &&
+        checksResult.output &&
+        (this.policy.worker?.testFixAttempts ?? TEST_FIX_ATTEMPTS_DEFAULT) > 0
+      ) {
+        const maxAttempts = Math.min(
+          Math.max(0, this.policy.worker?.testFixAttempts ?? TEST_FIX_ATTEMPTS_DEFAULT),
+          TEST_FIX_ATTEMPTS_MAX
+        )
+        if (maxAttempts > 0) {
+          let truncatedOutput =
+            checksResult.output.length > TEST_OUTPUT_MAX_CHARS
+              ? '(output truncated)\n' + checksResult.output.slice(-TEST_OUTPUT_MAX_CHARS)
+              : checksResult.output
+          let fixPrompt =
+            plan +
+            '\n\nFix the following test failures. Analyze the test output carefully and fix either the implementation code or the tests as appropriate. The pipeline will re-run tests after your changes.\n\nTest output:\n' +
+            truncatedOutput
+
+          for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            this.log(`Tests failed, attempting fix with AI (attempt ${attempt}/${maxAttempts})...`)
+            logAction('worker:testFixAttempted', {
+              jobId: this.jobId,
+              attempt,
+              maxAttempts
+            })
+            this.setPhase('ai')
+            const fixAiSuccess = await this.runAIPhase(fixPrompt)
+            if (!fixAiSuccess) {
+              outcome = 'failed'
+              return {
+                success: false,
+                phase: 'ai',
+                error: 'AI implementation failed',
+                plan,
+                logs: this.logManager.getLogs()
+              }
+            }
+            this.lifecycleManager.ensureNotCanceled()
+            this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
+            this.setPhase('checks')
+            checksResult = await this.runChecksPhase()
+            this.lifecycleManager.ensureNotCanceled()
+            this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
+            if (checksResult.passed) {
+              logAction('worker:testFixSucceeded', { jobId: this.jobId, attempt })
+              break
+            }
+            if (checksResult.failedStep !== 'test' || !checksResult.output) break
+            truncatedOutput =
+              checksResult.output.length > TEST_OUTPUT_MAX_CHARS
+                ? '(output truncated)\n' + checksResult.output.slice(-TEST_OUTPUT_MAX_CHARS)
+                : checksResult.output
+            fixPrompt =
+              plan +
+              '\n\nFix the following test failures. Analyze the test output carefully and fix either the implementation code or the tests as appropriate. The pipeline will re-run tests after your changes.\n\nTest output:\n' +
+              truncatedOutput
+          }
+        }
+      }
+
+      if (!checksResult.passed) {
+        let exhaustedMsg = 'Verification checks failed'
+        if (checksResult.failedStep === 'lint') {
+          exhaustedMsg = 'Verification checks failed (lint fix attempts exhausted)'
+          logAction('worker:lintFixFailed', { jobId: this.jobId })
+        } else if (checksResult.failedStep === 'test') {
+          exhaustedMsg = 'Verification checks failed (test fix attempts exhausted)'
+          logAction('worker:testFixFailed', { jobId: this.jobId })
+        }
+        this.log(`Checks failed, moving card to Failed`)
+        await this.cardStatusManager!.moveToFailed('checks_failed')
         outcome = 'failed'
         return {
           success: false,
           phase: 'checks',
-          error: 'Verification checks failed',
+          error: exhaustedMsg,
           plan,
           logs: this.logManager.getLogs()
         }
@@ -620,7 +819,7 @@ export class WorkerPipeline {
 
       // Phase 7.5: Run E2E tests
       let e2ePass = true
-      if (this.policy.worker?.e2e?.enabled) {
+      if (isPhaseEnabled(this.policy, 'e2e')) {
         this.setPhase('e2e')
         this.log('Running E2E tests')
 
@@ -633,7 +832,7 @@ export class WorkerPipeline {
         e2ePass = e2eResult.success
         if (!e2ePass) {
           this.log(`E2E tests failed after ${e2eResult.fixAttempts} fix attempts`)
-          await this.cardStatusManager!.moveToReady('e2e_failed')
+          await this.cardStatusManager!.moveToFailed('e2e_failed')
           outcome = 'failed'
           return {
             success: false,
@@ -653,49 +852,69 @@ export class WorkerPipeline {
 
       // Phase 8: Commit and push
       this.setPhase('push')
-      this.log('Committing and pushing changes')
-      await this.commitAndPushChanges(branchName)
+      let prResult: { number: number; url: string; existing?: boolean } | null = null
 
-      this.lifecycleManager.ensureNotCanceled()
-      this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
+      if (!isPhaseEnabled(this.policy, 'commit')) {
+        this.log(getPhaseSkipReason('commit'))
+        this.log('Changes remain in local working tree')
+        logAction('worker:phaseSkipped', { jobId: this.jobId, phase: 'commit', reason: 'disabled_in_settings' })
+      } else {
+        this.log('Committing and pushing changes')
+        await this.commitAndPushChanges(branchName)
 
-      // Phase 9: Create PR/MR
-      this.setPhase('pr')
-      this.log('Creating PR/MR')
-      const prResult = await this.createPR(branchName, plan, checksPass && e2ePass)
-      this.lifecycleManager.ensureNotCanceled()
-      this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
-      if (!prResult) {
-        await this.cardStatusManager!.moveToReady('pr_failed')
-        outcome = 'failed'
-        return {
-          success: false,
-          phase: 'pr',
-          error: 'Failed to create PR/MR',
-          plan,
-          logs: this.logManager.getLogs()
+        this.lifecycleManager.ensureNotCanceled()
+        this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
+
+        // Phase 9: Create PR/MR
+        this.setPhase('pr')
+        if (!isPhaseEnabled(this.policy, 'pr')) {
+          this.log(getPhaseSkipReason('pr'))
+          this.log('Branch pushed; create PR manually')
+          logAction('worker:phaseSkipped', { jobId: this.jobId, phase: 'pr', reason: 'disabled_in_settings' })
+        } else {
+          this.log('Creating PR/MR')
+          prResult = await this.createPR(branchName, plan, true && e2ePass)
+          this.lifecycleManager.ensureNotCanceled()
+          this.cardStatusManager!.ensureCardStatusAllowed(['in_progress'])
+          if (!prResult) {
+            await this.cardStatusManager!.moveToFailed('pr_failed')
+            outcome = 'failed'
+            return {
+              success: false,
+              phase: 'pr',
+              error: 'Failed to create PR/MR',
+              plan,
+              logs: this.logManager.getLogs()
+            }
+          }
         }
       }
 
-      // Phase 10: Move to In Review
-      this.setPhase('in_review')
-      this.log('Moving card to In Review')
-      const ctx = this.buildPipelineContext()
-      await moveToInReview(ctx, prResult.url, !prResult.existing)
+      // Phase 10: Move to In Review (or stay in_progress if commit disabled)
+      if (isPhaseEnabled(this.policy, 'commit')) {
+        this.setPhase('in_review')
+        this.log('Moving card to In Review')
+        const ctx = this.buildPipelineContext()
+        await moveToInReview(ctx, prResult?.url ?? '', prResult ? !prResult.existing : false)
+      } else {
+        // Card stays in_progress when commit is disabled
+        this.log('Card remains in_progress (commit phase disabled)')
+      }
 
       this.setPhase('done')
       outcome = 'succeeded'
       return {
         success: true,
         phase: 'complete',
-        prUrl: prResult.url,
+        prUrl: prResult?.url,
         plan,
         logs: this.logManager.getLogs()
       }
     } catch (err) {
+      this.log(`Caught error in run(): ${err instanceof Error ? err.constructor.name : typeof err}`)
       if (err instanceof WorkerCanceledError) {
+        this.log('Worker run canceled - WorkerCanceledError caught')
         this.setPhase('canceled')
-        this.log('Worker run canceled')
         outcome = 'canceled'
         return {
           success: false,
@@ -732,57 +951,66 @@ export class WorkerPipeline {
       }
       throw err
     } finally {
-      // Cleanup lifecycle manager
-      if (this.lifecycleManager) {
-        this.lifecycleManager.stop()
-      }
-
-      if (this.worktreeManager) {
-        this.worktreeManager.stopLockRenewal()
-      }
-
-      this.logManager.cleanup()
-
-      // Handle worktree or traditional cleanup
-      if (this.useWorktree && this.worktreeManager) {
-        await this.worktreeManager.cleanup(this.logManager.getPhase() === 'done')
-      } else {
-        if (this.lifecycleManager?.isCanceled() && this.policy.worker?.rollbackOnCancel) {
-          await this.branchManager?.rollbackWorkerChanges()
+      // IMPORTANT: Cleanup must happen BEFORE locks are released to prevent race conditions.
+      // Another worker could acquire the slot while cleanup is still running.
+      try {
+        // Handle worktree or traditional cleanup FIRST (while locks are still held)
+        if (this.useWorktree && this.worktreeManager) {
+          await this.worktreeManager.cleanup(this.logManager.getPhase() === 'done')
+        } else {
+          if (this.lifecycleManager?.isCanceled() && this.policy.worker?.rollbackOnCancel) {
+            await this.branchManager?.rollbackWorkerChanges()
+          }
+          // Wrap autostash restore in try-catch to ensure cleanup continues
+          try {
+            await restoreAutostash(this.project!.local_path)
+          } catch (stashErr) {
+            this.log(`Warning: Failed to restore autostash: ${stashErr instanceof Error ? stashErr.message : String(stashErr)}`)
+          }
         }
-        await restoreAutostash(this.project!.local_path)
-      }
 
-      if (outcome === 'failed') {
-        await this.recoverCardStatus()
-      }
+        if (outcome === 'failed') {
+          await this.recoverCardStatus()
+        }
 
-      // Update unified status based on final outcome
-      if (outcome === 'succeeded') {
-        setWorkerStatus(this.projectId, {
-          state: 'succeeded',
-          lastRunAt: new Date().toISOString(),
-          activeCardId: undefined,
-          activeCardTitle: undefined,
-          activeJobId: undefined,
-          currentPhase: undefined
-        })
-      } else if (outcome === 'failed' || outcome === 'canceled') {
-        setWorkerStatus(this.projectId, {
-          state: 'failed',
-          lastRunAt: new Date().toISOString(),
-          lastError: outcome === 'canceled' ? 'Canceled' : 'Worker failed',
-          activeCardId: undefined,
-          activeCardTitle: undefined,
-          activeJobId: undefined,
-          currentPhase: undefined
-        })
-      }
-      // pending_approval keeps the paused state set by setPhase
+        // Update unified status based on final outcome
+        if (outcome === 'succeeded') {
+          setWorkerStatus(this.projectId, {
+            state: 'succeeded',
+            lastRunAt: new Date().toISOString(),
+            activeCardId: undefined,
+            activeCardTitle: undefined,
+            activeJobId: undefined,
+            currentPhase: undefined
+          })
+        } else if (outcome === 'failed' || outcome === 'canceled') {
+          setWorkerStatus(this.projectId, {
+            state: 'failed',
+            lastRunAt: new Date().toISOString(),
+            lastError: outcome === 'canceled' ? 'Canceled' : 'Worker failed',
+            activeCardId: undefined,
+            activeCardTitle: undefined,
+            activeJobId: undefined,
+            currentPhase: undefined
+          })
+        }
+        // pending_approval keeps the paused state set by setPhase
+      } finally {
+        // Stop locks and cleanup resources AFTER all cleanup operations complete
+        if (this.worktreeManager) {
+          this.worktreeManager.stopLockRenewal()
+        }
 
-      // Release worker lock to allow sync operations
-      releaseWorkerLock(this.projectId)
-      this.log('Worker lock released')
+        if (this.lifecycleManager) {
+          this.lifecycleManager.stop()
+        }
+
+        this.logManager.cleanup()
+
+        // Release worker lock to allow sync operations
+        releaseWorkerLock(this.projectId)
+        this.log('Worker lock released')
+      }
     }
   }
 
@@ -815,6 +1043,9 @@ export class WorkerPipeline {
     // Mark follow-up instructions as applied
     this.approvalManager?.markFollowUpInstructionsApplied()
 
+    // Mark comments as processed
+    this.approvalManager?.markCommentsAsProcessed()
+
     return success
   }
 
@@ -827,7 +1058,7 @@ export class WorkerPipeline {
     )
   }
 
-  private async runChecksPhase(): Promise<boolean> {
+  private async runChecksPhase(): Promise<ChecksResult> {
     const ctx = this.buildPipelineContext()
     return runChecks(
       ctx,
@@ -881,8 +1112,10 @@ export class WorkerPipeline {
     return createPRPhase(ctx, branchName, plan, checksPass, baseBranch)
   }
 
-  private async runIterativeAI(plan: string): Promise<boolean> {
-    if (!this.iterativeAIManager) return false
+  private async runIterativeAI(
+    plan: string
+  ): Promise<{ success: boolean; checksAlreadyPassed: boolean }> {
+    if (!this.iterativeAIManager) return { success: false, checksAlreadyPassed: false }
 
     return this.iterativeAIManager.runIterativeAI(
       plan,
@@ -894,7 +1127,8 @@ export class WorkerPipeline {
       this.branchManager?.getBaseHeadSha() ?? null,
       (msg) => this.log(msg),
       () => this.lifecycleManager!.ensureNotCanceled(),
-      (iteration) => this.persistRunCheckpoint(iteration)
+      (iteration) => this.persistRunCheckpoint(iteration),
+      () => this.runChecksPhase()
     )
   }
 
@@ -910,10 +1144,10 @@ export class WorkerPipeline {
     // Try up to 3 times with exponential backoff
     for (let attempt = 1; attempt <= 3 && !recovered; attempt++) {
       try {
-        const current = getCard(this.cardId)
+        const current = getCard(this.cardId, this.projectId)
         if (current?.status === 'in_progress' || current?.status === 'testing') {
-          this.log(`Worker failed; moving card back to Ready (attempt ${attempt}/3)`)
-          await this.cardStatusManager?.moveToReady('worker_failed')
+          this.log(`Worker failed; moving card to Failed (attempt ${attempt}/3)`)
+          await this.cardStatusManager?.moveToFailed('worker_failed')
           recovered = true
         } else {
           // Card is already in a safe state (e.g., user moved it)
@@ -932,9 +1166,9 @@ export class WorkerPipeline {
     // Final fallback: update local DB directly (skip remote sync)
     if (!recovered) {
       try {
-        updateCardStatus(this.cardId, 'ready', this.projectId)
+        updateCardStatus(this.cardId, 'failed', this.projectId)
         broadcastToRenderers('card-updated', { cardId: this.cardId })
-        this.log('Fallback: Updated local card status to ready (skipped remote sync)')
+        this.log('Fallback: Updated local card status to failed (skipped remote sync)')
       } catch (dbError) {
         const errorMsg = dbError instanceof Error ? dbError.message : String(dbError)
         this.log(`CRITICAL: Card ${this.cardId} may be stuck in processing state: ${errorMsg}`)
@@ -991,7 +1225,21 @@ export async function runWorker(jobId: string): Promise<WorkerResult> {
     return { success: false, phase: 'init', error: 'No card specified' }
   }
 
-  if (!acquireJobLease(jobId, 300, projectId)) {
+  // Calculate lease duration based on pipeline timeout + buffer
+  // Default pipeline timeout is 30 minutes (1800 seconds), add 5 minute buffer
+  const project = getProject(projectId)
+  let pipelineTimeoutMs = 30 * 60 * 1000 // Default 30 minutes
+  if (project?.policy_json) {
+    try {
+      const policy = JSON.parse(project.policy_json)
+      pipelineTimeoutMs = policy.worker?.pipelineTimeoutMs ?? pipelineTimeoutMs
+    } catch {
+      // Use default
+    }
+  }
+  const leaseSeconds = Math.ceil(pipelineTimeoutMs / 1000) + 300 // Pipeline timeout + 5 min buffer
+
+  if (!acquireJobLease(jobId, leaseSeconds, projectId)) {
     logAction('workerPipeline:runWorker:leaseFailed', { jobId, projectId })
     updateJobState(
       jobId,

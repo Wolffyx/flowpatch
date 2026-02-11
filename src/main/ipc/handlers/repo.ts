@@ -10,7 +10,8 @@ import { existsSync, readFileSync, mkdirSync, readdirSync, writeFileSync } from 
 import { execFile } from 'child_process'
 import YAML from 'yaml'
 import { upsertProject, getProject, createEvent, listProjects } from '../../db'
-import { parseRemoteUrl, detectProviderFromRemote, generateId, logAction } from '@shared/utils'
+import { parseRemoteUrl, detectProviderFromRemote, generateId } from '@shared/utils'
+import { logAction } from '../../utils/main-logger'
 import { getDefaultRemote, normalizeProjectPath } from '../../projectIdentity'
 import type {
   RemoteInfo,

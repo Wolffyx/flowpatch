@@ -71,9 +71,17 @@ IMPORTANT: You must resolve ALL conflicts. Do not leave any conflict markers in 
 
 /**
  * Check if a file still has conflict markers.
+ * Looks for markers at the start of lines to avoid false positives from
+ * strings/comments that contain these sequences.
  */
 function hasConflictMarkers(content: string): boolean {
-  return content.includes('<<<<<<<') || content.includes('=======') || content.includes('>>>>>>>')
+  // Split by lines and check for markers at line start
+  // This avoids false positives from code like: const str = "<<<<<<<"
+  const lines = content.split(/\r?\n/)
+  return lines.some(
+    (line) =>
+      line.startsWith('<<<<<<<') || line.startsWith('=======') || line.startsWith('>>>>>>>')
+  )
 }
 
 /**

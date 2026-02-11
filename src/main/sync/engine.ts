@@ -14,9 +14,13 @@ import {
   createEvent,
   ensureCardLink,
   listCardLinks,
-  deleteCard
+  deleteCard,
+  upsertCommentFromRemote,
+  getCommentsPendingPush,
+  updateCommentSyncState,
+  deduplicateCommentsForCard
 } from '../db'
-import type { Project, Card, CardStatus, PolicyConfig } from '../../shared/types'
+import type { Project, Card, CardStatus, PolicyConfig, CommentSource } from '../../shared/types'
 
 export class SyncEngine {
   private projectId: string
@@ -154,6 +158,15 @@ export class SyncEngine {
       if (isGithubAdapter(this.adapter)) {
         await this.syncGithubIssuePrLinks(this.adapter as IGithubAdapter)
       }
+
+      // Sync comments for active cards
+      const commentsUpdated = await this.syncCommentsForActiveCards()
+      if (commentsUpdated > 0) {
+        console.log(`[SyncEngine] Synced ${commentsUpdated} comments`)
+      }
+
+      // Push any pending local comments to remote
+      await this.pushPendingComments()
 
       // Update project sync time
       updateProjectSyncTime(this.projectId)
@@ -508,6 +521,148 @@ export class SyncEngine {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error'
       updateJobState(jobId, 'failed', undefined, errorMsg)
       return false
+    }
+  }
+
+  /**
+   * Sync comments from remote for active cards (ready, in_progress, in_review).
+   * Returns the number of comments synced.
+   */
+  private async syncCommentsForActiveCards(): Promise<number> {
+    if (!this.adapter || !this.project) {
+      return 0
+    }
+
+    // Get cards in statuses that might need comment sync
+    const localCards = listCards(this.projectId)
+    const activeCards = localCards.filter(
+      (c) =>
+        c.remote_number_or_iid &&
+        ['ready', 'in_progress', 'in_review'].includes(c.status)
+    )
+
+    if (activeCards.length === 0) {
+      return 0
+    }
+
+    // Get authenticated username to detect AI/system comments
+    const authResult = await this.adapter.checkAuth()
+    const authUsername = authResult.username
+
+    let totalSynced = 0
+
+    for (const card of activeCards) {
+      const issueNumber = parseInt(card.remote_number_or_iid!, 10)
+      if (isNaN(issueNumber)) continue
+
+      try {
+        const remoteComments = await this.adapter.listIssueComments(issueNumber)
+
+        for (const rc of remoteComments) {
+          // Detect source: is this from the authenticated user (AI worker)?
+          const source = this.detectCommentSource(rc.body, rc.author, authUsername)
+
+          // Upsert the comment (will update if it already exists)
+          upsertCommentFromRemote(
+            card.id,
+            this.projectId,
+            rc.id,
+            rc.author,
+            rc.body,
+            rc.created_at,
+            source
+          )
+          totalSynced++
+        }
+
+        // Auto-deduplicate comments after syncing to clean up any duplicates
+        // caused by ID format mismatches between GraphQL and REST APIs
+        const deleted = deduplicateCommentsForCard(card.id, this.projectId)
+        if (deleted > 0) {
+          console.log(`[SyncEngine] Deduplicated ${deleted} comments for card ${card.id}`)
+        }
+      } catch (error) {
+        console.warn(
+          `[SyncEngine] Failed to sync comments for card ${card.id}: ${error}`
+        )
+      }
+    }
+
+    return totalSynced
+  }
+
+  /**
+   * Detect if a comment is from the AI worker or system.
+   */
+  private detectCommentSource(
+    body: string,
+    author: string,
+    authUsername?: string
+  ): CommentSource {
+    // Check for AI worker markers
+    if (body.includes('<!-- flowpatch:ai -->') || body.includes('[FlowPatch Worker]')) {
+      return 'ai_worker'
+    }
+
+    // Check for system markers
+    if (body.includes('<!-- flowpatch:system -->')) {
+      return 'system'
+    }
+
+    // Check if from authenticated user and has PR link (likely worker)
+    if (authUsername && author === authUsername) {
+      if (body.includes('PR created:') || body.includes('MR created:')) {
+        return 'ai_worker'
+      }
+    }
+
+    return 'user'
+  }
+
+  /**
+   * Push local comments with pending_push state to remote.
+   */
+  private async pushPendingComments(): Promise<void> {
+    if (!this.adapter || !this.project) {
+      return
+    }
+
+    const pendingComments = getCommentsPendingPush(this.projectId)
+    if (pendingComments.length === 0) {
+      return
+    }
+
+    console.log(`[SyncEngine] Pushing ${pendingComments.length} pending comments to remote`)
+
+    for (const comment of pendingComments) {
+      try {
+        // Get the card to find the issue number
+        const cards = listCards(this.projectId)
+        const card = cards.find((c) => c.id === comment.card_id)
+        if (!card?.remote_number_or_iid) {
+          console.warn(`[SyncEngine] Cannot push comment ${comment.id}: card has no remote reference`)
+          continue
+        }
+
+        const issueNumber = parseInt(card.remote_number_or_iid, 10)
+        if (isNaN(issueNumber)) {
+          console.warn(`[SyncEngine] Cannot push comment ${comment.id}: invalid issue number`)
+          continue
+        }
+
+        const remoteCommentId = await this.adapter.commentOnIssue(issueNumber, comment.body)
+        if (remoteCommentId) {
+          // Store the remote comment ID so we can deduplicate on future syncs
+          updateCommentSyncState(comment.id, 'ok', remoteCommentId, this.projectId)
+          console.log(`[SyncEngine] Pushed comment ${comment.id} to issue #${issueNumber} (remote ID: ${remoteCommentId})`)
+        } else {
+          updateCommentSyncState(comment.id, 'error', undefined, this.projectId)
+          console.warn(`[SyncEngine] Failed to push comment ${comment.id}`)
+        }
+      } catch (error) {
+        updateCommentSyncState(comment.id, 'error', undefined, this.projectId)
+        console.error(`[SyncEngine] Error pushing comment ${comment.id}: ${error}`)
+      }
     }
   }
 }

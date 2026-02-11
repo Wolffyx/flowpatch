@@ -8,6 +8,7 @@ import { updateJobResult } from '../../db'
 import { broadcastToRenderers } from '../../ipc/broadcast'
 import type { WorkerLogMessage } from '../../../shared/types'
 import { logAiDebug } from '../../utils/ai-logger'
+import { logToFile } from '../../utils/file-logger'
 
 export interface LogManagerConfig {
   /** Number of logs to accumulate before flushing to DB */
@@ -110,6 +111,19 @@ export class LogManager {
     const line = `[${ts}] ${fullMessage}`
     this.logs.push(line)
     console.log(`[Worker] ${fullMessage}`)
+
+    // Write to file logger for persistence
+    logToFile({
+      id: `worker_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      ts,
+      projectKey: this.projectId,
+      projectId: this.projectId,
+      jobId: this.jobId ?? undefined,
+      cardId: this.cardId,
+      source: meta?.source ?? 'worker',
+      stream: meta?.stream ?? 'info',
+      line: fullMessage
+    })
 
     const isAiLog =
       meta?.ai ||

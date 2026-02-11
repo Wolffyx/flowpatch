@@ -17,7 +17,7 @@ import { initProjectDb, getProjectSqlite, hasProjectDb } from '../project-db'
 import { eq } from 'drizzle-orm'
 import * as centralSchema from '../schema'
 import { migrateProjectSettingsToConfig } from './settings-migration'
-import { logAction } from '@shared/utils'
+import { logAction } from '../../utils/main-logger'
 import { clearProjectPathCache } from '../db-resolver'
 
 export interface MigrationResult {

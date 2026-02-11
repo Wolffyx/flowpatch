@@ -9,7 +9,8 @@ import { getDrizzle } from './drizzle'
 import { cards, jobs } from './schema'
 import { cards as projectCards } from './schema/project'
 import { jobs as projectJobs } from './schema/project'
-import { generateId, logAction } from '@shared/utils'
+import { generateId } from '@shared/utils'
+import { logAction } from '../utils/main-logger'
 import { getPriorityFromLabels } from '@shared/utils/priority'
 import type { Card, CardStatus, PolicyConfig } from '@shared/types'
 import { getDependenciesForCard } from './card-dependencies'
@@ -421,6 +422,7 @@ export function getStatusLabelFromPolicy(status: CardStatus, policy: PolicyConfi
     in_progress: 'In Progress',
     in_review: 'In Review',
     testing: 'Testing',
+    failed: 'Failed',
     done: 'Done'
   }
   const keyMap: Record<CardStatus, keyof NonNullable<typeof statusLabels>> = {
@@ -429,6 +431,7 @@ export function getStatusLabelFromPolicy(status: CardStatus, policy: PolicyConfi
     in_progress: 'inProgress',
     in_review: 'inReview',
     testing: 'testing',
+    failed: 'failed',
     done: 'done'
   }
   return statusLabels[keyMap[status]] || defaults[status]
@@ -445,6 +448,7 @@ export function getAllStatusLabelsFromPolicy(policy: PolicyConfig): string[] {
     statusLabels.inProgress || 'In Progress',
     statusLabels.inReview || 'In Review',
     statusLabels.testing || 'Testing',
+    statusLabels.failed || 'Failed',
     statusLabels.done || 'Done'
   ]
 }
@@ -682,8 +686,8 @@ export function getNextReadyCard(projectId: string, retryCooldownMinutes = 30): 
  * Returns true if the card has active dependencies that block 'ready' status
  * and those dependencies have not reached their required status.
  */
-export function isCardBlockedByDependencies(cardId: string): boolean {
-  const deps = getDependenciesForCard(cardId)
+export function isCardBlockedByDependencies(cardId: string, projectId?: string): boolean {
+  const deps = getDependenciesForCard(cardId, projectId)
 
   // Filter active dependencies that block 'ready' status
   const blockingDeps = deps.filter(
@@ -704,7 +708,7 @@ export function isCardBlockedByDependencies(cardId: string): boolean {
 
   // Check if any blocking dependency is not satisfied
   for (const dep of blockingDeps) {
-    const depCard = getCard(dep.depends_on_card_id)
+    const depCard = getCard(dep.depends_on_card_id, projectId)
     if (!depCard) continue // Missing dependency card - treat as satisfied
 
     const currentIndex = statusOrder.indexOf(depCard.status)
@@ -718,8 +722,8 @@ export function isCardBlockedByDependencies(cardId: string): boolean {
   return false
 }
 
-function getBlockingDependenciesForReady(cardId: string): string[] {
-  const deps = getDependenciesForCard(cardId)
+function getBlockingDependenciesForReady(cardId: string, projectId?: string): string[] {
+  const deps = getDependenciesForCard(cardId, projectId)
   const blockingDeps = deps.filter(
     (dep) => dep.is_active === 1 && dep.blocking_statuses.includes('ready')
   )
@@ -737,7 +741,7 @@ function getBlockingDependenciesForReady(cardId: string): string[] {
 
   const blockedBy: string[] = []
   for (const dep of blockingDeps) {
-    const depCard = getCard(dep.depends_on_card_id)
+    const depCard = getCard(dep.depends_on_card_id, projectId)
     if (!depCard) continue
 
     const currentIndex = statusOrder.indexOf(depCard.status)
@@ -830,7 +834,7 @@ function buildCardEligibilityDiagnostic(
   const isInCooldown = !!failedJob
   if (isInCooldown) reasons.push('recent_failed_job_cooldown')
 
-  const blockingDependencies = getBlockingDependenciesForReady(card.id)
+  const blockingDependencies = getBlockingDependenciesForReady(card.id, projectId)
   const isBlockedByDependencies = blockingDependencies.length > 0
   if (isBlockedByDependencies) reasons.push('blocked_by_dependencies')
 
@@ -982,7 +986,9 @@ export function getNextReadyCards(
   }
 
   // Filter out dependency-blocked cards
-  const unblockedCards = eligibleCards.filter((card) => !isCardBlockedByDependencies(card.id))
+  const unblockedCards = eligibleCards.filter(
+    (card) => !isCardBlockedByDependencies(card.id, projectId)
+  )
 
   // Sort by priority (lower number = higher priority), then by timestamp (FIFO tie-breaker)
   const sortedCards = unblockedCards

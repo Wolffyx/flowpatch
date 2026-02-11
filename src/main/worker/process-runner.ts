@@ -26,7 +26,7 @@ import {
   isCommandLineSafe
 } from '../security/command-guard'
 import type { ExecutionOrigin, CommandGuardConfig } from '../../shared/types'
-import { logAction } from '../../shared/utils'
+import { logAction } from '../utils/main-logger'
 import { WorkerCanceledError } from './errors'
 
 export interface ResolvedCommand {

@@ -14,7 +14,7 @@ import {
   getCentralDataCounts,
   hasProjectDb
 } from '../../db'
-import { logAction } from '@shared/utils'
+import { logAction } from '../../utils/main-logger'
 import type { MigrationResult } from '../../db'
 
 // ============================================================================

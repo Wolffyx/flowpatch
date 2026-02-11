@@ -7,7 +7,7 @@
 
 import { BrowserWindow } from 'electron'
 import { initializeSecurityGuard, cleanupSecurityGuard, getSessionSecretHash } from './ipc-guard'
-import { logAction } from '../../shared/utils'
+import { logAction } from '../utils/main-logger'
 
 // Re-export all security utilities
 export * from './ipc-guard'

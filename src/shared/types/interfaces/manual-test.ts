@@ -58,6 +58,14 @@ export interface PrepareTestEnvironmentResult {
   branchName?: string
   location?: TestLocation
   wasRecreated?: boolean
+  /** Whether install was attempted */
+  installRan?: boolean
+  /** Whether install succeeded (only set if installRan is true) */
+  installSuccess?: boolean
+  /** Whether install was skipped because dependencies were already installed */
+  installSkipped?: boolean
+  /** Error message if install failed */
+  installError?: string
   error?: string
 }
 

@@ -27,7 +27,8 @@ import {
 } from '../../worker/worker-status-store'
 import { wakeUpWorkerLoop } from '../../worker/loop'
 import { updateCardStatus } from '../../db'
-import { parsePolicyJson, logAction } from '@shared/utils'
+import { parsePolicyJson } from '@shared/utils'
+import { logAction } from '../../utils/main-logger'
 import { verifySecureRequest } from '../../security'
 import { generateWorktreeBranchName } from '@shared/types'
 import type {
@@ -38,7 +39,8 @@ import type {
   PrepareTestEnvironmentResult
 } from '@shared/types'
 import { checkBranchExists } from '../../worker/git-operations'
-import { detectProjectType } from '../../services/project-type-detector'
+import { detectProjectType, clearDetectionCache } from '../../services/project-type-detector'
+import { broadcastToRenderers } from '../broadcast'
 import { devServerManager } from '../../services/dev-server-manager'
 import {
   GitWorktreeManager,
@@ -46,8 +48,12 @@ import {
 } from '../../services/git-worktree-manager'
 import {
   createWorktree as createWorktreeRecord,
-  updateWorktreeStatus
+  updateWorktreeStatus,
+  getWorktreeByBranch
 } from '../../db/worktrees'
+import { existsSync, readdirSync } from 'fs'
+import { join } from 'path'
+import { spawn } from 'child_process'
 
 // ============================================================================
 // Security Helpers
@@ -68,6 +74,120 @@ function verifyWorkerRequest(event: IpcMainInvokeEvent, channel: string): string
     return result.error ?? 'Security verification failed'
   }
   return null
+}
+
+// ============================================================================
+// Install Helpers
+// ============================================================================
+
+/**
+ * Check if dependencies are already installed for a given project type.
+ * Returns true if install can be skipped.
+ */
+function shouldSkipInstall(worktreePath: string, projectType?: string): boolean {
+  switch (projectType) {
+    case 'node': {
+      // Check if node_modules exists and has content
+      const nodeModulesPath = join(worktreePath, 'node_modules')
+      if (existsSync(nodeModulesPath)) {
+        try {
+          const contents = readdirSync(nodeModulesPath)
+          return contents.length > 0
+        } catch {
+          return false
+        }
+      }
+      return false
+    }
+
+    case 'python': {
+      // Check for venv or .venv directory
+      const venvPath = join(worktreePath, 'venv')
+      const dotVenvPath = join(worktreePath, '.venv')
+      return existsSync(venvPath) || existsSync(dotVenvPath)
+    }
+
+    case 'go':
+      // Go modules are usually cached globally, check go.sum exists
+      return existsSync(join(worktreePath, 'go.sum'))
+
+    case 'rust':
+      // Check for target directory
+      return existsSync(join(worktreePath, 'target'))
+
+    case 'php':
+      // Check for vendor directory
+      return existsSync(join(worktreePath, 'vendor'))
+
+    default:
+      return false
+  }
+}
+
+/**
+ * Run install command with streaming output.
+ */
+async function runInstallWithStreaming(
+  installCmd: string,
+  cwd: string,
+  cardId: string
+): Promise<{ success: boolean; error?: string }> {
+  return new Promise((resolve) => {
+    const [command, ...args] = installCmd.split(' ')
+
+    const proc = spawn(command, args, {
+      cwd,
+      shell: true,
+      windowsHide: true
+    })
+
+    let errorOutput = ''
+
+    proc.stdout?.on('data', (data) => {
+      broadcastToRenderers('installOutput', {
+        cardId,
+        line: data.toString(),
+        stream: 'stdout'
+      })
+    })
+
+    proc.stderr?.on('data', (data) => {
+      const line = data.toString()
+      errorOutput += line
+      broadcastToRenderers('installOutput', {
+        cardId,
+        line,
+        stream: 'stderr'
+      })
+    })
+
+    proc.on('close', (code) => {
+      if (code === 0) {
+        resolve({ success: true })
+      } else {
+        resolve({
+          success: false,
+          error: `Install exited with code ${code}${errorOutput ? `: ${errorOutput.slice(0, 200)}` : ''}`
+        })
+      }
+    })
+
+    proc.on('error', (err) => {
+      resolve({
+        success: false,
+        error: `Failed to start install: ${err.message}`
+      })
+    })
+
+    // 5 minute timeout
+    setTimeout(() => {
+      proc.kill()
+      resolve({
+        success: false,
+        error: 'Install timed out after 5 minutes'
+      })
+    }, 5 * 60 * 1000)
+  })
 }
 
 // ============================================================================
@@ -439,10 +559,13 @@ export function registerWorkerHandlers(notifyRenderer: () => void): void {
           )
 
           // Update or create DB record
-          let worktreeRecord = getWorktreeByCard(payload.cardId, payload.projectId)
-          if (worktreeRecord) {
-            updateWorktreeStatus(worktreeRecord.id, 'ready', undefined, payload.projectId)
+          // Check by branch first (includes cleaned/error records that getWorktreeByCard filters out)
+          const existingByBranch = getWorktreeByBranch(payload.projectId, result.branchName)
+          if (existingByBranch) {
+            // Reuse existing record - update status to ready
+            updateWorktreeStatus(existingByBranch.id, 'ready', undefined, payload.projectId)
           } else {
+            // No existing record for this branch, create new one
             createWorktreeRecord({
               projectId: payload.projectId,
               cardId: payload.cardId,
@@ -460,12 +583,69 @@ export function registerWorkerHandlers(notifyRenderer: () => void): void {
             created: result.created
           })
 
+          // Run install if a new worktree was created
+          let installRan = false
+          let installSuccess = true
+          let installSkipped = false
+          let installError: string | undefined
+
+          if (result.created) {
+            const projectType = detectProjectType(result.worktreePath)
+            const installCmd = projectType?.installCommand || policy.worker?.installCommand
+
+            if (installCmd) {
+              // Check if install can be skipped (dependencies already cached)
+              const skipInstall = shouldSkipInstall(result.worktreePath, projectType?.type)
+
+              if (skipInstall) {
+                logAction('prepareTestEnvironment:installSkipped', {
+                  projectId: payload.projectId,
+                  cardId: payload.cardId,
+                  reason: 'Dependencies already installed'
+                })
+                installSkipped = true
+              } else {
+                logAction('prepareTestEnvironment:installing', {
+                  projectId: payload.projectId,
+                  cardId: payload.cardId,
+                  installCmd
+                })
+
+                installRan = true
+                const installResult = await runInstallWithStreaming(
+                  installCmd,
+                  result.worktreePath,
+                  payload.cardId
+                )
+
+                installSuccess = installResult.success
+                if (!installResult.success) {
+                  installError = installResult.error
+                  logAction('prepareTestEnvironment:installFailed', {
+                    projectId: payload.projectId,
+                    cardId: payload.cardId,
+                    error: installError
+                  })
+                } else {
+                  logAction('prepareTestEnvironment:installSuccess', {
+                    projectId: payload.projectId,
+                    cardId: payload.cardId
+                  })
+                }
+              }
+            }
+          }
+
           return {
             success: true,
             workingDir: result.worktreePath,
             branchName: result.branchName,
             location: 'worktree',
-            wasRecreated: result.created
+            wasRecreated: result.created,
+            installRan,
+            installSuccess,
+            installSkipped,
+            installError
           }
         } else {
           // Checkout branch in main repo
@@ -688,6 +868,109 @@ export function registerWorkerHandlers(notifyRenderer: () => void): void {
       wakeUpWorkerLoop(projectId)
 
       return { success: true, cardId: card.id }
+    }
+  )
+
+  // Auto-detect worker commands from project type
+  ipcMain.handle(
+    'worker:autoDetectCommands',
+    async (
+      event,
+      payload: { projectId: string }
+    ): Promise<{
+      success: boolean
+      detectedInfo?: {
+        type: string
+        installCommand?: string
+        lintCommand?: string
+        testCommand?: string
+        buildCommand?: string
+        packageManager?: string
+      }
+      error?: string
+    }> => {
+      const securityError = verifyWorkerRequest(event, 'worker:autoDetectCommands')
+      if (securityError) {
+        return { success: false, error: `Security: ${securityError}` }
+      }
+
+      try {
+        const project = getProject(payload.projectId)
+        if (!project) {
+          return { success: false, error: 'Project not found' }
+        }
+
+        // Clear cache and re-detect
+        clearDetectionCache(project.local_path)
+        const info = detectProjectType(project.local_path)
+
+        // Merge into policy without removing custom commands
+        const currentPolicy = parsePolicyJson(project.policy_json)
+
+        // Build allowed commands list (deduplicated and sorted)
+        const existingAllowed = currentPolicy.worker?.allowedCommands ?? []
+        const newCommands = [
+          info.installCommand,
+          info.lintCommand,
+          info.testCommand,
+          info.buildCommand
+        ].filter((cmd): cmd is string => !!cmd)
+
+        const mergedAllowed = [...new Set([...existingAllowed, ...newCommands])].sort()
+
+        const updatedPolicy = {
+          ...currentPolicy,
+          worker: {
+            ...currentPolicy.worker,
+            // Only update commands if detected (don't overwrite existing with undefined)
+            ...(info.installCommand && { installCommand: info.installCommand }),
+            ...(info.lintCommand && { lintCommand: info.lintCommand }),
+            ...(info.testCommand && { testCommand: info.testCommand }),
+            ...(info.buildCommand && { buildCommand: info.buildCommand }),
+            allowedCommands: mergedAllowed
+          }
+        }
+
+        updateProjectPolicyJson(payload.projectId, JSON.stringify(updatedPolicy))
+
+        logAction('worker:commandsAutoDetected', {
+          projectId: payload.projectId,
+          type: info.type,
+          installCommand: info.installCommand,
+          lintCommand: info.lintCommand,
+          testCommand: info.testCommand,
+          buildCommand: info.buildCommand
+        })
+
+        createEvent(payload.projectId, 'status_changed', undefined, {
+          action: 'worker_commands_auto_detected',
+          type: info.type
+        })
+
+        broadcastToRenderers('stateUpdated')
+        notifyRenderer()
+
+        return {
+          success: true,
+          detectedInfo: {
+            type: info.type,
+            installCommand: info.installCommand,
+            lintCommand: info.lintCommand,
+            testCommand: info.testCommand,
+            buildCommand: info.buildCommand,
+            packageManager: info.packageManager
+          }
+        }
+      } catch (error) {
+        logAction('worker:autoDetectCommands:error', {
+          projectId: payload.projectId,
+          error: error instanceof Error ? error.message : String(error)
+        })
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error)
+        }
+      }
     }
   )
 }

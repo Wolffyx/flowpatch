@@ -4,7 +4,7 @@
  */
 
 import type { RepoLabel } from '@shared/types'
-import { logAction } from '@shared/utils'
+import { logAction } from '../../../utils/main-logger'
 import type { GithubCLIWrapper } from '../helpers/cli-wrapper'
 
 export interface LabelResult {

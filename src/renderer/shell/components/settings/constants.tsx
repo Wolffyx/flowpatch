@@ -240,6 +240,16 @@ export const DEFAULT_TOOL_LIMITS = {
   monthlyCostLimit: ''
 }
 
+// Suggested limits for typical use (hourly 200k–500k, daily 1M–2M, monthly 10M+)
+export const SUGGESTED_TOOL_LIMITS = {
+  hourlyTokenLimit: '300000',
+  dailyTokenLimit: '1500000',
+  monthlyTokenLimit: '10000000',
+  hourlyCostLimit: '',
+  dailyCostLimit: '',
+  monthlyCostLimit: ''
+}
+
 // Default profile form data
 export const DEFAULT_PROFILE_FORM_DATA = {
   name: '',

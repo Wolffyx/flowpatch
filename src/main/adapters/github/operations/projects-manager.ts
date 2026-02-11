@@ -5,7 +5,7 @@
 
 import type { Card, CardStatus, PolicyConfig } from '@shared/types'
 import { cryptoRandomId } from '../../../db'
-import { logAction } from '@shared/utils'
+import { logAction } from '../../../utils/main-logger'
 import type { GithubCLIWrapper } from '../helpers/cli-wrapper'
 import type { GithubGraphQLClient } from '../helpers/graphql-client'
 import type { ProjectStatusMap, ProjectV2Response } from '../types'
@@ -826,6 +826,7 @@ export class GithubProjectsManager {
       in_progress: 'In Progress',
       in_review: 'In Review',
       testing: 'Testing',
+      failed: 'Failed',
       done: 'Done'
     }
 
@@ -842,6 +843,8 @@ export class GithubProjectsManager {
         return statusValues.inReview || defaults.in_review
       case 'testing':
         return statusValues.testing || defaults.testing
+      case 'failed':
+        return statusValues.failed || defaults.failed
       case 'done':
         return statusValues.done || defaults.done
       default:

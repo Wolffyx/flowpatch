@@ -7,7 +7,7 @@ import { ipcMain } from 'electron'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { getWorktree } from '../../db'
-import { logAction } from '@shared/utils'
+import { logAction } from '../../utils/main-logger'
 
 const execFileAsync = promisify(execFile)
 

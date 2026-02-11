@@ -154,6 +154,10 @@ export function SplitCardDialog({
     try {
       const result = await window.projectAPI.splitCard({ cardId: card.id, items })
       if (result?.error) throw new Error(result.error)
+      if (result?.warning) {
+        setError(result.warning)
+        return
+      }
       onOpenChange(false)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create split cards')

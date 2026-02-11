@@ -393,6 +393,34 @@ function createProjectTables(sqlite: Database.Database): void {
       UNIQUE(provider, cursor_type)
     );
   `)
+
+  // Card comments table
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS card_comments (
+      id TEXT PRIMARY KEY,
+      card_id TEXT NOT NULL,
+      remote_comment_id TEXT,
+      author TEXT,
+      body TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'user',
+      sync_state TEXT NOT NULL DEFAULT 'ok',
+      priority TEXT NOT NULL DEFAULT 'normal',
+      resolution TEXT NOT NULL DEFAULT 'open',
+      resolved_at TEXT,
+      resolved_by_job_id TEXT,
+      include_in_next_run INTEGER NOT NULL DEFAULT 1,
+      processed_for_job_id TEXT,
+      processed_at TEXT,
+      created_at TEXT NOT NULL,
+      remote_created_at TEXT,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_comment_card ON card_comments(card_id);
+    CREATE INDEX IF NOT EXISTS idx_comment_remote ON card_comments(remote_comment_id);
+    CREATE INDEX IF NOT EXISTS idx_comment_resolution ON card_comments(resolution);
+    CREATE INDEX IF NOT EXISTS idx_comment_sync_state ON card_comments(sync_state);
+  `)
 }
 
 /**

@@ -187,6 +187,9 @@ export {
   setToolLimits,
   getUsageWithLimits,
   getResetTimes,
+  getRollingHourlyUsage,
+  getRollingDailyUsage,
+  getRollingMonthlyUsage,
   deleteOldUsageRecords
 } from './usage'
 export type { UsageRecordCreate } from './usage'
@@ -269,6 +272,30 @@ export {
   deleteDependencyBetweenCards
 } from './card-dependencies'
 export type { CreateCardDependencyData, UpdateCardDependencyData } from './card-dependencies'
+
+// Card Comments
+export {
+  createCardComment,
+  upsertCommentFromRemote,
+  getCardComment,
+  getCommentsByCard,
+  getCommentsForAI,
+  getUnprocessedComments,
+  getCommentByRemoteId,
+  getCommentsPendingPush,
+  updateCardComment,
+  updateCommentPriority,
+  editCommentBody,
+  resolveComment,
+  reopenComment,
+  toggleCommentInclusion,
+  markCommentsProcessed,
+  updateCommentSyncState,
+  deleteCardComment,
+  deleteCommentsByCard,
+  deduplicateCommentsForCard,
+  deduplicateAllComments
+} from './card-comments'
 
 // Query Cache
 export {

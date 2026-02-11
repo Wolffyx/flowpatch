@@ -25,10 +25,12 @@ import { GitDiffDialog } from './GitDiffDialog'
 import { AgentChatDialog } from './AgentChatDialog'
 import { DependencyManager } from './DependencyManager'
 import { TestModificationsDialog } from './TestModificationsDialog'
+import { CommentsSection } from './CommentsSection'
 import { cn } from '../lib/utils'
 import { formatRelativeTime, parseLabels, parseAssignees } from '../lib/utils'
 import {
   KANBAN_COLUMNS,
+  TESTABLE_STATUSES,
   type Card,
   type CardLink,
   type Event,
@@ -176,9 +178,9 @@ export function CardDrawer({
     }
   }
 
-  // Check if test button should be shown - show if card has worktree or is in progress/ready
+  // Check if test button should be shown - show if card has worktree or is in a testable status
   const showTestButton =
-    worktree || (card && (card.status === 'in_progress' || card.status === 'ready'))
+    worktree || (card && TESTABLE_STATUSES.includes(card.status))
 
   // Reset edit state when card changes
   useEffect(() => {
@@ -403,6 +405,17 @@ export function CardDrawer({
           <div className="rounded-md bg-muted p-3">
             <DependencyManager card={card} />
           </div>
+
+          {/* Comments / Feedback */}
+          {projectId && (
+            <div className="rounded-md bg-muted p-3">
+              <CommentsSection
+                cardId={card.id}
+                projectId={projectId}
+                cardStatus={card.status}
+              />
+            </div>
+          )}
 
           {/* Status controls */}
           <div>

@@ -10,7 +10,14 @@
 
 import type { Card, CardStatus, PolicyConfig, Provider, RepoLabel } from '@shared/types'
 import { BaseAdapter } from './base'
-import type { AuthResult, IGithubAdapter, IssueResult, LabelResult, PRResult } from './types'
+import type {
+  AuthResult,
+  IGithubAdapter,
+  IssueResult,
+  LabelResult,
+  PRResult,
+  RemoteComment
+} from './types'
 import { GithubCLIWrapper } from './github/helpers/cli-wrapper'
 import { GithubGraphQLClient } from './github/helpers/graphql-client'
 import { GithubCardConverter } from './github/helpers/card-converter'
@@ -114,9 +121,16 @@ export class GithubAdapter extends BaseAdapter implements IGithubAdapter {
     parentNodeId: string,
     childNodeId: string,
     parentIssueNumber?: number,
-    childIssueNumber?: number
+    childIssueNumber?: number,
+    childIssueId?: number
   ): Promise<boolean> {
-    return this.issueOps.addSubIssue(parentNodeId, childNodeId, parentIssueNumber, childIssueNumber)
+    return this.issueOps.addSubIssue(
+      parentNodeId,
+      childNodeId,
+      parentIssueNumber,
+      childIssueNumber,
+      childIssueId
+    )
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -191,7 +205,11 @@ export class GithubAdapter extends BaseAdapter implements IGithubAdapter {
   // Comments
   // ──────────────────────────────────────────────────────────────────────────
 
-  async commentOnIssue(issueNumber: number, comment: string): Promise<boolean> {
+  async listIssueComments(issueNumber: number): Promise<RemoteComment[]> {
+    return this.issueOps.listComments(issueNumber)
+  }
+
+  async commentOnIssue(issueNumber: number, comment: string): Promise<string | null> {
     return this.issueOps.comment(issueNumber, comment)
   }
 

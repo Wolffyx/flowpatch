@@ -130,6 +130,7 @@ export class GithubCardConverter {
       inProgress: 'In Progress',
       inReview: 'In Review',
       testing: 'Testing',
+      failed: 'Failed',
       done: 'Done'
     }
 
@@ -139,6 +140,7 @@ export class GithubCardConverter {
       candidates.filter(Boolean).some((c) => normalized.includes(normalize(String(c))))
 
     if (matches([statusLabels.done, 'done', 'indone'])) return 'done'
+    if (matches([statusLabels.failed, 'failed'])) return 'failed'
     if (matches([statusLabels.testing, 'testing', 'qa'])) return 'testing'
     if (matches([statusLabels.inReview, 'inreview', 'in review', 'review'])) return 'in_review'
     if (matches([statusLabels.inProgress, 'inprogress', 'in progress', 'wip'])) return 'in_progress'
@@ -171,6 +173,7 @@ export class GithubCardConverter {
         review: 'in_review',
         testing: 'testing',
         qa: 'testing',
+        failed: 'failed',
         done: 'done',
         closed: 'done',
         merged: 'done'
@@ -183,6 +186,7 @@ export class GithubCardConverter {
     const normalizedStatus = normalize(projectStatus)
 
     if (statusValues.done && normalize(statusValues.done) === normalizedStatus) return 'done'
+    if (statusValues.failed && normalize(statusValues.failed) === normalizedStatus) return 'failed'
     if (statusValues.testing && normalize(statusValues.testing) === normalizedStatus) return 'testing'
     if (statusValues.inReview && normalize(statusValues.inReview) === normalizedStatus) return 'in_review'
     if (statusValues.inProgress && normalize(statusValues.inProgress) === normalizedStatus) return 'in_progress'

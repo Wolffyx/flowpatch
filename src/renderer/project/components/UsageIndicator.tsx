@@ -95,6 +95,10 @@ function getToolIcon(toolType: string): React.ReactNode {
       return <Zap className="h-3.5 w-3.5" />
     case 'codex':
       return <Cpu className="h-3.5 w-3.5" />
+    case 'opencode':
+      return <Cpu className="h-3.5 w-3.5" />
+    case 'cursor':
+      return <Activity className="h-3.5 w-3.5" />
     default:
       return <Activity className="h-3.5 w-3.5" />
   }
@@ -103,9 +107,13 @@ function getToolIcon(toolType: string): React.ReactNode {
 function getToolLabel(toolType: string): string {
   switch (toolType) {
     case 'claude':
-      return 'Claude'
+      return 'Claude Code'
     case 'codex':
-      return 'Codex'
+      return 'Codex (OpenAI)'
+    case 'opencode':
+      return 'OpenCode'
+    case 'cursor':
+      return 'Cursor'
     default:
       return 'Other'
   }

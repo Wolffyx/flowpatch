@@ -85,7 +85,16 @@ export function AIDescriptionDialog({
         messages: nextMessages
       })) as { success?: boolean; response?: string; error?: string }
 
-      if (result?.error) throw new Error(result.error)
+      if (result?.error) {
+        const msg = result.error
+        if (msg.startsWith('TIMEOUT:')) {
+          setError(
+            'AI request timed out. You can increase the draft AI timeout in Settings → Features → Worker Pipeline Settings → Draft AI timeout.'
+          )
+          return
+        }
+        throw new Error(msg)
+      }
 
       const response = (result?.response || '').trim()
       if (!response) throw new Error('No response from agent')

@@ -405,11 +405,12 @@ export async function stashList(cwd: string): Promise<string> {
 }
 
 /**
- * Apply and drop a stash.
+ * Apply and drop a stash atomically using `git stash pop`.
+ * This prevents the stash from remaining if apply succeeds but drop fails.
  */
 export async function stashApplyDrop(cwd: string, ref: string): Promise<void> {
-  await execFileAsync('git', ['stash', 'apply', ref], { cwd })
-  await execFileAsync('git', ['stash', 'drop', ref], { cwd })
+  // Use `git stash pop` which is atomic (apply + drop in one operation)
+  await execFileAsync('git', ['stash', 'pop', ref], { cwd })
 }
 
 /**
@@ -435,9 +436,31 @@ export async function createTrackingBranch(cwd: string, branch: string): Promise
 
 /**
  * Pull from remote with rebase.
+ * If rebase fails with conflicts, automatically aborts to prevent leaving repo in bad state.
  */
 export async function pullRebase(cwd: string, branch: string): Promise<void> {
-  await execFileAsync('git', ['pull', '--rebase', 'origin', branch], { cwd, env: getGitEnv() })
+  try {
+    await execFileAsync('git', ['pull', '--rebase', 'origin', branch], { cwd, env: getGitEnv() })
+  } catch (error) {
+    // Rebase might have failed due to conflicts - abort to clean up
+    try {
+      await abortRebase(cwd)
+    } catch {
+      // Abort may fail if no rebase in progress - that's ok
+    }
+    throw error
+  }
+}
+
+/**
+ * Abort an in-progress rebase.
+ */
+export async function abortRebase(cwd: string): Promise<void> {
+  try {
+    await execFileAsync('git', ['rebase', '--abort'], { cwd })
+  } catch {
+    // Rebase may not be in progress, ignore
+  }
 }
 
 /**
@@ -593,6 +616,61 @@ export async function restoreAutostash(repoPath: string): Promise<void> {
 export async function getDiffStat(cwd: string, baseRef: string): Promise<string> {
   const { stdout } = await execFileAsync('git', ['diff', '--stat', baseRef], { cwd })
   return stdout.toString().trim()
+}
+
+const MAX_FILES_PER_ITERATION = 10
+
+function parseNumstatLines(stdout: string, maxFiles: number): string {
+  const lines = stdout
+    .toString()
+    .trim()
+    .split('\n')
+    .filter((l) => l.trim())
+  const parts: string[] = []
+  for (let i = 0; i < Math.min(lines.length, maxFiles); i++) {
+    const line = lines[i]
+    const tab = line.indexOf('\t')
+    const secondTab = line.indexOf('\t', tab + 1)
+    if (tab === -1 || secondTab === -1) continue
+    const add = line.slice(0, tab).trim()
+    const del = line.slice(tab + 1, secondTab).trim()
+    const path = line.slice(secondTab + 1).trim()
+    parts.push(`${path} (+${add} -${del})`)
+  }
+  if (lines.length > maxFiles) {
+    parts.push(`... and ${lines.length - maxFiles} more`)
+  }
+  return parts.join(', ')
+}
+
+/**
+ * Get minimal diff summary (path + line counts) since baseRef for context carryover.
+ * Returns one line per file, e.g. "path/a.ts (+5 -2), path/b.ts (+1 -0)".
+ */
+export async function getDiffNumstatMinimal(
+  cwd: string,
+  baseRef: string,
+  maxFiles: number = MAX_FILES_PER_ITERATION
+): Promise<string> {
+  const { stdout } = await execFileAsync('git', ['diff', '--numstat', baseRef], { cwd })
+  return parseNumstatLines(stdout.toString(), maxFiles)
+}
+
+/**
+ * Get minimal diff summary between two refs (e.g. consecutive iteration checkpoints).
+ */
+export async function getDiffNumstatMinimalBetween(
+  cwd: string,
+  fromRef: string,
+  toRef: string,
+  maxFiles: number = MAX_FILES_PER_ITERATION
+): Promise<string> {
+  const { stdout } = await execFileAsync(
+    'git',
+    ['diff', '--numstat', fromRef, toRef],
+    { cwd }
+  )
+  return parseNumstatLines(stdout.toString(), maxFiles)
 }
 
 /**

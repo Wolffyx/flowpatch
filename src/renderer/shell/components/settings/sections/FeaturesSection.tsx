@@ -23,6 +23,7 @@ import { useTestModeSettings } from '../hooks/useTestModeSettings'
 import { useManualTestSettings } from '../hooks/useManualTestSettings'
 import { useProviderSwitchSettings } from '../hooks/useProviderSwitchSettings'
 import { useAIDebugLogging } from '../hooks/useAIDebugLogging'
+import { useFileLogging } from '../hooks/useFileLogging'
 import type { ProviderSwitchMode, ExhaustedBehavior } from '../types'
 
 export function FeaturesSection(): React.JSX.Element {
@@ -92,11 +93,34 @@ export function FeaturesSection(): React.JSX.Element {
     pipelineTimeout,
     pipelineMaxRetries,
     pipelineRetryDelay,
+    maxIterations,
+    lintCommand,
+    lintFixAttempts,
+    draftAiTimeoutSeconds,
+    // Phase toggles
+    enableInstallPhase,
+    enableChecksPhase,
+    // Individual check toggles
+    enableLintCheck,
+    enableTestCheck,
+    enableBuildCheck,
+    enableE2EPhase,
+    enableDecompositionPhase,
+    enablePlanPhase,
+    enablePlanApprovalPhase,
+    enableCommitPhase,
+    enablePrPhase,
     loadWorkerPipelineSettings,
     handleLeaseRenewalIntervalChange,
     handlePipelineTimeoutChange,
     handlePipelineMaxRetriesChange,
-    handlePipelineRetryDelayChange
+    handlePipelineRetryDelayChange,
+    handleMaxIterationsChange,
+    handleLintCommandChange,
+    handleLintCommandBlur,
+    handleLintFixAttemptsChange,
+    handleDraftAiTimeoutChange,
+    handlePhaseToggle
   } = useWorkerPipelineSettings()
 
   const {
@@ -110,6 +134,11 @@ export function FeaturesSection(): React.JSX.Element {
     loading: aiDebugLoggingLoading,
     handleAIDebugLoggingChange
   } = useAIDebugLogging()
+  const {
+    fileLoggingEnabled,
+    loading: fileLoggingLoading,
+    handleFileLoggingChange
+  } = useFileLogging()
 
   const {
     autoPromptAfterAI,
@@ -237,6 +266,26 @@ export function FeaturesSection(): React.JSX.Element {
             <Switch
               checked={aiDebugLoggingEnabled}
               onCheckedChange={(enabled) => handleAIDebugLoggingChange(enabled)}
+            />
+          )}
+        </SettingRow>
+      </SettingsCard>
+
+      {/* Application Log Persistence - Global */}
+      <SettingsCard
+        title="Application Log Persistence"
+        description="Save all application logs to disk for debugging. Logs are stored in the app data folder under logs/app."
+      >
+        <SettingRow
+          title="Enable file logging"
+          description="When enabled, all application logs are written to disk with automatic rotation (10MB per file, up to 40MB total)."
+        >
+          {fileLoggingLoading ? (
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          ) : (
+            <Switch
+              checked={fileLoggingEnabled}
+              onCheckedChange={(enabled) => handleFileLoggingChange(enabled)}
             />
           )}
         </SettingRow>
@@ -727,6 +776,20 @@ export function FeaturesSection(): React.JSX.Element {
           >
             <div className="space-y-3">
               <SettingRow
+                title="Max Iterations"
+                description="Maximum number of AI implementation iterations (1-20)"
+              >
+                <Input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={maxIterations}
+                  onChange={(e) => handleMaxIterationsChange(project, Number(e.target.value))}
+                  className="w-20"
+                />
+              </SettingRow>
+
+              <SettingRow
                 title="Pipeline Timeout"
                 description="Maximum time for a worker pipeline to complete (5-120 minutes)"
               >
@@ -744,6 +807,25 @@ export function FeaturesSection(): React.JSX.Element {
               </SettingRow>
 
               <SettingRow
+                title="Draft AI timeout"
+                description="Maximum time for draft AI operations (issue descriptions, starter cards, splits) in seconds (60-1800)."
+              >
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    min={60}
+                    max={1800}
+                    value={draftAiTimeoutSeconds}
+                    onChange={(e) =>
+                      handleDraftAiTimeoutChange(project, Number(e.target.value))
+                    }
+                    className="w-24"
+                  />
+                  <span className="text-xs text-muted-foreground">sec</span>
+                </div>
+              </SettingRow>
+
+              <SettingRow
                 title="Max Retries"
                 description="Number of retry attempts for transient failures (0-10)"
               >
@@ -753,6 +835,34 @@ export function FeaturesSection(): React.JSX.Element {
                   max={10}
                   value={pipelineMaxRetries}
                   onChange={(e) => handlePipelineMaxRetriesChange(project, Number(e.target.value))}
+                  className="w-20"
+                />
+              </SettingRow>
+
+              <SettingRow
+                title="Lint command"
+                description="Command to run lint checks (leave empty to disable lint during the worker run)"
+              >
+                <Input
+                  value={lintCommand}
+                  onChange={(e) => handleLintCommandChange(e.target.value)}
+                  onBlur={() => handleLintCommandBlur(project)}
+                  placeholder="pnpm lint"
+                />
+              </SettingRow>
+
+              <SettingRow
+                title="Lint fix attempts"
+                description="When lint fails, how many times to run the AI to fix lint errors (0 = disable, 1-3)"
+              >
+                <Input
+                  type="number"
+                  min={0}
+                  max={3}
+                  value={lintFixAttempts}
+                  onChange={(e) =>
+                    handleLintFixAttemptsChange(project, Number(e.target.value))
+                  }
                   className="w-20"
                 />
               </SettingRow>
@@ -794,6 +904,161 @@ export function FeaturesSection(): React.JSX.Element {
                   <span className="text-xs text-muted-foreground">sec</span>
                 </div>
               </SettingRow>
+            </div>
+          </SettingsCard>
+
+          {/* Worker Pipeline Phases */}
+          <SettingsCard
+            title="Worker Pipeline Phases"
+            icon={<Settings2 className="h-4 w-4 text-foreground/70" />}
+            description="Enable or disable individual phases of the worker pipeline."
+          >
+            <div className="space-y-4">
+              {/* Verification Group */}
+              <div className="space-y-1">
+                <div className="text-xs font-medium text-muted-foreground px-3 pt-2">
+                  Verification
+                </div>
+                <SettingRow
+                  title="Install dependencies"
+                  description="Run install command before AI phase"
+                >
+                  <Switch
+                    checked={enableInstallPhase}
+                    onCheckedChange={(enabled) =>
+                      handlePhaseToggle(project, 'enableInstallPhase', enabled)
+                    }
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="Run checks"
+                  description="Master toggle for lint, test, and build commands"
+                >
+                  <Switch
+                    checked={enableChecksPhase}
+                    onCheckedChange={(enabled) =>
+                      handlePhaseToggle(project, 'enableChecksPhase', enabled)
+                    }
+                  />
+                </SettingRow>
+                {/* Individual check toggles (indented, shown when master is on) */}
+                {enableChecksPhase && (
+                  <div className="ml-6 space-y-1 border-l border-border pl-3">
+                    <SettingRow
+                      title="Lint check"
+                      description={lintCommand ? `Run: ${lintCommand}` : 'No lint command configured'}
+                    >
+                      <Switch
+                        checked={enableLintCheck}
+                        onCheckedChange={(enabled) =>
+                          handlePhaseToggle(project, 'enableLintCheck', enabled)
+                        }
+                        disabled={!lintCommand}
+                      />
+                    </SettingRow>
+                    <SettingRow
+                      title="Test check"
+                      description="Run test command (configure in policy)"
+                    >
+                      <Switch
+                        checked={enableTestCheck}
+                        onCheckedChange={(enabled) =>
+                          handlePhaseToggle(project, 'enableTestCheck', enabled)
+                        }
+                      />
+                    </SettingRow>
+                    <SettingRow
+                      title="Build check"
+                      description="Run build command (configure in policy)"
+                    >
+                      <Switch
+                        checked={enableBuildCheck}
+                        onCheckedChange={(enabled) =>
+                          handlePhaseToggle(project, 'enableBuildCheck', enabled)
+                        }
+                      />
+                    </SettingRow>
+                  </div>
+                )}
+                <SettingRow
+                  title="E2E testing"
+                  description="Run Playwright E2E tests (also requires E2E enabled)"
+                >
+                  <Switch
+                    checked={enableE2EPhase}
+                    onCheckedChange={(enabled) =>
+                      handlePhaseToggle(project, 'enableE2EPhase', enabled)
+                    }
+                  />
+                </SettingRow>
+              </div>
+
+              {/* Planning Group */}
+              <div className="space-y-1">
+                <div className="text-xs font-medium text-muted-foreground px-3 pt-2">Planning</div>
+                <SettingRow
+                  title="Task decomposition"
+                  description="Break tasks into subtasks (also requires decomposition enabled)"
+                >
+                  <Switch
+                    checked={enableDecompositionPhase}
+                    onCheckedChange={(enabled) =>
+                      handlePhaseToggle(project, 'enableDecompositionPhase', enabled)
+                    }
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="Plan generation"
+                  description="Generate implementation plan before AI work"
+                >
+                  <Switch
+                    checked={enablePlanPhase}
+                    onCheckedChange={(enabled) =>
+                      handlePhaseToggle(project, 'enablePlanPhase', enabled)
+                    }
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="Plan approval"
+                  description="Require user approval before executing (also requires approval enabled)"
+                >
+                  <Switch
+                    checked={enablePlanApprovalPhase}
+                    onCheckedChange={(enabled) =>
+                      handlePhaseToggle(project, 'enablePlanApprovalPhase', enabled)
+                    }
+                  />
+                </SettingRow>
+              </div>
+
+              {/* Publishing Group */}
+              <div className="space-y-1">
+                <div className="text-xs font-medium text-muted-foreground px-3 pt-2">
+                  Publishing
+                </div>
+                <SettingRow
+                  title="Commit & push"
+                  description="Disabling keeps changes in local working tree only"
+                >
+                  <Switch
+                    checked={enableCommitPhase}
+                    onCheckedChange={(enabled) =>
+                      handlePhaseToggle(project, 'enableCommitPhase', enabled)
+                    }
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="Create PR/MR"
+                  description="Disabling pushes branch but skips PR creation"
+                >
+                  <Switch
+                    checked={enablePrPhase}
+                    onCheckedChange={(enabled) =>
+                      handlePhaseToggle(project, 'enablePrPhase', enabled)
+                    }
+                  />
+                </SettingRow>
+              </div>
             </div>
           </SettingsCard>
         </>

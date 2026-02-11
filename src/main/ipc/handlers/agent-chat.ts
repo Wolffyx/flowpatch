@@ -14,7 +14,7 @@ import {
   deleteChatMessagesByJob
 } from '../../db'
 import { broadcastToRenderers } from '../broadcast'
-import { logAction } from '@shared/utils'
+import { logAction } from '../../utils/main-logger'
 import type { AgentChatMessage, AgentChatSummary } from '@shared/types'
 
 // ============================================================================

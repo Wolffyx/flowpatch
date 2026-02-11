@@ -76,6 +76,7 @@ export interface ApplyLabelConfigPayload {
     inProgress: string
     inReview: string
     testing: string
+    failed: string
     done: string
   }
   createMissingLabels?: boolean

@@ -198,7 +198,9 @@ export abstract class BaseCLIProvider implements ICLIProvider {
       'temporarily unavailable',
       'service unavailable',
       'try again later',
-      'exceeded'
+      'exceeded',
+      'exceed',
+      'maximum'
     ]
 
     // Claude Code specific patterns

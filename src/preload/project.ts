@@ -158,6 +158,8 @@ const projectAPI: ProjectAPI = {
 
   onDevServerPort: (cb) => createListener('dev-server:port', cb as (...args: unknown[]) => void),
 
+  onInstallOutput: (cb) => createListener('installOutput', cb as (...args: unknown[]) => void),
+
   getPendingApprovals: () => {
     const projectId = lastProjectInfo?.projectId
     return ipcRenderer.invoke('getPendingApprovals', projectId ? { projectId } : undefined)
@@ -320,6 +322,72 @@ const projectAPI: ProjectAPI = {
 
   deleteDependencyBetween: (id, dependsOnId) =>
     ipcRenderer.invoke('dependencies:deleteBetween', { cardId: id, dependsOnCardId: dependsOnId }),
+
+  // Card Comments
+  getCardComments: (cardId) => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) return Promise.resolve({ comments: [] })
+    return ipcRenderer.invoke('getCardComments', { cardId, projectId })
+  },
+
+  createCardComment: (data) => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) return Promise.reject(new Error('No active project'))
+    return ipcRenderer.invoke('createCardComment', {
+      cardId: data.cardId,
+      projectId,
+      body: data.body,
+      priority: data.priority
+    })
+  },
+
+  updateCommentPriority: (commentId, priority) => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) return Promise.resolve({ comment: null })
+    return ipcRenderer.invoke('updateCommentPriority', { commentId, priority, projectId })
+  },
+
+  editCardComment: (commentId, body) => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) return Promise.resolve({ error: 'No project selected' })
+    return ipcRenderer.invoke('editCardComment', { commentId, body, projectId })
+  },
+
+  resolveComment: (commentId, jobId) => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) return Promise.resolve({ comment: null })
+    return ipcRenderer.invoke('resolveComment', { commentId, projectId, jobId })
+  },
+
+  reopenComment: (commentId) => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) return Promise.resolve({ comment: null })
+    return ipcRenderer.invoke('reopenComment', { commentId, projectId })
+  },
+
+  toggleCommentInclusion: (commentId, include) => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) return Promise.resolve({ comment: null })
+    return ipcRenderer.invoke('toggleCommentInclusion', { commentId, include, projectId })
+  },
+
+  deleteCardComment: (commentId) => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) return Promise.resolve({ success: false })
+    return ipcRenderer.invoke('deleteCardComment', { commentId, projectId })
+  },
+
+  deduplicateCardComments: (cardId) => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) return Promise.resolve({ deleted: 0 })
+    return ipcRenderer.invoke('deduplicateCardComments', { cardId, projectId })
+  },
+
+  deduplicateAllComments: () => {
+    const projectId = lastProjectInfo?.projectId
+    if (!projectId) return Promise.resolve({ totalDeleted: 0, cardBreakdown: [] })
+    return ipcRenderer.invoke('deduplicateAllComments', { projectId })
+  },
 
   onStateUpdate: (cb) => createListener('stateUpdated', cb),
 

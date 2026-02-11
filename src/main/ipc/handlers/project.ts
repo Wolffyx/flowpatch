@@ -20,7 +20,8 @@ import {
 } from '../../db'
 import { stopWorkerLoop } from '../../worker/loop'
 import { getTabByProjectId, closeTab } from '../../tabManager'
-import { parsePolicyJson, mergePolicyUpdate, logAction } from '@shared/utils'
+import { parsePolicyJson, mergePolicyUpdate } from '@shared/utils'
+import { logAction } from '../../utils/main-logger'
 import type { PolicyConfig, E2ETestConfig } from '@shared/types'
 import type { FlowPatchConfig } from '../../services/flowpatch-config'
 

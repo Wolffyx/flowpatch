@@ -15,15 +15,20 @@ const DEFAULT_LEASE_RENEWAL_MS = 60_000
 const DEFAULT_PIPELINE_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes
 const DEFAULT_CANCEL_CHECK_THROTTLE_MS = 100 // Check cancellation at most every 100ms
 
+export type JobTrigger = 'manual' | 'loop'
+
 export interface LifecycleConfig {
   projectId: string
   cardId: string
   jobId: string
-  
+
   // Configurable intervals from policy
   leaseRenewalMs?: number
   pipelineTimeoutMs?: number
   cancelCheckThrottleMs?: number
+
+  // Job trigger type - manual runs bypass worker_enabled check
+  trigger?: JobTrigger
 }
 
 /**
@@ -33,21 +38,23 @@ export class LifecycleManager {
   private projectId: string
   private cardId: string
   private jobId: string
-  
+  private trigger: JobTrigger | undefined
+
   private leaseRenewalMs: number
   private pipelineTimeoutMs: number
   private cancelCheckThrottleMs: number
-  
+
   private leaseInterval: NodeJS.Timeout | null = null
   private pipelineTimeout: NodeJS.Timeout | null = null
   private pipelineStartTime: number = 0
   private lastCancelCheck: number = 0
-  
+
   constructor(config: LifecycleConfig) {
     this.projectId = config.projectId
     this.cardId = config.cardId
     this.jobId = config.jobId
-    
+    this.trigger = config.trigger
+
     this.leaseRenewalMs = config.leaseRenewalMs ?? DEFAULT_LEASE_RENEWAL_MS
     this.pipelineTimeoutMs = config.pipelineTimeoutMs ?? DEFAULT_PIPELINE_TIMEOUT_MS
     this.cancelCheckThrottleMs = config.cancelCheckThrottleMs ?? DEFAULT_CANCEL_CHECK_THROTTLE_MS
@@ -108,10 +115,13 @@ export class LifecycleManager {
     if (jobState === 'canceled') return true
     
     // Check if worker is globally disabled for this project
-    const project = getProject(this.projectId)
-    if (project && project.worker_enabled !== 1) {
-      this.cancelJobInternal('Worker disabled')
-      return true
+    // Skip this check for manual runs - the toggle only affects auto-loop
+    if (this.trigger !== 'manual') {
+      const project = getProject(this.projectId)
+      if (project && project.worker_enabled !== 1) {
+        this.cancelJobInternal('Worker disabled')
+        return true
+      }
     }
     
     // Check if card was moved away from 'ready' status
@@ -127,9 +137,12 @@ export class LifecycleManager {
   
   /**
    * Cancel the job internally.
+   * Note: We check job state directly instead of calling isCanceled() to avoid
+   * circular recursion since isCanceled() calls this method.
    */
   private cancelJobInternal(reason?: string): void {
-    if (this.isCanceled()) return
+    const jobState = this.getJobState()
+    if (jobState === 'canceled') return
     cancelJob(this.jobId, reason ?? 'Canceled', this.projectId)
   }
   

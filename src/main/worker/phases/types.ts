@@ -50,6 +50,14 @@ export interface PipelineContext {
 }
 
 /**
+ * Result of the checks phase (lint, test, build).
+ * On failure, includes which step failed and captured output for AI fix prompts.
+ */
+export type ChecksResult =
+  | { passed: true }
+  | { passed: false; failedStep: 'lint' | 'test' | 'build'; output: string }
+
+/**
  * Worker result returned by the pipeline.
  */
 export interface WorkerResult {

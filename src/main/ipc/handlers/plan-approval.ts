@@ -15,7 +15,7 @@ import {
   createEvent
 } from '../../db'
 import { resumeWorkerAfterApproval } from '../../worker/pipeline'
-import { logAction } from '@shared/utils'
+import { logAction } from '../../utils/main-logger'
 
 // ============================================================================
 // Handler Registration

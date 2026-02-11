@@ -23,7 +23,7 @@ import {
   getIdleSlotCount
 } from '../db'
 import { runWorker } from './pipeline'
-import { logAction } from '../../shared/utils'
+import { logAction } from '../utils/main-logger'
 import { broadcastToRenderers } from '../ipc/broadcast'
 import { warmupAIToolsCache, type AIToolAvailability } from './cache'
 import type { PolicyConfig, WorkerSlot } from '../../shared/types'
@@ -32,7 +32,7 @@ import type { PolicyConfig, WorkerSlot } from '../../shared/types'
 const MAX_SLOT_ACQUISITION_ATTEMPTS = 3
 const SLOT_ACQUISITION_RETRY_DELAY_MS = 100
 const ORPHAN_CHECK_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
-const ORPHAN_THRESHOLD_MS = 30 * 60 * 1000 // 30 minutes - slot considered orphaned if running this long
+const ORPHAN_THRESHOLD_MS = 20 * 60 * 1000 // 20 minutes - slot considered orphaned if running this long (less than default pipeline timeout)
 const MAX_ACTIVE_WORKERS_MAP_SIZE = 100 // Prevent unbounded growth
 
 export interface PoolConfig {
@@ -421,6 +421,75 @@ export class WorkerPool {
   }
 
   /**
+   * Get detailed diagnostics for debugging stuck or misbehaving pools.
+   * Returns comprehensive state information useful for troubleshooting.
+   */
+  diagnose(): {
+    status: ReturnType<WorkerPool['getStatus']>
+    slots: WorkerSlot[]
+    activeWorkerSlotIds: string[]
+    timeSinceLastPoll: number | null
+    adaptivePollingState: {
+      current: number
+      min: number
+      max: number
+      consecutiveEmptyPolls: number
+    }
+    warnings: string[]
+  } {
+    const status = this.getStatus()
+    const slots = listWorkerSlots(this.projectId)
+    const warnings: string[] = []
+
+    // Check for potential issues
+    const runningSlots = slots.filter((s) => s.status === 'running')
+    const now = Date.now()
+
+    for (const slot of runningSlots) {
+      if (slot.started_at) {
+        const ageMs = now - new Date(slot.started_at).getTime()
+        if (ageMs > ORPHAN_THRESHOLD_MS) {
+          warnings.push(
+            `Slot ${slot.id} has been running for ${Math.round(ageMs / 60000)} minutes (>20 min threshold)`
+          )
+        }
+      }
+      if (!this.activeWorkers.has(slot.id)) {
+        warnings.push(`Slot ${slot.id} is marked running but has no active worker promise`)
+      }
+    }
+
+    if (this.slotAcquisitionFailures > 0) {
+      const failRate = this.slotAcquisitionFailures / this.slotAcquisitionAttempts
+      if (failRate > 0.1) {
+        warnings.push(
+          `High slot acquisition failure rate: ${(failRate * 100).toFixed(1)}% (${this.slotAcquisitionFailures}/${this.slotAcquisitionAttempts})`
+        )
+      }
+    }
+
+    if (this.consecutiveEmptyPolls > 10) {
+      warnings.push(
+        `Pool has been idle for ${this.consecutiveEmptyPolls} consecutive polls (backoff at ${this.currentPollInterval}ms)`
+      )
+    }
+
+    return {
+      status,
+      slots,
+      activeWorkerSlotIds: Array.from(this.activeWorkers.keys()),
+      timeSinceLastPoll: null, // Would need to track this
+      adaptivePollingState: {
+        current: this.currentPollInterval,
+        min: this.minPollInterval,
+        max: this.maxPollInterval,
+        consecutiveEmptyPolls: this.consecutiveEmptyPolls
+      },
+      warnings
+    }
+  }
+
+  /**
    * Poll for ready cards and start workers.
    * Uses adaptive polling to reduce overhead when idle.
    */
@@ -480,15 +549,51 @@ export class WorkerPool {
         pollInterval: this.currentPollInterval
       })
 
-      // Start workers for available cards
+      // Build set of card IDs currently being processed by active workers
+      const processingCardIds = new Set<string>()
+      const allSlots = listWorkerSlots(this.projectId)
+      for (const slot of allSlots) {
+        if (slot.status === 'running' && slot.card_id) {
+          processingCardIds.add(slot.card_id)
+        }
+      }
+
+      // Start workers for available cards (excluding cards already being processed)
       for (let i = 0; i < Math.min(readyCards.length, idleSlots.length); i++) {
         const card = readyCards[i]
+
+        // Deduplication check: skip if card is already being processed
+        if (processingCardIds.has(card.id)) {
+          logAction('workerPool:cardAlreadyProcessing', {
+            projectId: this.projectId,
+            cardId: card.id,
+            cardTitle: card.title
+          })
+          continue
+        }
 
         // Acquire a slot with retry to handle race conditions
         const slot = await this.acquireSlotWithRetry()
         if (!slot) {
           // All slots taken or race condition couldn't be resolved
           break
+        }
+
+        // Double-check after slot acquisition that card isn't now being processed
+        // (handles race between our check and another poll acquiring slot)
+        const updatedSlots = listWorkerSlots(this.projectId)
+        const nowProcessing = updatedSlots.some(
+          (s) => s.status === 'running' && s.card_id === card.id && s.id !== slot.id
+        )
+        if (nowProcessing) {
+          // Release the slot we just acquired since card is now being processed elsewhere
+          releaseWorkerSlot(slot.id, this.projectId)
+          logAction('workerPool:cardStartedElsewhere', {
+            projectId: this.projectId,
+            cardId: card.id,
+            releasedSlotId: slot.id
+          })
+          continue
         }
 
         this.startWorker(slot.id, card.id)
@@ -514,6 +619,7 @@ export class WorkerPool {
 
   /**
    * Start a worker for a specific card.
+   * Properly handles async errors to prevent silent failures.
    */
   private startWorker(slotId: string, cardId: string): void {
     const workerPromise = this.runWorkerWithSlot(slotId, cardId)
@@ -521,9 +627,21 @@ export class WorkerPool {
     // Use bounded map management to prevent memory leaks
     this.addActiveWorker(slotId, workerPromise)
 
-    workerPromise.finally(() => {
-      this.activeWorkers.delete(slotId)
-    })
+    // Handle promise completion and errors properly
+    workerPromise
+      .catch((error) => {
+        // Log unhandled errors that escape runWorkerWithSlot's try-catch
+        logAction('workerPool:unhandledWorkerError', {
+          projectId: this.projectId,
+          slotId,
+          cardId,
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined
+        })
+      })
+      .finally(() => {
+        this.activeWorkers.delete(slotId)
+      })
   }
 
   /**

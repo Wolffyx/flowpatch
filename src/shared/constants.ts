@@ -17,6 +17,7 @@ export const CARD_STATUSES: readonly CardStatus[] = [
   'in_progress',
   'in_review',
   'testing',
+  'failed',
   'done'
 ] as const
 
@@ -34,6 +35,11 @@ export const ACTIVE_STATUSES: readonly CardStatus[] = [
  * Statuses that allow worker processing.
  */
 export const WORKER_ALLOWED_STATUSES: readonly CardStatus[] = ['ready', 'in_progress'] as const
+
+/**
+ * Statuses that allow manual testing.
+ */
+export const TESTABLE_STATUSES: readonly CardStatus[] = ['ready', 'in_progress', 'in_review'] as const
 
 // ============================================================================
 // Job Type Constants
@@ -114,6 +120,28 @@ export const ACTIVE_WORKTREE_STATUSES: readonly WorktreeStatus[] = [
   'ready',
   'running'
 ] as const
+
+// ============================================================================
+// Checks / Lint Fix Constants
+// ============================================================================
+
+/** Max characters of lint output to include in AI fix prompt (avoids token overflow). */
+export const LINT_OUTPUT_MAX_CHARS = 8000
+
+/** Default number of AI fix attempts when lint fails (0 = disable). */
+export const LINT_FIX_ATTEMPTS_DEFAULT = 1
+
+/** Maximum allowed lint fix attempts (safety cap). */
+export const LINT_FIX_ATTEMPTS_MAX = 3
+
+/** Max characters of test output to include in AI fix prompt. */
+export const TEST_OUTPUT_MAX_CHARS = 12000
+
+/** Default number of AI fix attempts when tests fail (0 = disable). */
+export const TEST_FIX_ATTEMPTS_DEFAULT = 0
+
+/** Maximum allowed test fix attempts (safety cap). */
+export const TEST_FIX_ATTEMPTS_MAX = 3
 
 // ============================================================================
 // Default Labels
@@ -230,6 +258,7 @@ export const KANBAN_COLUMNS: { id: CardStatus; label: string; color: string }[] 
   { id: 'in_progress', label: 'In Progress', color: 'bg-chart-4' },
   { id: 'in_review', label: 'In Review', color: 'bg-chart-5' },
   { id: 'testing', label: 'Testing', color: 'bg-chart-3' },
+  { id: 'failed', label: 'Failed', color: 'bg-destructive' },
   { id: 'done', label: 'Done', color: 'bg-chart-2' }
 ]
 
@@ -255,6 +284,7 @@ export const DEFAULT_POLICY: PolicyConfig = {
       inProgress: 'In Progress',
       inReview: 'In Review',
       testing: 'Testing',
+      failed: 'Failed',
       done: 'Done'
     },
     githubProjectsV2: {},
@@ -340,10 +370,11 @@ export const DEFAULT_POLICY: PolicyConfig = {
     branchPattern: 'kanban/{id}-{slug}',
     commitMessage: '#{issue} {title}',
     allowedCommands: ['pnpm install', 'pnpm lint', 'pnpm test', 'pnpm build'],
-    lintCommand: 'pnpm lint',
+    lintFixAttempts: 1,
     testCommand: 'pnpm test',
     buildCommand: 'pnpm build',
     forbidPaths: ['.github/workflows/', '.gitlab-ci.yml'],
+    draftAiTimeoutSeconds: 300,
     worktree: {
       enabled: false,
       root: 'repo',
@@ -370,7 +401,8 @@ export const DEFAULT_POLICY: PolicyConfig = {
       sessionMode: 'single',
       maxIterations: 5,
       progressCheckpoint: false,
-      contextCarryover: 'summary'
+      contextCarryover: 'summary',
+      minimalContinuationPrompt: true
     },
     e2e: {
       enabled: false,

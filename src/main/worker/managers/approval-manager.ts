@@ -11,7 +11,9 @@ import {
   markInstructionProcessing,
   markInstructionApplied,
   createEvent,
-  updateJobState
+  updateJobState,
+  getCommentsForAI,
+  markCommentsProcessed
 } from '../../db'
 import { broadcastToRenderers } from '../../ipc/broadcast'
 import { WorkerCanceledError, WorkerPendingApprovalError } from '../errors'
@@ -213,5 +215,67 @@ export class ApprovalManager {
       }
     }
     this.followUpInstructions = []
+  }
+
+  /**
+   * Build context from card comments for the AI prompt.
+   * Only includes open, user comments that are marked for inclusion.
+   */
+  buildCommentsContext(): string {
+    const comments = getCommentsForAI(this.ctx.cardId, this.ctx.projectId)
+    if (comments.length === 0) return ''
+
+    // Group by priority: critical > important > normal
+    const critical = comments.filter((c) => c.priority === 'critical')
+    const important = comments.filter((c) => c.priority === 'important')
+    const normal = comments.filter((c) => c.priority === 'normal')
+
+    const sections: string[] = ['\n## User Feedback from Issue Comments\n']
+    sections.push(
+      'The following feedback was provided by users on this issue. Please address these points:\n'
+    )
+
+    if (critical.length > 0) {
+      sections.push('### CRITICAL Feedback (address these first)')
+      for (const c of critical) {
+        const author = c.author ? `[${c.author}] ` : ''
+        sections.push(`- ${author}${c.body}`)
+      }
+      sections.push('')
+    }
+
+    if (important.length > 0) {
+      sections.push('### Important Feedback')
+      for (const c of important) {
+        const author = c.author ? `[${c.author}] ` : ''
+        sections.push(`- ${author}${c.body}`)
+      }
+      sections.push('')
+    }
+
+    if (normal.length > 0) {
+      sections.push('### Additional Feedback')
+      for (const c of normal) {
+        const author = c.author ? `[${c.author}] ` : ''
+        sections.push(`- ${author}${c.body}`)
+      }
+      sections.push('')
+    }
+
+    return sections.join('\n')
+  }
+
+  /**
+   * Mark all card comments as processed by this job.
+   */
+  markCommentsAsProcessed(): void {
+    const count = markCommentsProcessed(this.ctx.cardId, this.ctx.jobId, this.ctx.projectId)
+    if (count > 0) {
+      this.log(`Marked ${count} comments as processed`)
+      createEvent(this.ctx.projectId, 'comments_processed', this.ctx.cardId, {
+        jobId: this.ctx.jobId,
+        count
+      })
+    }
   }
 }

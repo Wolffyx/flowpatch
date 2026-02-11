@@ -312,6 +312,7 @@ export class WorktreePipelineManager {
 
   /**
    * Cleanup worktree after worker completes.
+   * IMPORTANT: Lock is held during cleanup to prevent race conditions with other workers.
    */
   async cleanup(success: boolean): Promise<void> {
     if (!this.worktreeRecord) return
@@ -320,67 +321,75 @@ export class WorktreePipelineManager {
     const keepForManualTest = this.config.policy.worker?.manualTest?.keepWorktreeForManualTest
     if (keepForManualTest) {
       this.log('Keeping worktree for manual testing (keepWorktreeForManualTest=true)')
-      releaseWorktreeLock(this.worktreeRecord.id, this.config.workerId, this.config.projectId)
       updateWorktreeStatus(this.worktreeRecord.id, 'ready', undefined, this.config.projectId)
+      // Release lock only after status update
+      releaseWorktreeLock(this.worktreeRecord.id, this.config.workerId, this.config.projectId)
       return
     }
 
     const cleanup = this.config.policy.worker?.worktree?.cleanup
     const cleanupTiming = success ? cleanup?.onSuccess : cleanup?.onFailure
 
-    // Release lock
-    releaseWorktreeLock(this.worktreeRecord.id, this.config.workerId, this.config.projectId)
-
-    switch (cleanupTiming) {
-      case 'immediate':
-        this.log('Cleaning up worktree immediately')
-        try {
-          await this.worktreeManager.removeWorktree(this.worktreePath!, {
-            force: true,
-            config: this.getWorktreeConfig()
-          })
-          updateWorktreeStatus(this.worktreeRecord.id, 'cleaned', undefined, this.config.projectId)
-        } catch (error) {
-          this.log(`Failed to cleanup worktree: ${error}`)
-          updateWorktreeStatus(
-            this.worktreeRecord.id,
-            'error',
-            error instanceof Error ? error.message : String(error),
-            this.config.projectId
-          )
-        }
-        break
-
-      case 'delay':
-        this.log('Worktree marked for delayed cleanup')
-        updateWorktreeStatus(
-          this.worktreeRecord.id,
-          'cleanup_pending',
-          undefined,
-          this.config.projectId
-        )
-        break
-
-      case 'never':
-        this.log('Worktree kept (cleanup=never)')
-        updateWorktreeStatus(this.worktreeRecord.id, 'ready', undefined, this.config.projectId)
-        break
-
-      default:
-        // Default: immediate on success, delay on failure
-        if (success) {
+    // Perform cleanup WHILE lock is still held to prevent race conditions
+    try {
+      switch (cleanupTiming) {
+        case 'immediate':
+          this.log('Cleaning up worktree immediately')
           try {
             await this.worktreeManager.removeWorktree(this.worktreePath!, {
               force: true,
               config: this.getWorktreeConfig()
             })
+            updateWorktreeStatus(this.worktreeRecord.id, 'cleaned', undefined, this.config.projectId)
+          } catch (error) {
+            this.log(`Failed to cleanup worktree: ${error}`)
             updateWorktreeStatus(
               this.worktreeRecord.id,
-              'cleaned',
-              undefined,
+              'error',
+              error instanceof Error ? error.message : String(error),
               this.config.projectId
             )
-          } catch {
+          }
+          break
+
+        case 'delay':
+          this.log('Worktree marked for delayed cleanup')
+          updateWorktreeStatus(
+            this.worktreeRecord.id,
+            'cleanup_pending',
+            undefined,
+            this.config.projectId
+          )
+          break
+
+        case 'never':
+          this.log('Worktree kept (cleanup=never)')
+          updateWorktreeStatus(this.worktreeRecord.id, 'ready', undefined, this.config.projectId)
+          break
+
+        default:
+          // Default: immediate on success, delay on failure
+          if (success) {
+            try {
+              await this.worktreeManager.removeWorktree(this.worktreePath!, {
+                force: true,
+                config: this.getWorktreeConfig()
+              })
+              updateWorktreeStatus(
+                this.worktreeRecord.id,
+                'cleaned',
+                undefined,
+                this.config.projectId
+              )
+            } catch {
+              updateWorktreeStatus(
+                this.worktreeRecord.id,
+                'cleanup_pending',
+                undefined,
+                this.config.projectId
+              )
+            }
+          } else {
             updateWorktreeStatus(
               this.worktreeRecord.id,
               'cleanup_pending',
@@ -388,14 +397,10 @@ export class WorktreePipelineManager {
               this.config.projectId
             )
           }
-        } else {
-          updateWorktreeStatus(
-            this.worktreeRecord.id,
-            'cleanup_pending',
-            undefined,
-            this.config.projectId
-          )
-        }
+      }
+    } finally {
+      // Release lock only AFTER cleanup completes (success or failure)
+      releaseWorktreeLock(this.worktreeRecord.id, this.config.workerId, this.config.projectId)
     }
   }
 }
